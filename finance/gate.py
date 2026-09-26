@@ -518,11 +518,22 @@ async def guard(request, handler):
                 "Location": f"/login?next={urllib.parse.quote(nxt, safe='')}" if nxt != "/" else "/login"})
     else:
         resp = await handler(request)
-    resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
-    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("Referrer-Policy", "no-referrer")
-    resp.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
     return resp
+
+
+SECURITY_HEADERS = {
+    "Strict-Transport-Security": "max-age=31536000",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "SAMEORIGIN",
+}
+
+
+async def _add_security_headers(_request, response) -> None:
+    """Runs just before headers go out, for EVERY response - including streamed Streamlit
+    pass-throughs, whose headers are already sent by the time a middleware sees them."""
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
 
 
 async def _favicon(_request):
@@ -542,6 +553,7 @@ def make_app(host: str, port: int, upstream_port: int) -> web.Application:
         yield
         await app_[client_key].close()
     app.cleanup_ctx.append(client_ctx)
+    app.on_response_prepare.append(_add_security_headers)
 
     app.router.add_get("/login", login_page)
     app.router.add_post("/login", login_submit)

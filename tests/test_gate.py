@@ -227,3 +227,18 @@ def test_challenges_are_single_use(gate):
     body = {"flow": opts["flow"], "credential": cred}
     assert call(app, "POST", "/passkey/auth/verify", body=body).status == 200
     assert call(app, "POST", "/passkey/auth/verify", body=body).status == 400   # replay fails
+
+
+def test_security_headers_on_streamed_responses(gate):
+    """Streamlit pages are streamed through; their headers are sent at prepare() time,
+    so the security headers must be attached then (this is what the live self-test caught)."""
+    _, app = gate
+
+    async def run():
+        req = make_mocked_request("GET", "/", headers={"Host": f"{HOST}:{PORT}"}, app=app)
+        resp = web.StreamResponse()
+        await resp.prepare(req)
+        return resp
+    resp = asyncio.run(run())
+    assert resp.headers["Strict-Transport-Security"] == "max-age=31536000"
+    assert resp.headers["X-Frame-Options"] == "SAMEORIGIN"
