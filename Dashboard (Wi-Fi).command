@@ -23,10 +23,12 @@ open("data/app_password", "w").write(salt.hex() + ":" + d.hex())'
 fi
 
 IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
+[[ -n "$IP" ]] || { echo "Not connected to Wi-Fi."; exit 1; }
 echo ""
 echo "On your other device, open:  http://$IP:8501"
 echo "If macOS asks whether Python may accept incoming connections, click Allow."
 echo ""
-FINANCE_LAN=1 .venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0 &
-sleep 2 && open http://localhost:8501
+# Bind to the Wi-Fi address only (not 0.0.0.0) so VPN or other networks can't reach it
+FINANCE_LAN=1 .venv/bin/streamlit run app.py --server.port 8501 --server.address "$IP" &
+sleep 2 && open "http://$IP:8501"
 wait
