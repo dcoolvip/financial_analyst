@@ -378,3 +378,13 @@ def test_multi_account_pdf_never_piles_into_one_existing_account(env):
     assert accts.loc["Robinhood Trading", "balance"] == 5_000                          # manual one untouched
     assert len(accts) == 4                                                              # 3 new + the manual one
     assert set(accts["last4"].dropna()) == {"4688", "2941", "4782"}
+
+
+def test_csv_from_a_new_bank_defaults_to_new_account(env):
+    conn, uploads = env
+    db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")                      # a card, but not Amex
+    at = app()
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("activity.csv", (FIXTURES / "amex_activity.csv").read_bytes())]
+    at.run()
+    assert [s for s in at.selectbox if s.label == "Import into"][0].value == "➕ New account…"

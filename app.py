@@ -852,8 +852,8 @@ with tab_add:
             options = list(matches["name"]) + ["➕ New account…"]
             k = f.file_id
             guess, why = suggest_csv_account(conn, parsed, f.name, matches)
-            if guess is None and matches.empty:
-                guess = options[-1]
+            if guess is None and not (matches["institution"] == parsed.institution).any():
+                guess = options[-1]      # nothing at this bank yet: it's a new account
             target = st.selectbox("Import into", options, key=f"t{k}_{guess}",   # follows the current best match
                                   index=options.index(guess) if guess else None, placeholder="Choose the account…")
             if why and target == guess:
