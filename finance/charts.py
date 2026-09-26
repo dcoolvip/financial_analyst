@@ -30,11 +30,15 @@ def money(v: float, short: bool = True) -> str:
     return f"{sign}${v:,.0f}"
 
 
-def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False) -> go.Figure:
+def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False,
+            compact: bool = False) -> go.Figure:
+    """compact = phone: shorter, fewer ticks, and axes locked so a swipe scrolls the page
+    instead of panning the chart. Desktop output is unchanged."""
     fig.update_layout(
-        height=height, margin=dict(l=72, r=24, t=16, b=48),
+        height=int(height * 0.72) if compact else height,
+        margin=dict(l=44, r=8, t=8, b=32) if compact else dict(l=72, r=24, t=16, b=48),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family=FONT, color=c["ink2"], size=13),
+        font=dict(family=FONT, color=c["ink2"], size=12 if compact else 13),
         hoverlabel=dict(font=dict(family=FONT, size=13), bgcolor=c["surface"], bordercolor=c["axis"],
                         font_color=c["ink"]),
         showlegend=legend,
@@ -44,10 +48,14 @@ def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False) ->
     fig.update_xaxes(showgrid=False, linecolor=c["axis"], tickfont=dict(color=c["muted"]), zeroline=False, automargin=True)
     fig.update_yaxes(gridcolor=c["grid"], gridwidth=1, tickfont=dict(color=c["muted"]), zeroline=False,
                      tickprefix="$", tickformat="~s", automargin=True)
+    if compact:
+        fig.update_layout(dragmode=False)
+        fig.update_xaxes(nticks=4, fixedrange=True)
+        fig.update_yaxes(nticks=5, fixedrange=True)
     return fig
 
 
-def net_worth_history(nw: pd.DataFrame, mode: str) -> go.Figure:
+def net_worth_history(nw: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
     c = PALETTE[mode]
     fig = go.Figure(go.Scatter(
         x=nw["date"], y=nw["net_worth"], mode="lines", line=dict(color=c["s1"], width=2),
@@ -57,10 +65,10 @@ def net_worth_history(nw: pd.DataFrame, mode: str) -> go.Figure:
     ))
     fig.update_layout(hovermode="x")
     fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
-    return _layout(fig, c)
+    return _layout(fig, c, compact=compact)
 
 
-def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False) -> go.Figure:
+def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False, compact: bool = False) -> go.Figure:
     c = PALETTE[mode]
     items = {k: v for k, v in items.items() if v}
     labels, values = list(items)[::-1], list(items.values())[::-1]
@@ -70,14 +78,15 @@ def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False) -> go
         textfont=dict(color=c["ink2"]),
         hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
     ))
-    fig = _layout(fig, c, height=max(160, 56 * len(labels) + 40))
-    fig.update_layout(margin=dict(l=16, r=16, t=8, b=8))
+    fig = _layout(fig, c, height=max(160, 56 * len(labels) + 40), compact=compact)
+    fig.update_layout(margin=dict(l=8, r=8, t=4, b=4) if compact else dict(l=16, r=16, t=8, b=8))
     fig.update_xaxes(visible=False, range=[0, max(values or [1]) * 1.25])
     fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]))
     return fig
 
 
-def forecast_fan(history: pd.DataFrame, bands: pd.DataFrame, real: bool, mode: str) -> go.Figure:
+def forecast_fan(history: pd.DataFrame, bands: pd.DataFrame, real: bool, mode: str,
+                 compact: bool = False) -> go.Figure:
     c = PALETTE[mode]
     sfx = "_real" if real else ""
     lo, mid, hi = bands[f"p10{sfx}"], bands[f"p50{sfx}"], bands[f"p90{sfx}"]
@@ -100,10 +109,10 @@ def forecast_fan(history: pd.DataFrame, bands: pd.DataFrame, real: bool, mode: s
     ))
     fig.update_layout(hovermode="x")
     fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
-    return _layout(fig, c, height=380, legend=True)
+    return _layout(fig, c, height=380, legend=True, compact=compact)
 
 
-def cash_flow_bars(cf: pd.DataFrame, mode: str) -> go.Figure:
+def cash_flow_bars(cf: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
     c = PALETTE[mode]
     fig = go.Figure()
     common = dict(x=cf["month"], customdata=cf[["saved"]].values)
@@ -112,8 +121,8 @@ def cash_flow_bars(cf: pd.DataFrame, mode: str) -> go.Figure:
     fig.add_trace(go.Bar(**common, y=cf["money_out"], name="Money out", marker_color=c["s2"],
                          hovertemplate="<b>%{x|%b %Y}</b><br>Out $%{y:,.0f}<br>Left over $%{customdata[0]:,.0f}<extra></extra>"))
     fig.update_layout(barmode="group", bargroupgap=0.08)
-    return _layout(fig, c, legend=True)
+    return _layout(fig, c, legend=True, compact=compact)
 
 
-def category_bars(df: pd.DataFrame, mode: str) -> go.Figure:
-    return breakdown_bars(dict(zip(df["category"], df["monthly"])), mode, debt=True)
+def category_bars(df: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
+    return breakdown_bars(dict(zip(df["category"], df["monthly"])), mode, debt=True, compact=compact)

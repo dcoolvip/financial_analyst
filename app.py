@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import re
 from datetime import date
 
 import pandas as pd
@@ -33,12 +34,47 @@ if os.environ.get("FINANCE_LAN") == "1" and not st.session_state.get("authed"):
                 st.rerun()
             st.error("Wrong password")
     st.stop()
+
+
+def _is_phone() -> bool:
+    """Phone vs. everything else, from the browser's User-Agent. iPads get the full layout.
+    Override for testing with ?view=phone or ?view=desktop."""
+    forced = st.query_params.get("view")
+    if forced in ("phone", "desktop"):
+        return forced == "phone"
+    ua = (st.context.headers or {}).get("User-Agent", "")
+    return bool(re.search(r"iPhone|iPod|Android.+Mobile|Windows Phone", ua))
+
+
+PHONE = _is_phone()
+
+# Desktop rules first; everything phone-specific sits inside the small-screen media query,
+# so the Mac layout is untouched.
 st.markdown("""
 <style>
   .block-container { padding-top: 2rem; max-width: 1200px; }
   [data-testid="stMetricValue"] { font-size: 1.6rem; }
   .hero { font-size: 3rem; font-weight: 700; line-height: 1.1; margin: 0; }
   .hero-sub { color: var(--text-color); opacity: .65; margin: .25rem 0 1rem; }
+
+  @media (max-width: 640px) {
+    .block-container { padding: 1rem .75rem 3rem; }
+    .hero { font-size: 2.1rem; }
+    .hero-sub { font-size: .9rem; margin-bottom: .75rem; }
+    h4 { font-size: 1.05rem !important; padding-top: .75rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.2rem; }
+    [data-testid="stMetricLabel"] p { font-size: .75rem; }
+    /* metric rows become a 2-column grid instead of a tall single column */
+    [class*="st-key-kpis"] [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .5rem; }
+    [class*="st-key-kpis"] [data-testid="stColumn"] {
+      flex: 1 1 calc(50% - .5rem) !important; min-width: calc(50% - .5rem) !important;
+      width: calc(50% - .5rem) !important;
+    }
+    [class*="st-key-kpis"] [data-testid="stVerticalBlockBorderWrapper"] { padding: .6rem .75rem; }
+    /* tabs: tighter, swipeable */
+    [data-baseweb="tab-list"] { gap: .25rem; overflow-x: auto; }
+    [data-baseweb="tab"] { padding: .4rem .55rem; font-size: .9rem; }
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,7 +108,16 @@ mode = "dark" if getattr(st.context, "theme", None) and st.context.theme.type ==
 
 
 def plot(fig):
-    st.plotly_chart(fig, width="stretch", theme=None, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", theme=None,
+                    config={"displayModeBar": False, "scrollZoom": False, "responsive": True})
+
+
+def kpi_row(items: list[tuple[str, str]]) -> None:
+    """A row of bordered metric cards: one row on desktop, a 2-column grid on phones."""
+    with st.container(key=f"kpis_{items[0][0]}".replace(" ", "_")):
+        for col, (label, value) in zip(st.columns(len(items)), items):
+            with col.container(border=True):
+                st.metric(label, value)
 
 
 accts = db.accounts(conn)
@@ -95,6 +140,7 @@ def run_ai_categorize() -> None:
         bar.empty()
 
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
+    ["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
     ["Overview", "Future", "Money in & out", "Accounts", "Add data"])
 
 
@@ -125,11 +171,8 @@ with tab_overview:
         def signed(v):
             return "-" if v is None else ("+" if v >= 0 else "") + money(v)
 
-        for col, (label, value) in zip(st.columns(4), [
-                ("Change, past month", signed(change_since(1))), ("Change, past year", signed(change_since(12))),
-                ("Cash", money(totals["Cash"])), ("Investments", money(totals["Investments"]))]):
-            with col.container(border=True):
-                st.metric(label, value)
+        kpi_row([("Change, past month", signed(change_since(1))), ("Change, past year", signed(change_since(12))),
+                 ("Cash", money(totals["Cash"])), ("Investments", money(totals["Investments"]))])
 
         # plain-language takeaways
         notes = []
@@ -158,16 +201,17 @@ with tab_overview:
                 st.markdown(n)
 
         st.markdown("#### Net worth over time")
-        plot(charts.net_worth_history(nw, mode))
+        plot(charts.net_worth_history(nw, mode, compact=PHONE))
 
         left, right = st.columns(2)
         with left:
             st.markdown("#### What you own")
-            plot(charts.breakdown_bars({g: totals[g] for g in insights.ASSET_GROUPS}, mode))
+            plot(charts.breakdown_bars({g: totals[g] for g in insights.ASSET_GROUPS}, mode, compact=PHONE))
         with right:
             st.markdown("#### What you owe")
             if owe:
-                plot(charts.breakdown_bars({g: totals[g] for g in insights.DEBT_GROUPS}, mode, debt=True))
+                plot(charts.breakdown_bars({g: totals[g] for g in insights.DEBT_GROUPS}, mode, debt=True,
+                                           compact=PHONE))
             else:
                 st.success("Nothing. Debt-free! 🎉")
 
@@ -182,10 +226,15 @@ with tab_future:
         if db.get_setting(conn, "assumptions") is None:
             saved.monthly_savings = round(est_savings or 0, -1)
 
-        chart_col, ctrl_col = st.columns([2.3, 1], gap="large")
+        if PHONE:  # chart first, sliders tucked under it, details below
+            chart_col, ctrl_col, detail_col = st.container(), st.expander("⚙️ Adjust assumptions"), st.container()
+        else:
+            chart_col, ctrl_col = st.columns([2.3, 1], gap="large")
+            detail_col = chart_col
         with ctrl_col:
-            with st.container(border=True):
-                st.markdown("**Your assumptions**")
+            with st.container(border=not PHONE):
+                if not PHONE:
+                    st.markdown("**Your assumptions**")
                 a = forecast.Assumptions(
                     years=st.slider("Years ahead", 5, 30, saved.years),
                     monthly_savings=st.number_input(
@@ -226,13 +275,13 @@ with tab_future:
             st.markdown(f'<p class="hero">{money(end[f"p50{sfx}"])}</p>'
                         f'<p class="hero-sub">Most likely outcome. 8 in 10 simulations land between '
                         f'{money(end[f"p10{sfx}"])} and {money(end[f"p90{sfx}"])}.</p>', unsafe_allow_html=True)
-            plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode))
+            plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
 
+        with detail_col:
             exp = fc.expected.iloc[-1]
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Investments", money(exp[f"investments{sfx}"]))
-            m2.metric("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"]))
-            m3.metric("Debt left", money(exp[f"debt{sfx}"]))
+            kpi_row([("Investments", money(exp[f"investments{sfx}"])),
+                     ("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
+                     ("Debt left", money(exp[f"debt{sfx}"]))])
 
             st.markdown("#### Milestones")
             if fc.milestones:
@@ -285,36 +334,39 @@ with tab_flow:
         cf = insights.monthly_cash_flow(txns, rule_map)
         this_month = pd.Timestamp.today().to_period("M").to_timestamp()
         recent = cf[cf["month"] < this_month].tail(6)
-        c1, c2, c3, c4 = st.columns(4)
         income, spend = recent["money_in"].mean(), recent["money_out"].mean()
-        for col, label, v in [(c1, "Avg. money in", money(income)), (c2, "Avg. money out", money(spend)),
-                              (c3, "Avg. left over", money(income - spend)),
-                              (c4, "Savings rate", f"{(income - spend) / income:.0%}" if income else "-")]:
-            with col.container(border=True):
-                st.metric(label, v)
+        kpi_row([("Avg. money in", money(income)), ("Avg. money out", money(spend)),
+                 ("Avg. left over", money(income - spend)),
+                 ("Savings rate", f"{(income - spend) / income:.0%}" if income else "-")])
         st.caption("Monthly averages over the last 6 complete months. Transfers between your own accounts "
                    "and card payments are left out so nothing is counted twice.")
 
         st.markdown("#### Each month")
-        plot(charts.cash_flow_bars(cf.tail(12), mode))
+        plot(charts.cash_flow_bars(cf.tail(6 if PHONE else 12), mode, compact=PHONE))
 
         cats = insights.spending_by_category(txns, rules=rule_map)
         if len(cats):
-            st.markdown("#### Where it goes (monthly average, last 3 months)")
-            plot(charts.category_bars(cats, mode))
+            st.markdown("#### Where it goes" + ("" if PHONE else " (monthly average, last 3 months)"))
+            if PHONE:
+                st.caption("Monthly average, last 3 months")
+            plot(charts.category_bars(cats, mode, compact=PHONE))
 
         st.markdown("#### Transactions")
         view = insights.enrich(txns, rule_map)
         cat_options = sorted(set(categorize.CATEGORIES) | set(view["category"].dropna()))
         periods = {"All time": None, "This month": 0, "Last 3 months": 3, "Last 12 months": 12}
 
-        f1, f2, f3, f4 = st.columns([2, 1.3, 1.3, 1])
-        q = f1.text_input("Search", placeholder="Search descriptions, e.g. amazon", label_visibility="collapsed")
-        pick_cats = f2.multiselect("Category", cat_options, placeholder="All categories",
-                                   label_visibility="collapsed")
-        pick = f3.multiselect("Accounts", sorted(txns["account"].unique()), placeholder="All accounts",
+        # Phone: filters stack inside a collapsible panel instead of a 4-wide row
+        filter_box = st.expander("🔍 Filter") if PHONE else st.container()
+        with filter_box:
+            f1, f2, f3, f4 = [st.container()] * 4 if PHONE else st.columns([2, 1.3, 1.3, 1])
+            q = f1.text_input("Search", placeholder="Search descriptions, e.g. amazon",
                               label_visibility="collapsed")
-        period = f4.selectbox("Period", list(periods), label_visibility="collapsed")
+            pick_cats = f2.multiselect("Category", cat_options, placeholder="All categories",
+                                       label_visibility="collapsed")
+            pick = f3.multiselect("Accounts", sorted(txns["account"].unique()), placeholder="All accounts",
+                                  label_visibility="collapsed")
+            period = f4.selectbox("Period", list(periods), label_visibility="collapsed")
 
         if q:
             view = view[view["description"].str.contains(q, case=False, regex=False)]
@@ -329,20 +381,22 @@ with tab_flow:
 
         spent, got = -view.loc[view["amount"] < 0, "amount"].sum(), view.loc[view["amount"] > 0, "amount"].sum()
         st.caption(f"**{len(view)}** transactions · in {money(got)} · out {money(spent)}  —  "
-                   "✏️ **Double-click a category to change it.** Every transaction from that merchant "
-                   "follows, including future imports.")
+                   + ("✏️ **Tap a category twice to change it.** " if PHONE else
+                      "✏️ **Double-click a category to change it.** ")
+                   + "Every transaction from that merchant follows, including future imports.")
 
         # Keyed by the filters so pending edits never get applied to a differently-filtered table
         editor_key = f"txn_editor_{hash((q, tuple(pick_cats), tuple(pick), period))}"
         edited = st.data_editor(
-            view, hide_index=True, width="stretch", height=460, key=editor_key,
+            view, hide_index=True, width="stretch", height=420 if PHONE else 460, key=editor_key,
             disabled=["date", "account", "description", "merchant", "amount"],
-            column_order=["date", "account", "description", "category", "amount"],
+            column_order=(["date", "description", "category", "amount"] if PHONE else
+                          ["date", "account", "description", "category", "amount"]),
             column_config={
-                "date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
+                "date": st.column_config.DateColumn("Date", format="MMM D" if PHONE else "MMM D, YYYY"),
                 "account": "Account", "description": "Description",
                 "category": st.column_config.SelectboxColumn("Category ✏️", options=cat_options, required=True),
-                "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
+                "amount": st.column_config.NumberColumn("Amount", format="$%,.0f" if PHONE else "$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
         if len(changed):
             for r in changed.drop_duplicates("merchant", keep="last").itertuples():
@@ -363,10 +417,11 @@ with tab_accounts:
             Group=accts["type"].map(insights.GROUPS), Type=accts["type"].map(TYPE_LABELS),
             Updated=pd.to_datetime(accts["as_of"]),
         ).sort_values(["is_liability", "Group", "name"])
-        st.dataframe(table[["name", "Group", "Type", "balance", "Updated"]], hide_index=True,
-                     width="stretch", column_config={
-                         "name": "Account", "balance": st.column_config.NumberColumn("Balance", format="$%,.2f"),
-                         "Updated": st.column_config.DateColumn(format="MMM D, YYYY")})
+        st.dataframe(table[["name", "balance", "Updated"] if PHONE else ["name", "Group", "Type", "balance", "Updated"]],
+                     hide_index=True, width="stretch", column_config={
+                         "name": "Account",
+                         "balance": st.column_config.NumberColumn("Balance", format="$%,.0f" if PHONE else "$%,.2f"),
+                         "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
         st.caption("Debts show what you owe as a positive number.")
 
     names = dict(zip(accts["name"], accts["id"]))
