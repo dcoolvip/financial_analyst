@@ -312,7 +312,8 @@ document.getElementById('add').addEventListener('click', async () => {{
       excludeCredentials: (o.excludeCredentials || []).map(c => ({{ ...c, id: b64u.dec(c.id) }})) }};
     const cred = await navigator.credentials.create({{ publicKey }});
     const ua = navigator.userAgent, name = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad'
-             : /Macintosh/.test(ua) ? 'Mac' : 'Passkey';
+             : /Macintosh/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows Hello'
+             : /Android/.test(ua) ? 'Android' : 'Passkey';
     await post('/passkey/register/verify', {{ flow, credential: credToJSON(cred), name }});
     location.reload();
   }} catch (e) {{ if (e.name !== 'NotAllowedError') msg('Could not add passkey: ' + e.message); }}
