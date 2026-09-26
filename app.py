@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib
 import os
 import re
 from datetime import date
@@ -10,9 +11,34 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from finance import categorize, charts, db, demo, forecast, insights
-from finance.charts import money
-from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse_file
+import finance.importers.base
+import finance.importers.bofa
+from finance import categorize, charts, db, demo, forecast, importers, insights
+
+
+@st.cache_resource
+def _loaded_mtimes() -> dict:
+    return {}
+
+
+def _reload_changed_modules() -> None:
+    """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
+    (its polling watcher misses some edits). Reload any module whose file changed since it
+    was loaded, dependencies first, so a refresh always runs current code."""
+    order = [categorize, db, finance.importers.base, finance.importers.bofa, importers,
+             insights, forecast, charts, demo]
+    seen = _loaded_mtimes()
+    first_run = not seen
+    stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
+    if first_run or stale:
+        for m in order:  # reload everything downstream too, so `from x import y` bindings refresh
+            importlib.reload(m)
+            seen[m.__name__] = os.path.getmtime(m.__file__)
+
+
+_reload_changed_modules()
+from finance.charts import money  # noqa: E402 - after the reload so it binds the fresh module
+from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse_file  # noqa: E402
 
 st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wide")
 
@@ -48,33 +74,36 @@ def _is_phone() -> bool:
 
 PHONE = _is_phone()
 
-# Desktop rules first; everything phone-specific sits inside the small-screen media query,
-# so the Mac layout is untouched.
-st.markdown("""
-<style>
-  .block-container { padding-top: 2rem; max-width: 1200px; }
-  [data-testid="stMetricValue"] { font-size: 1.6rem; }
-  .hero { font-size: 3rem; font-weight: 700; line-height: 1.1; margin: 0; }
-  .hero-sub { color: var(--text-color); opacity: .65; margin: .25rem 0 1rem; }
-
-  @media (max-width: 640px) {
-    .block-container { padding: 1rem .75rem 3rem; }
-    .hero { font-size: 2.1rem; }
-    .hero-sub { font-size: .9rem; margin-bottom: .75rem; }
-    h4 { font-size: 1.05rem !important; padding-top: .75rem !important; }
-    [data-testid="stMetricValue"] { font-size: 1.2rem; }
+# Phone rules are applied directly when the phone is detected (reliable regardless of the
+# browser's reported width), and via a small-screen media query as a fallback. The Mac never
+# sees them.
+PHONE_CSS = """
+    [data-testid="stHeader"] { height: 2.25rem; min-height: 2.25rem; }
+    .block-container, [data-testid="stMainBlockContainer"] { padding: .75rem .75rem 3rem !important; }
+    .hero { font-size: 2rem; }
+    .hero-sub { font-size: .9rem; margin-bottom: .6rem; }
+    h4 { font-size: 1.05rem !important; padding-top: .6rem !important; }
+    [data-testid="stMetricValue"] { font-size: 1.15rem; }
     [data-testid="stMetricLabel"] p { font-size: .75rem; }
+    [data-testid="stMarkdownContainer"] p { font-size: .95rem; }
     /* metric rows become a 2-column grid instead of a tall single column */
-    [class*="st-key-kpis"] [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: .5rem; }
+    [class*="st-key-kpis"] [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; gap: .5rem !important; }
     [class*="st-key-kpis"] [data-testid="stColumn"] {
       flex: 1 1 calc(50% - .5rem) !important; min-width: calc(50% - .5rem) !important;
-      width: calc(50% - .5rem) !important;
+      width: calc(50% - .5rem) !important; max-width: calc(50% - .25rem) !important;
     }
-    [class*="st-key-kpis"] [data-testid="stVerticalBlockBorderWrapper"] { padding: .6rem .75rem; }
+    [class*="st-key-kpis"] [data-testid="stVerticalBlockBorderWrapper"] { padding: .5rem .65rem !important; }
     /* tabs: tighter, swipeable */
     [data-baseweb="tab-list"] { gap: .25rem; overflow-x: auto; }
     [data-baseweb="tab"] { padding: .4rem .55rem; font-size: .9rem; }
-  }
+"""
+st.markdown(f"""
+<style>
+  .block-container {{ padding-top: 2rem; max-width: 1200px; }}
+  [data-testid="stMetricValue"] {{ font-size: 1.6rem; }}
+  .hero {{ font-size: 3rem; font-weight: 700; line-height: 1.1; margin: 0; }}
+  .hero-sub {{ color: var(--text-color); opacity: .65; margin: .25rem 0 1rem; }}
+  {PHONE_CSS if PHONE else "@media (max-width: 640px) {" + PHONE_CSS + "}"}
 </style>
 """, unsafe_allow_html=True)
 
