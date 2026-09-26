@@ -46,9 +46,12 @@ fi
 echo ""
 echo "Open on any device on this Wi-Fi:  https://$HOST:8501"
 echo "If macOS asks whether Python may accept incoming connections, click Allow."
+echo "Add Face ID: sign in once, then sidebar → 🔐 Security & passkeys → Add a passkey."
 echo ""
-# Bind to the Wi-Fi address only (not 0.0.0.0) so VPN or other networks can't reach it
-FINANCE_LAN=1 .venv/bin/streamlit run app.py --server.port 8501 --server.address "$IP" \
-  --server.sslCertFile data/tls/server.pem --server.sslKeyFile data/tls/server.key &
+# Streamlit: this Mac only (127.0.0.1). The gate: HTTPS on the Wi-Fi address only, signs people in,
+# and is the only way in from the network.
+trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
+FINANCE_GATE=1 .venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
+.venv/bin/python -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
 sleep 3 && open "https://$HOST:8501"
 wait

@@ -1,8 +1,6 @@
 """Personal finance dashboard.  Run:  streamlit run app.py"""
 from __future__ import annotations
 
-import hashlib
-import hmac
 import importlib
 import os
 import re
@@ -42,29 +40,11 @@ from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse
 
 st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wide")
 
-# Wi-Fi mode (started by "Dashboard (Wi-Fi).command") is reachable from other devices, so it
-# requires the password set by that launcher. Local-only mode needs no password.
-if os.environ.get("FINANCE_LAN") == "1" and not st.get_option("server.sslCertFile"):
-    st.error("Wi-Fi mode must run over HTTPS. Start it with “Dashboard (Wi-Fi).command”.")
-    st.stop()
-if os.environ.get("FINANCE_LAN") == "1" and not st.session_state.get("authed"):
-    stored = db.ROOT / "data" / "app_password"
-    if not stored.exists():
-        st.error("No password set. Start the dashboard with “Dashboard (Wi-Fi).command” to create one.")
-        st.stop()
-    salt_hex, digest_hex = stored.read_text().split(":")
-    with st.form("login"):
-        st.markdown("### 🔒 Financial Analyst")
-        # A username field + standard autocomplete hints let iOS/macOS Passwords save and
-        # Face ID-fill this login. The username isn't checked; it only labels the saved entry.
-        st.text_input("Username", value="finance", autocomplete="username")
-        pw = st.text_input("Password", type="password", autocomplete="current-password")
-        if st.form_submit_button("Unlock", type="primary"):
-            attempt = hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
-            if hmac.compare_digest(attempt.hex(), digest_hex):
-                st.session_state["authed"] = True
-                st.rerun()
-            st.error("Wrong password")
+# Wi-Fi mode: sign-in, passkeys and HTTPS are handled by the gate (finance/gate.py) in front of
+# this app. Streamlit itself must then only be reachable from this Mac, never the network.
+GATED = os.environ.get("FINANCE_GATE") == "1"
+if GATED and st.get_option("server.address") not in ("127.0.0.1", "localhost"):
+    st.error("Behind the gate, Streamlit must listen on 127.0.0.1 only. Start with “Dashboard (Wi-Fi).command”.")
     st.stop()
 
 
@@ -137,6 +117,10 @@ with st.sidebar:
     st.markdown("### Financial Analyst")
     source = st.radio("Data", ["My data", "Demo data"], help="Demo data lives in its own file and never mixes with yours.")
     st.caption("Everything stays on this computer in `data/`.")
+    if GATED:
+        # target=_self: stay in this tab (gate pages, not Streamlit pages)
+        st.markdown('<a href="/security" target="_self">🔐 Security &amp; passkeys</a> &nbsp;·&nbsp; '
+                    '<a href="/logout" target="_self">Sign out</a>', unsafe_allow_html=True)
 
 conn = get_conn(str(db.ROOT / "data" / ("demo.db" if source == "Demo data" else "finance.db")))
 mode = "dark" if getattr(st.context, "theme", None) and st.context.theme.type == "dark" else "light"

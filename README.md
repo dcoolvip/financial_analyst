@@ -14,18 +14,29 @@ python3 -m venv .venv
 Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder: it sets
 things up on first run, opens the browser, and stops when you close its Terminal window. Switch to **Demo data** in the sidebar to look around with a fake household.
 
-## Other devices on your Wi-Fi (HTTPS)
+## Other devices on your Wi-Fi (HTTPS, passkeys)
 
-Double-click **`Dashboard (Wi-Fi).command`**. It serves **HTTPS only** at `https://dcool.home:8501`,
-password-protected, listening on the Wi-Fi address only.
+Double-click **`Dashboard (Wi-Fi).command`** → `https://dcool.home:8501`.
+
+```
+phone/Mac ──HTTPS──▶ gate (Wi-Fi IP:8501) ──▶ Streamlit (127.0.0.1:8502, this Mac only)
+```
+
+`finance/gate.py` handles sign-in: a password form that Passwords/Face ID can fill, **passkeys**
+(Face ID / Touch ID), "keep me signed in on this device" (90 days), and a **Security** page
+(sidebar → 🔐) to add or remove passkeys and sign out other devices. Sessions are HttpOnly/Secure `__Host-`
+cookies; only their hashes are stored (`data/auth.db`). Logins are rate-limited, and every POST is
+Origin-checked.
 
 First run: it asks for a password, creates a private certificate authority in `data/tls/`
-(gitignored) and shows `Financial Analyst CA.cer` in Finder. Trust it once on the iPhone:
+(gitignored) and shows `Financial Analyst CA.cer` in Finder. To trust it once on the iPhone:
 AirDrop it → Settings → General → VPN & Device Management → Install → Settings → General → About →
-Certificate Trust Settings → enable it. The CA is name-constrained to `dcool.home` and the home subnet,
-so it can't vouch for any other site. Server certs renew automatically (`tools/make_tls.sh`).
+Certificate Trust Settings → turn it on. The CA is name-constrained to `dcool.home` and the home subnet,
+so it can't vouch for any other site.
 
-The regular `Dashboard.command` stays `http://localhost` - traffic never leaves the Mac.
+Check the whole chain end to end: `.venv/bin/python tools/selftest_gate.py`
+
+The regular `Dashboard.command` stays on `http://localhost`, and that traffic never leaves the Mac.
 
 ## Getting your data in (Bank of America)
 
