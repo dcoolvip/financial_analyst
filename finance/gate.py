@@ -20,6 +20,7 @@ import asyncio
 import html
 import json
 import secrets
+import socket
 import ssl
 import time
 import urllib.parse
@@ -579,6 +580,73 @@ def make_app(host: str, port: int, upstream_port: int) -> web.Application:
     return app
 
 
+async def _wait_readable(loop, sock, timeout: float) -> None:
+    fut = loop.create_future()
+    loop.add_reader(sock.fileno(), lambda: fut.done() or fut.set_result(None))
+    try:
+        await asyncio.wait_for(fut, timeout)
+    finally:
+        loop.remove_reader(sock.fileno())
+
+
+async def _redirect_plain_http(loop, conn: socket.socket, origin: str) -> None:
+    """Someone typed http:// (or no scheme - Windows browsers then try http first). Answer with a
+    redirect to the https address instead of silently dropping the connection (ERR_EMPTY_RESPONSE)."""
+    try:
+        await _wait_readable(loop, conn, 10)
+        head = conn.recv(8192).decode("latin-1", "replace")
+        parts = head.split("\r\n", 1)[0].split(" ")
+        path = parts[1] if len(parts) >= 2 and parts[1].startswith("/") else "/"
+        path = "".join(ch for ch in path if ch.isprintable() and ch not in "\r\n")
+        conn.sendall((f"HTTP/1.1 308 Permanent Redirect\r\nLocation: {origin}{path}\r\n"
+                      "Content-Length: 0\r\nConnection: close\r\n\r\n").encode())
+    except (OSError, asyncio.TimeoutError):
+        pass
+    finally:
+        conn.close()
+
+
+async def route_connection(loop, conn: socket.socket, protocol_factory, tls: ssl.SSLContext, origin: str) -> None:
+    """HTTPS and plain HTTP share the port: peek at the first byte (0x16 = TLS handshake) without
+    consuming it, then hand TLS connections to the aiohttp server and redirect everything else."""
+    conn.setblocking(False)
+    try:
+        await _wait_readable(loop, conn, 15)
+        first = conn.recv(1, socket.MSG_PEEK)
+    except (OSError, asyncio.TimeoutError):
+        conn.close()
+        return
+    if not first:
+        conn.close()
+    elif first[0] == 0x16:
+        try:
+            await loop.connect_accepted_socket(protocol_factory, conn, ssl=tls, ssl_handshake_timeout=15)
+        except (OSError, ssl.SSLError, ConnectionError, asyncio.TimeoutError):
+            conn.close()   # e.g. a browser that doesn't trust the certificate yet aborts the handshake
+    else:
+        await _redirect_plain_http(loop, conn, origin)
+
+
+async def serve(app: web.Application, ip: str, port: int, tls: ssl.SSLContext, on_ready=None) -> None:
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    loop = asyncio.get_running_loop()
+    lsock = socket.socket(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM)
+    lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    lsock.bind((ip, port))
+    lsock.listen(128)
+    lsock.setblocking(False)
+    if on_ready:
+        on_ready()
+    try:
+        while True:
+            conn, _ = await loop.sock_accept(lsock)
+            asyncio.create_task(route_connection(loop, conn, runner.server, tls, app[cfg]["origin"]))
+    finally:
+        lsock.close()
+        await runner.cleanup()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--host", default="dcool.home", help="name devices use (must match the certificate)")
@@ -593,8 +661,13 @@ def main() -> None:
     tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls.load_cert_chain(a.cert, a.key)
-    web.run_app(make_app(a.host, a.port, a.upstream_port), host=a.ip, port=a.port, ssl_context=tls,
-                access_log=None, print=lambda *_: print(f"Gate listening on https://{a.host}:{a.port}"))
+    app = make_app(a.host, a.port, a.upstream_port)
+    try:
+        asyncio.run(serve(app, a.ip, a.port, tls,
+                          on_ready=lambda: print(f"Gate listening on https://{a.host}:{a.port} "
+                                                 f"(http:// is redirected)", flush=True)))
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

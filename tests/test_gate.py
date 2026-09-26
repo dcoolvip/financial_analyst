@@ -261,3 +261,50 @@ def test_security_headers_on_streamed_responses(gate):
     resp = asyncio.run(run())
     assert resp.headers["Strict-Transport-Security"] == "max-age=31536000"
     assert resp.headers["X-Frame-Options"] == "SAMEORIGIN"
+
+
+# --- shared port: HTTPS served, plain HTTP redirected (real sockets via socketpair) ---
+
+def _serve_one(app, send_plain=None, tls_request=None):
+    from pathlib import Path
+    import socket
+    import ssl
+    root = Path(__file__).resolve().parent.parent
+
+    async def run():
+        from finance import gate as g
+        runner = web.AppRunner(app, access_log=None)
+        await runner.setup()
+        tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        tls.load_cert_chain(root / "data/tls/server.pem", root / "data/tls/server.key")
+        loop = asyncio.get_running_loop()
+        srv, cli = socket.socketpair()
+        task = asyncio.create_task(g.route_connection(loop, srv, runner.server, tls, ORIGIN))
+        try:
+            if send_plain:
+                cli.sendall(send_plain)
+                await task
+                return cli.recv(4096).decode()
+            ctx = ssl.create_default_context(cafile=str(root / "data/tls/ca.pem"))
+            r, w = await asyncio.open_connection(sock=cli, ssl=ctx, server_hostname=HOST)
+            w.write(tls_request)
+            await w.drain()
+            return (await asyncio.wait_for(r.read(), 10)).decode(errors="replace")
+        finally:
+            cli.close()
+            await runner.cleanup()
+    return asyncio.run(run())
+
+
+@pytest.mark.skipif(not os.path.exists("data/tls/server.pem"), reason="needs tools/make_tls.sh certificates")
+def test_plain_http_on_https_port_is_redirected(gate):
+    _, app = gate
+    out = _serve_one(app, send_plain=b"GET /security?x=1 HTTP/1.1\r\nHost: dcool.home:8501\r\n\r\n")
+    assert out.startswith("HTTP/1.1 308") and f"Location: {ORIGIN}/security?x=1" in out
+
+
+@pytest.mark.skipif(not os.path.exists("data/tls/server.pem"), reason="needs tools/make_tls.sh certificates")
+def test_https_on_shared_port_serves_gate(gate):
+    _, app = gate
+    out = _serve_one(app, tls_request=f"GET /login HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nConnection: close\r\n\r\n".encode())
+    assert out.startswith("HTTP/1.1 200") and "Sign in" in out and "Strict-Transport-Security" in out
