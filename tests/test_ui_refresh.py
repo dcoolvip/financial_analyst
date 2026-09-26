@@ -226,3 +226,23 @@ def test_csv_preselects_the_right_account_or_asks(env):
     at.run()
     assert [s for s in at.selectbox if s.label == "Import into"][0].value == "BofA Bills"
     assert any("Matched automatically" in c.value for c in at.caption)
+
+
+def test_wrong_import_can_be_undone_from_the_ui(env):
+    conn, uploads = env
+    bofa = db.add_account(conn, "BofA Checking", "Bank of America", "checking")
+    at = app()
+    assert not any(e.label == "↩️ Undo an import" for e in at.expander)          # nothing to undo yet
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("chase.csv", (FIXTURES / "chase_checking.csv").read_bytes())]
+    at.run()
+    [s for s in at.selectbox if s.label == "Import into"][0].set_value("BofA Checking").run()   # the mistake
+    click(at, "Import")
+    assert len(db.transactions(conn)) == 5
+    assert at.selectbox(key="cp_pick").value is not None                         # a checkpoint was taken
+    assert "Before importing chase.csv into BofA Checking" in at.selectbox(key="cp_pick").format_func(
+        at.selectbox(key="cp_pick").value)
+    [c for c in at.checkbox if c.label == "Yes, put my data back to this point"][0].check().run()
+    click(at, "Restore")
+    assert len(db.transactions(conn)) == 0                                      # back to before the import
+    assert any("Restored" in t.value for t in at.toast)

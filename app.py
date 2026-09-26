@@ -4,7 +4,7 @@ from __future__ import annotations
 import importlib
 import os
 import re
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import streamlit as st
@@ -14,7 +14,7 @@ import finance.importers.bofa
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import categorize, charts, db, demo, editing, forecast, importers, insights, paths, portfolio
+from finance import categorize, charts, checkpoints, db, demo, editing, forecast, importers, insights, paths, portfolio
 
 
 @st.cache_resource
@@ -29,7 +29,7 @@ def _reload_changed_modules() -> None:
     order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio, editing]
+             insights, forecast, charts, demo, portfolio, editing, checkpoints]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -562,6 +562,7 @@ with tab_accounts:
                 gone = st.selectbox("Account to remove", list(names), key="rm")
                 sure = st.checkbox(f"Yes, delete {gone} and all its history")
                 if st.button("Remove", disabled=not sure):
+                    checkpoints.create(conn, f"Before removing {gone}")
                     db.delete_account(conn, names[gone])
                     st.rerun()
 
@@ -677,6 +678,7 @@ def render_statement_review(pdf_files) -> None:
             st.error("These look like different accounts - pick ➕ New account or the right one: "
                      + "; ".join(mismatched))
             return
+        checkpoints.create(conn, f"Before saving {len(chosen)} statement(s): " + ", ".join(chosen["file"])[:80])
         ids = {}
         for r in chosen.itertuples():
             if r.account == NEW_ACCOUNT:
@@ -764,6 +766,7 @@ with tab_add:
                 st.caption(f"⚠️ {parsed.note}")
             if st.button("Import", key=f"b{k}", type="primary",
                          disabled=target is None or (target == options[-1] and not new_name)):
+                checkpoints.create(conn, f"Before importing {f.name} into {new_name or target}")
                 acct_id = (db.get_or_create_account(conn, new_name, parsed.institution, new_type) if new_name
                            else int(matches.loc[matches["name"] == target, "id"].iloc[0]))
                 r = apply(conn, parsed, acct_id, f.name)
@@ -781,3 +784,22 @@ with tab_add:
                 if all(x.file_id in done for x in files):          # every CSV imported: clear the uploader
                     st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
                 st.rerun()                                          # every tab reflects the import right away
+
+    cps = checkpoints.list_all(conn)
+    if cps:
+        with st.expander("↩️ Undo an import"):
+            st.caption("A snapshot is saved automatically before every import and before removing an account. "
+                       "Restoring puts everything back exactly as it was then - and is itself saved first, so it "
+                       "can be undone too.")
+            fmt = {c["id"]: f"{datetime.fromtimestamp(c['created']):%b %-d, %-I:%M %p} · {c['label']}" for c in cps}
+            pick = st.selectbox("Go back to", [c["id"] for c in cps], format_func=fmt.get, key="cp_pick")
+            chosen_cp = next(c for c in cps if c["id"] == pick)
+            n = chosen_cp["counts"]
+            st.caption(f"At that point: {n['accounts']} accounts, {n['transactions']:,} transactions, "
+                       f"{n['balances']:,} balance points.")
+            ok = st.checkbox("Yes, put my data back to this point", key=f"cp_ok_{pick}")
+            if st.button("Restore", disabled=not ok):
+                checkpoints.restore(conn, pick)
+                st.session_state["flash"] = f"Restored: {chosen_cp['label']}. (This was saved too, so you can undo it.)"
+                st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
+                st.rerun()
