@@ -14,11 +14,18 @@ python3 -m venv .venv
 Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder: it sets
 things up on first run, opens the browser, and stops when you close its Terminal window. Switch to **Demo data** in the sidebar to look around with a fake household.
 
-## Other devices on your Wi-Fi
+## Other devices on your Wi-Fi (HTTPS)
 
-Double-click **`Dashboard (Wi-Fi).command`** instead. The first time, it asks you to choose a password,
-then prints the address to open on your phone or iPad (e.g. `http://192.168.x.x:8501`). The regular
-launcher stays reachable only from this Mac. Traffic is plain HTTP, so use this on your home network only.
+Double-click **`Dashboard (Wi-Fi).command`**. It serves **HTTPS only** at `https://dcool.home:8501`,
+password-protected, listening on the Wi-Fi address only.
+
+First run: it asks for a password, creates a private certificate authority in `data/tls/`
+(gitignored) and shows `Financial Analyst CA.cer` in Finder. Trust it once on the iPhone:
+AirDrop it → Settings → General → VPN & Device Management → Install → Settings → General → About →
+Certificate Trust Settings → enable it. The CA is name-constrained to `dcool.home` and the home subnet,
+so it can't vouch for any other site. Server certs renew automatically (`tools/make_tls.sh`).
+
+The regular `Dashboard.command` stays `http://localhost` - traffic never leaves the Mac.
 
 ## Getting your data in (Bank of America)
 

@@ -24,11 +24,31 @@ fi
 
 IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
 [[ -n "$IP" ]] || { echo "Not connected to Wi-Fi."; exit 1; }
+HOST=dcool.home
+
+# HTTPS only: create/renew certificates (no-op when they're current)
+tools/make_tls.sh "$HOST" || exit 1
+if [[ ! -f data/tls/.phone-setup-shown ]]; then
+  cat <<EOF
+
+──────────────── One-time iPhone setup (so it trusts this dashboard) ────────────────
+ 1. AirDrop "Financial Analyst CA.cer" (Finder is showing it now) to your iPhone.
+ 2. iPhone: Settings → General → VPN & Device Management → the downloaded profile → Install.
+ 3. iPhone: Settings → General → About → Certificate Trust Settings →
+    turn ON "Financial Analyst local CA (dcool.home)".
+ This certificate can only vouch for $HOST and your home network - nothing else.
+──────────────────────────────────────────────────────────────────────────────────────
+EOF
+  open -R "data/tls/Financial Analyst CA.cer"
+  touch data/tls/.phone-setup-shown
+fi
+
 echo ""
-echo "On your other device, open:  http://$IP:8501"
+echo "Open on any device on this Wi-Fi:  https://$HOST:8501"
 echo "If macOS asks whether Python may accept incoming connections, click Allow."
 echo ""
 # Bind to the Wi-Fi address only (not 0.0.0.0) so VPN or other networks can't reach it
-FINANCE_LAN=1 .venv/bin/streamlit run app.py --server.port 8501 --server.address "$IP" &
-sleep 2 && open "http://$IP:8501"
+FINANCE_LAN=1 .venv/bin/streamlit run app.py --server.port 8501 --server.address "$IP" \
+  --server.sslCertFile data/tls/server.pem --server.sslKeyFile data/tls/server.key &
+sleep 3 && open "https://$HOST:8501"
 wait

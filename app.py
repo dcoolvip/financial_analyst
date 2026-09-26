@@ -44,6 +44,9 @@ st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wid
 
 # Wi-Fi mode (started by "Dashboard (Wi-Fi).command") is reachable from other devices, so it
 # requires the password set by that launcher. Local-only mode needs no password.
+if os.environ.get("FINANCE_LAN") == "1" and not st.get_option("server.sslCertFile"):
+    st.error("Wi-Fi mode must run over HTTPS. Start it with “Dashboard (Wi-Fi).command”.")
+    st.stop()
 if os.environ.get("FINANCE_LAN") == "1" and not st.session_state.get("authed"):
     stored = db.ROOT / "data" / "app_password"
     if not stored.exists():
