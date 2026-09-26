@@ -36,9 +36,10 @@ def gate(tmp_path, monkeypatch):
     return g, app
 
 
-def call(app, method, path, *, body=None, form=None, cookies=None, origin=ORIGIN, host=f"{HOST}:{PORT}", ua=UA_IPHONE):
+def call(app, method, path, *, body=None, form=None, cookies=None, origin=ORIGIN, host=f"{HOST}:{PORT}", ua=UA_IPHONE,
+         extra=None):
     async def run():
-        headers = {"Host": host, "User-Agent": ua}
+        headers = {"Host": host, "User-Agent": ua, **(extra or {})}
         if origin:
             headers["Origin"] = origin
         if cookies:
@@ -115,6 +116,24 @@ def test_cross_site_posts_rejected(gate):
     _, app = gate
     assert call(app, "POST", "/login", form={"password": "correct horse"}, origin="https://evil.example").status == 403
     assert call(app, "POST", "/passkey/auth/options", body={}, origin=None).status == 403
+
+
+def test_browser_form_post_with_null_origin(gate):
+    """What Safari/Chrome really send for a form post under strict referrer policies (the bug
+    the user hit): Origin: null, but Sec-Fetch-Site proves it came from this site."""
+    _, app = gate
+    form = {"username": "finance", "password": "correct horse", "remember": "on"}
+    for origin in ("null", None):
+        r = call(app, "POST", "/login", form=form, origin=origin, extra={"Sec-Fetch-Site": "same-origin"})
+        assert r.status == 303 and "__Host-fa_session" in r.cookies
+    # still blocked when the browser says the post came from another site, or gives no proof
+    assert call(app, "POST", "/login", form=form, origin="null", extra={"Sec-Fetch-Site": "cross-site"}).status == 403
+    assert call(app, "POST", "/login", form=form, origin="null").status == 403
+
+
+def test_referrer_policy_keeps_origin_header():
+    from finance import gate as g
+    assert g.SECURITY_HEADERS["Referrer-Policy"] == "same-origin"   # no-referrer caused Origin: null
 
 
 def test_logout_and_revocation(gate):

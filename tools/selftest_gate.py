@@ -64,6 +64,13 @@ async def run() -> list[tuple[str, bool, str]]:
             check("Signed-out WebSocket refused", e.status == 401, str(e.status))
         async with anon.post(f"{ORIGIN}/login", data={"password": "wrong"}, headers={"Origin": ORIGIN}) as r:
             check("Wrong password rejected", "Wrong password" in await r.text())
+        # Real browsers often send Origin: null on form posts; Sec-Fetch-Site vouches for them
+        async with anon.post(f"{ORIGIN}/login", data={"password": PW},
+                             headers={"Origin": "null", "Sec-Fetch-Site": "same-origin"}, allow_redirects=False) as r:
+            check("Browser-style form sign-in (Origin: null)", r.status == 303, f"{r.status} {(await r.text())[:40]}")
+        async with anon.post(f"{ORIGIN}/login", data={"password": PW},
+                             headers={"Origin": "null", "Sec-Fetch-Site": "cross-site"}, allow_redirects=False) as r:
+            check("Cross-site form post blocked", r.status == 403, str(r.status))
 
     jar = aiohttp.CookieJar(unsafe=True)
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=tls), cookie_jar=jar) as s:

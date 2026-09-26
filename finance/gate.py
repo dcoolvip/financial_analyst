@@ -60,7 +60,13 @@ def _authed(request) -> dict | None:
 
 
 def _same_origin(request) -> bool:
-    return request.headers.get("Origin") == request.app[cfg]["origin"]
+    """CSRF check for every POST. Browsers send `Origin: null` on plain form posts in some cases
+    (privacy settings, referrer policies), so a null/missing Origin is accepted only when the
+    browser's own Sec-Fetch-Site says the request came from this site - pages can't forge it."""
+    origin = request.headers.get("Origin")
+    if origin == request.app[cfg]["origin"]:
+        return True
+    return origin in (None, "null") and request.headers.get("Sec-Fetch-Site") == "same-origin"
 
 
 def _set_cookie(resp: web.StreamResponse, token: str, max_age: int | None) -> None:
@@ -525,7 +531,9 @@ async def guard(request, handler):
 SECURITY_HEADERS = {
     "Strict-Transport-Security": "max-age=31536000",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: no-referrer makes browsers send `Origin: null` on form posts,
+    # which broke password sign-in. Nothing is ever sent to other sites either way.
+    "Referrer-Policy": "same-origin",
     "X-Frame-Options": "SAMEORIGIN",
 }
 
