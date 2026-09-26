@@ -261,3 +261,45 @@ def test_statement_extras_saved_and_summarized(tmp_path):
     assert pf["total"] == pytest.approx(1_100_000) and pf["gain"] == pytest.approx(600_000)
     assert pf["concentrated"][0][0] == "AAPL"
     assert db.latest_grants(conn)["value"].sum() == pytest.approx(30_000)
+
+
+WEALTHFRONT = """ACCOUNT INFORMATION
+Jane Sample and John Sample
+Joint Automated Investing Account
+ACCOUNT NUMBERS
+Wealthfront: 8X123456
+Monthly Statement for August 1 - 31, 2025
+Joint Investment Account
+August 1, 2025 Starting Balance $10,000.00
+August 31, 2025 Ending Balance $10,550.00
+I. Holdings as of August 31, 2025
+Security Symbol/CUSIP Shares Share Price Value
+Vanguard Total Stock Market ETF VTI 20 $300.0000 $6,000.00
+ISHARES TR CALIF MUN BD ETF CMF 50.5 $50.0000 $2,525.00
+Schwab International Equity ETF SCHF 67.5 $30.0000 $2,025.00
+Total $10,550.00
+DIVIDENDS
+Date Type Security Symbol/ CUSIP Shares Taxable Value Tax-Exempt Value3 Total Value
+7/31/2025 Cash RBC US Government Money Market Fund TIMXX -- $0.16 $0.00 $0.16
+Securities held at Wealthfront Brokerage are not FDIC-insured.
+"""
+
+
+def test_wealthfront_statement_uses_ending_balance_not_dividend_total():
+    s = parse_text(WEALTHFRONT)
+    assert (s.kind, s.institution, s.account_type, s.last4) == ("investment", "Wealthfront", "brokerage", "3456")
+    assert s.balance == pytest.approx(10_550) and s.as_of == date(2025, 8, 31)   # not the $0.16 dividend total
+    assert s.history == [(date(2025, 7, 31), pytest.approx(10_000), True)]
+    assert [h["symbol"] for h in s.holdings] == ["VTI", "CMF", "SCHF"] and not s.notes
+
+
+def test_value_that_disagrees_with_positions_is_flagged():
+    s = parse_text(WEALTHFRONT.replace("August 31, 2025 Ending Balance $10,550.00", "August 31, 2025 Ending Balance $0.16"))
+    assert any("doesn't match the positions" in n for n in s.notes)
+
+
+def test_muni_bond_funds_count_as_bonds():
+    from finance import portfolio
+    assert portfolio.asset_class("CMF", "ISHARES TR CALIF MUN BD ETF") == "Bonds"
+    assert portfolio.asset_class("PWZ", "INVESCO EXCHANGE-TRADED FD TR CALIF AMT MUN") == "Bonds"
+    assert portfolio.asset_class("SCHB", "Schwab U.S. Broad Market ETF") == "Stocks"

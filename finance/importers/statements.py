@@ -216,13 +216,22 @@ def _parse_investment(s: Statement, t: str) -> None:
     s.account_type = "retirement" if re.search(r"\b(IRA|Roth|ROTH|401\s*\(?[kK]\)?|403\s*\(?[bB]\)?|Retirement Account)\b",
                                                t[:2500]) else "brokerage"
     s.balance = _money_after(t, [r"ending total value", r"total account value", r"net portfolio value",
-                                 r"total portfolio value", r"total value", r"account value"])
+                                 r"total portfolio value", r"ending balance", r"total holdings",
+                                 r"total value", r"account value"])
     s.as_of = (_date_after(t, [r"ending total value"], window=40) or _period_end(t)
                or _date_after(t, [r"as of", r"statement period", r"period ending"]))
     if s.institution == "Merrill":
         _merrill_extras(s, t)
     elif s.institution == "E*TRADE" or "morgan stanley at work" in t.lower():
         _etrade_extras(s, t)
+    elif s.institution == "Wealthfront":
+        _wealthfront_extras(s, t)
+    # Safety net for every broker: the value must agree with the positions it lists
+    if s.holdings and s.balance is not None:
+        listed = sum(h["value"] for h in s.holdings)
+        if listed and abs(s.balance - listed) > max(1.0, 0.01 * listed):
+            s.notes.append(f"The account value read (${s.balance:,.2f}) doesn't match the positions listed "
+                           f"(${listed:,.2f}) - check it before saving")
     # Exact values win: drop rounded chart points on dates we know exactly (incl. the statement date itself)
     exact = {d for d, _, e in s.history if e} | ({s.as_of} if s.as_of else set())
     s.history = sorted({d: (d, v, e) for d, v, e in s.history if e or d not in exact}.values())
@@ -285,6 +294,24 @@ def _merrill_extras(s: Statement, t: str) -> None:
     if s.holdings and m and _num(m.group(1)) > 0:
         s.holdings.append({"symbol": "CASH", "description": "Cash / money accounts", "quantity": None,
                            "price": None, "value": _num(m.group(1)), "cost_basis": None})
+
+
+def _wealthfront_extras(s: Statement, t: str) -> None:
+    # "August 31, 2026 Ending Balance $27,576.71" / "August 1, 2026 Starting Balance $26,892.73"
+    m = re.search(rf"{_DATE_LONG}\s+Ending Balance\s+{MONEY}", t, re.IGNORECASE)
+    if m:
+        s.as_of, s.balance = _parse_date(m.group(1)), _money(m.group(2))
+    m = re.search(rf"{_DATE_LONG}\s+Starting Balance\s+{MONEY}", t, re.IGNORECASE)
+    if m and s.as_of:
+        s.history.append((_prev_month_end(s.as_of), _money(m.group(2)), True))
+    m = re.search(r"Wealthfront:\s*([0-9A-Z]{6,12})\b", t)
+    if m:
+        s.last4 = re.sub(r"\D", "", m.group(1))[-4:] or s.last4
+    # Holdings rows: "Schwab U.S. Broad Market ETF SCHB 303 $29.6000 $8,968.80"
+    for m in re.finditer(r"(?m)^(?P<desc>[A-Za-z][\w&.,'/ -]+?)\s+(?P<sym>[A-Z]{2,6})\s+(?P<qty>[\d,]+(?:\.\d+)?)\s+"
+                         r"\$(?P<price>[\d,]+\.\d{2,4})\s+\$(?P<value>[\d,]+\.\d{2})\s*$", t):
+        s.holdings.append({"symbol": m["sym"], "description": m["desc"].strip(), "quantity": _num(m["qty"]),
+                           "price": _num(m["price"]), "value": _num(m["value"]), "cost_basis": None})
 
 
 def _etrade_extras(s: Statement, t: str) -> None:

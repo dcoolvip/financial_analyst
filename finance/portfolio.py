@@ -13,12 +13,12 @@ ASSET_CLASSES = ["Stocks", "Bonds", "Cash"]
 CONCENTRATION_LIMIT = 0.10   # a single company above 10% of investments is worth a mention
 
 _CASH = re.compile(r"\b(CASH|MONEY MARKET|MONEY FUND|DEPOSIT|SWEEP|TREASURY BILL|T-BILL|CORE POSITION)\b", re.I)
-_BOND = re.compile(r"\b(BOND|BND|FIXED INCOME|TREASURY|TREAS|AGGREGATE|MUNI|MUNICIPAL|INCOME FD|TIPS|CORP BD)\b", re.I)
+_BOND = re.compile(r"\b(BOND|BND|BD|FIXED INCOME|TREASURY|TREAS|AGGREGATE|MUNI|MUNICIPAL|MUN|INCOME FD|TIPS|CORP BD)\b", re.I)
 _FUND = re.compile(r"\b(ETF|FUND|FD|INDEX|TRUST|PORTFOLIO|ADMIRAL|INVESTOR SHS|SHARES)\b", re.I)
 CASH_SYMBOLS = {"CASH", "SPAXX", "FDRXX", "FZFXX", "VMFXX", "VMRXX", "SWVXX", "SNVXX", "TTTXX", "MLCASH"}
 BOND_SYMBOLS = {"BND", "AGG", "BNDX", "VGIT", "VGSH", "VGLT", "TLT", "IEF", "SHY", "SCHZ", "SCHR", "VCIT", "VCSH",
                 "MUB", "TIP", "VTIP", "LQD", "HYG", "JNK", "FXNAX", "VBTLX", "VBMFX", "BIV", "BSV", "BLV", "SGOV",
-                "BIL", "GOVT", "IUSB", "FBND"}
+                "BIL", "GOVT", "IUSB", "FBND", "CMF", "PWZ", "VTEB", "SUB", "TFI", "NYF"}
 
 
 def asset_class(symbol: str, description: str = "") -> str:
