@@ -116,7 +116,8 @@ def get_conn(path: str):
 with st.sidebar:
     st.markdown("### Financial Analyst")
     source = st.radio("Data", ["My data", "Demo data"], help="Demo data lives in its own file and never mixes with yours.")
-    st.caption("Everything stays on this computer in `data/`.")
+    st.caption("Your data is stored only on your Mac. This device just displays it." if GATED
+               else f"Your data is stored on this Mac in `{db.DEFAULT_DB.parent}`.")
     if GATED:
         # target=_self: stay in this tab (gate pages, not Streamlit pages)
         st.markdown('<a href="/security" target="_self">🔐 Security &amp; passkeys</a> &nbsp;·&nbsp; '
