@@ -1,6 +1,9 @@
 """Personal finance dashboard.  Run:  streamlit run app.py"""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import os
 from datetime import date
 
 import pandas as pd
@@ -11,6 +14,25 @@ from finance.charts import money
 from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse_file
 
 st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wide")
+
+# Wi-Fi mode (started by "Dashboard (Wi-Fi).command") is reachable from other devices, so it
+# requires the password set by that launcher. Local-only mode needs no password.
+if os.environ.get("FINANCE_LAN") == "1" and not st.session_state.get("authed"):
+    stored = db.ROOT / "data" / "app_password"
+    if not stored.exists():
+        st.error("No password set. Start the dashboard with “Dashboard (Wi-Fi).command” to create one.")
+        st.stop()
+    salt_hex, digest_hex = stored.read_text().split(":")
+    with st.form("login"):
+        st.markdown("### 🔒 Financial Analyst")
+        pw = st.text_input("Password", type="password")
+        if st.form_submit_button("Unlock", type="primary"):
+            attempt = hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
+            if hmac.compare_digest(attempt.hex(), digest_hex):
+                st.session_state["authed"] = True
+                st.rerun()
+            st.error("Wrong password")
+    st.stop()
 st.markdown("""
 <style>
   .block-container { padding-top: 2rem; max-width: 1200px; }
