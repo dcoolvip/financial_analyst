@@ -11,7 +11,8 @@ python3 -m venv .venv
 .venv/bin/streamlit run app.py
 ```
 
-Open http://localhost:8501. Switch to **Demo data** in the sidebar to look around with a fake household.
+Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder: it sets
+things up on first run, opens the browser, and stops when you close its Terminal window. Switch to **Demo data** in the sidebar to look around with a fake household.
 
 ## Getting your data in (Bank of America)
 
