@@ -52,7 +52,10 @@ if os.environ.get("FINANCE_LAN") == "1" and not st.session_state.get("authed"):
     salt_hex, digest_hex = stored.read_text().split(":")
     with st.form("login"):
         st.markdown("### 🔒 Financial Analyst")
-        pw = st.text_input("Password", type="password")
+        # A username field + standard autocomplete hints let iOS/macOS Passwords save and
+        # Face ID-fill this login. The username isn't checked; it only labels the saved entry.
+        st.text_input("Username", value="finance", autocomplete="username")
+        pw = st.text_input("Password", type="password", autocomplete="current-password")
         if st.form_submit_button("Unlock", type="primary"):
             attempt = hashlib.scrypt(pw.encode(), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1)
             if hmac.compare_digest(attempt.hex(), digest_hex):
