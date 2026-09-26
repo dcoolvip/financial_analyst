@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from .. import db
-from . import bofa, chase, statements, wealthfront
+from . import amex, bofa, chase, statements, wealthfront
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 
 # Add new institutions here; each module exposes parse(content) -> ParsedFile
-IMPORTERS = [bofa, chase, wealthfront]
+IMPORTERS = [bofa, chase, wealthfront, amex]
 
 
 def parse_file(content: bytes | str, filename: str = "") -> ParsedFile:
@@ -55,7 +55,7 @@ def suggest_csv_account(conn, parsed: ParsedFile, filename: str, candidates) -> 
         if overlap[best]:
             name = candidates.loc[candidates["id"] == best, "name"].iloc[0]
             return name, f"already has {overlap[best]} of these transactions"
-    digits = last4_from_filename(filename)
+    digits = last4_from_filename(filename) or parsed.account_hint or None
     if digits:
         hit = candidates[candidates["last4"] == digits]
         if len(hit) == 1:

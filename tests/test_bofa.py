@@ -232,3 +232,29 @@ def test_trade_confirmation_pdf_is_explained():
     s = parse_pdf(_pdf(["Trade Confirmation", "Date: 9/22/2026", "Wealthfront Brokerage LLC",
                         "9/22/2026 9/22/2026 Buy 7.77 $1.0000 $7.77 -- $7.77"]))
     assert s.kind == "unknown" and "trade confirmation" in s.notes[0]
+
+
+# --- American Express ---------------------------------------------------------------------
+
+def test_amex_csv():
+    from finance import insights
+    p = parse_file(read("amex_activity.csv"), filename="activity.csv")
+    assert (p.kind, p.institution, p.account_hint) == ("credit_card", "American Express", "1111")   # the paying card
+    assert len(p.transactions) == 5 and p.transactions["fingerprint"].is_unique      # identical Whole Foods kept twice
+    amounts = dict(zip(p.transactions["fingerprint"], p.transactions["amount"]))
+    assert amounts["320000000000000001"] == -19.99                                    # purchase -> money out
+    assert amounts["320000000000000004"] == 500.00 and amounts["320000000000000005"] == 12.00
+    pay = p.transactions.loc[p.transactions["fingerprint"] == "320000000000000004", "description"].iloc[0]
+    assert insights.categorize(pay, 500.0) == "Transfer"                              # paying the card isn't income
+    assert "(John Sample)" in p.transactions.iloc[1]["description"] and "2 cards" in p.note
+
+
+def test_amex_reimport_and_account_matching(conn):
+    from finance.importers import suggest_csv_account
+    other = db.add_account(conn, "Amex Blue", "American Express", "credit_card")
+    gold = db.add_account(conn, "Amex Gold", "American Express", "credit_card")
+    db.update_account_details(conn, gold, last4="1111")
+    parsed = parse_file(read("amex_activity.csv"), filename="activity.csv")
+    assert suggest_csv_account(conn, parsed, "activity.csv", db.accounts(conn))[0] == "Amex Gold"   # by card digits
+    assert apply(conn, parsed, gold, "activity.csv")["transactions_added"] == 5
+    assert apply(conn, parsed, gold, "activity.csv")["transactions_added"] == 0

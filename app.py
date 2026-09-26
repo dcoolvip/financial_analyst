@@ -11,6 +11,7 @@ import streamlit as st
 
 import finance.importers.base
 import finance.importers.bofa
+import finance.importers.amex
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
@@ -26,7 +27,7 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
              insights, forecast, charts, demo, portfolio, editing, checkpoints]
@@ -817,6 +818,8 @@ with tab_add:
             "balance, interest rate and payment for you.\n"
             "- **Any statement PDF** (checking, savings, card, Merrill) adds that month's balance - handy for "
             "history older than the CSV download allows.\n\n"
+            "\n**American Express**\n"
+            "- **Card**: *Statements & Activity* → *Download* → **CSV** (tick *Include all additional details*).\n"
             "\n**Chase**\n"
             "- **Checking / savings / credit card**: open the account → *Download account activity* → pick the "
             "dates → *Spreadsheet (Excel, CSV)*.\n"
@@ -836,7 +839,7 @@ with tab_add:
             try:
                 parsed = parse_file(f.getvalue(), filename=f.name)
             except UnrecognizedFile:
-                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill, Chase and Wealthfront CSVs are supported). "
+                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill, Chase, Wealthfront and American Express CSVs are supported). "
                          "Share the column headers and I'll add support.")
                 continue
             st.markdown(f"**{f.name}** · {KIND_LABELS[parsed.kind]} · {parsed.summary}"
@@ -872,7 +875,7 @@ with tab_add:
                 acct_id = (db.get_or_create_account(conn, new_name, parsed.institution, new_type) if new_name
                            else int(matches.loc[matches["name"] == target, "id"].iloc[0]))
                 r = apply(conn, parsed, acct_id, f.name)
-                db.update_account_details(conn, acct_id, last4=last4_from_filename(f.name))
+                db.update_account_details(conn, acct_id, last4=last4_from_filename(f.name) or parsed.account_hint or None)
                 if r["transactions_added"] and categorize.available():
                     txns = db.transactions(conn)   # include what was just imported
                     run_ai_categorize()
