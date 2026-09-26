@@ -6,7 +6,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from finance import charts, db, demo, forecast, insights
+from finance import categorize, charts, db, demo, forecast, insights
 from finance.charts import money
 from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse_file
 
@@ -55,9 +55,22 @@ def plot(fig):
 
 accts = db.accounts(conn)
 txns = db.transactions(conn)
+rule_map = categorize.rules(conn)
 nw = db.net_worth_series(conn)
 totals = insights.group_totals(accts) if len(accts) else {}
-est_savings = insights.estimate_monthly_savings(txns)
+est_savings = insights.estimate_monthly_savings(txns, rules=rule_map)
+
+
+def run_ai_categorize() -> None:
+    bar = st.progress(0.0, text="Categorizing merchants…")
+    try:
+        n = categorize.auto_categorize(conn, txns, insights.is_transfer,
+                                       progress=lambda f: bar.progress(f, text="Categorizing merchants…"))
+        st.toast(f"Categorized {n} merchants")
+    except Exception as e:  # noqa: BLE001 - surface any auth/network problem plainly
+        st.error(f"AI categorization didn't run: {e}")
+    finally:
+        bar.empty()
 
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
     ["Overview", "Future", "Money in & out", "Accounts", "Add data"])
@@ -98,7 +111,7 @@ with tab_overview:
 
         # plain-language takeaways
         notes = []
-        cf = insights.monthly_cash_flow(txns)
+        cf = insights.monthly_cash_flow(txns, rule_map)
         this_month = pd.Timestamp.today().to_period("M").to_timestamp()
         recent = cf[cf["month"] < this_month].tail(6)
         if len(recent):
@@ -234,7 +247,20 @@ with tab_flow:
     if txns.empty:
         st.info("Import a checking or credit card CSV in **Add data** to see where money goes.")
     else:
-        cf = insights.monthly_cash_flow(txns)
+        todo = categorize.uncategorized_merchants(conn, txns, insights.is_transfer)
+        if len(todo):
+            with st.container(border=True):
+                a1, a2 = st.columns([3, 1], vertical_alignment="center")
+                a1.markdown(f"✨ **{len(todo)} merchants** ({int(todo['n'].sum())} transactions) haven't been "
+                            "categorized by AI yet. Only cleaned merchant names and rough amounts are sent "
+                            "(no account numbers, names or dates).")
+                if a2.button("Categorize with AI", type="primary", width="stretch",
+                             disabled=not categorize.available(),
+                             help=None if categorize.available() else "Needs AppleConnect installed and signed in"):
+                    run_ai_categorize()
+                    st.rerun()
+
+        cf = insights.monthly_cash_flow(txns, rule_map)
         this_month = pd.Timestamp.today().to_period("M").to_timestamp()
         recent = cf[cf["month"] < this_month].tail(6)
         c1, c2, c3, c4 = st.columns(4)
@@ -250,26 +276,39 @@ with tab_flow:
         st.markdown("#### Each month")
         plot(charts.cash_flow_bars(cf.tail(12), mode))
 
-        cats = insights.spending_by_category(txns)
+        cats = insights.spending_by_category(txns, rules=rule_map)
         if len(cats):
             st.markdown("#### Where it goes (monthly average, last 3 months)")
             plot(charts.category_bars(cats, mode))
 
         st.markdown("#### Transactions")
+        st.caption("Change a category and every transaction from that merchant follows, now and in future imports.")
         f1, f2 = st.columns([2, 1])
         q = f1.text_input("Search", placeholder="e.g. amazon, payroll…", label_visibility="collapsed")
         pick = f2.multiselect("Accounts", sorted(txns["account"].unique()), placeholder="All accounts",
                               label_visibility="collapsed")
-        view = insights.enrich(txns)
+        view = insights.enrich(txns, rule_map)
         if q:
             view = view[view["description"].str.contains(q, case=False, regex=False)]
         if pick:
             view = view[view["account"].isin(pick)]
-        st.dataframe(view[["date", "account", "description", "category", "amount"]], hide_index=True,
-                     width="stretch", height=420, column_config={
-                         "date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
-                         "account": "Account", "description": "Description", "category": "Category",
-                         "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
+        view = view[["date", "account", "description", "merchant", "category", "amount"]].reset_index(drop=True)
+        edited = st.data_editor(
+            view, hide_index=True, width="stretch", height=420, key="txn_editor",
+            disabled=["date", "account", "description", "merchant", "amount"],
+            column_order=["date", "account", "description", "category", "amount"],
+            column_config={
+                "date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
+                "account": "Account", "description": "Description",
+                "category": st.column_config.SelectboxColumn(
+                    "Category", options=categorize.CATEGORIES + ["Other income"], required=True),
+                "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
+        changed = edited[edited["category"] != view["category"]]
+        if len(changed):
+            for r in changed.itertuples():
+                categorize.set_rule(conn, r.merchant, r.category, source="user")
+            st.toast(f"Updated {', '.join(changed['merchant'].unique())}")
+            st.rerun()
 
 
 # --- accounts -----------------------------------------------------------------
@@ -380,3 +419,6 @@ with tab_add:
                            + (f" ({r['transactions_skipped']} already there)" if r["transactions_skipped"] else "")
                            + (f", {r['positions']} positions" if r["positions"] else "")
                            + (f", {r['balances']} balance points" if r["balances"] else "") + ".")
+                if r["transactions_added"] and categorize.available():
+                    txns = db.transactions(conn)   # include what was just imported
+                    run_ai_categorize()

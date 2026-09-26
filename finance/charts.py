@@ -32,7 +32,7 @@ def money(v: float, short: bool = True) -> str:
 
 def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False) -> go.Figure:
     fig.update_layout(
-        height=height, margin=dict(l=8, r=8, t=8, b=8),
+        height=height, margin=dict(l=72, r=24, t=16, b=48),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family=FONT, color=c["ink2"], size=13),
         hoverlabel=dict(font=dict(family=FONT, size=13), bgcolor=c["surface"], bordercolor=c["axis"],
@@ -41,9 +41,9 @@ def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False) ->
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(color=c["ink2"])),
         barcornerradius=4, bargap=0.35,
     )
-    fig.update_xaxes(showgrid=False, linecolor=c["axis"], tickfont=dict(color=c["muted"]), zeroline=False)
+    fig.update_xaxes(showgrid=False, linecolor=c["axis"], tickfont=dict(color=c["muted"]), zeroline=False, automargin=True)
     fig.update_yaxes(gridcolor=c["grid"], gridwidth=1, tickfont=dict(color=c["muted"]), zeroline=False,
-                     tickprefix="$", tickformat="~s")
+                     tickprefix="$", tickformat="~s", automargin=True)
     return fig
 
 
@@ -70,7 +70,8 @@ def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False) -> go
         textfont=dict(color=c["ink2"]),
         hovertemplate="<b>%{y}</b><br>$%{x:,.0f}<extra></extra>",
     ))
-    fig = _layout(fig, c, height=max(140, 56 * len(labels) + 30))
+    fig = _layout(fig, c, height=max(160, 56 * len(labels) + 40))
+    fig.update_layout(margin=dict(l=16, r=16, t=8, b=8))
     fig.update_xaxes(visible=False, range=[0, max(values or [1]) * 1.25])
     fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]))
     return fig

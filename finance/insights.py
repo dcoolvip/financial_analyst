@@ -12,6 +12,8 @@ import re
 
 import pandas as pd
 
+from .categorize import merchant_key
+
 GROUPS = {
     "checking": "Cash", "savings": "Cash",
     "brokerage": "Investments", "retirement": "Investments",
@@ -46,29 +48,41 @@ CATEGORY_RULES = [
 _CATEGORY_RES = [(name, re.compile(p, re.IGNORECASE)) for name, p in CATEGORY_RULES]
 
 
-def categorize(description: str, amount: float) -> str:
-    if TRANSFER_RE.search(description):
+def is_transfer(description: str) -> bool:
+    return bool(TRANSFER_RE.search(description))
+
+
+def categorize(description: str, amount: float, rules: dict | None = None) -> str:
+    """Your rules > transfer detection > AI rules > keyword rules > Other."""
+    rule = (rules or {}).get(merchant_key(description))
+    if rule and rule[1] == "user":
+        return rule[0]
+    if is_transfer(description):
         return "Transfer"
+    if rule:
+        return rule[0]
     for name, rx in _CATEGORY_RES:
         if rx.search(description):
             return name
     return "Other income" if amount > 0 else "Other"
 
 
-def enrich(txns: pd.DataFrame) -> pd.DataFrame:
-    """Add category + is_transfer to a transactions frame."""
+def enrich(txns: pd.DataFrame, rules: dict | None = None) -> pd.DataFrame:
+    """Add category, merchant and is_transfer to a transactions frame."""
     if txns.empty:
-        return txns.assign(category=pd.Series(dtype=str), is_transfer=pd.Series(dtype=bool))
+        return txns.assign(category=pd.Series(dtype=str), merchant=pd.Series(dtype=str),
+                           is_transfer=pd.Series(dtype=bool))
     out = txns.copy()
-    auto = [categorize(d, a) for d, a in zip(out["description"], out["amount"])]
+    out["merchant"] = out["description"].map(merchant_key)
+    auto = [categorize(d, a, rules) for d, a in zip(out["description"], out["amount"])]
     out["category"] = out["category"].where(out["category"].notna(), pd.Series(auto, index=out.index))
     out["is_transfer"] = out["category"] == "Transfer"
     return out
 
 
-def monthly_cash_flow(txns: pd.DataFrame) -> pd.DataFrame:
+def monthly_cash_flow(txns: pd.DataFrame, rules: dict | None = None) -> pd.DataFrame:
     """Per month: money in, money out (positive number), and what was left over."""
-    t = enrich(txns)
+    t = enrich(txns, rules)
     t = t[~t["is_transfer"]]
     if t.empty:
         return pd.DataFrame(columns=["month", "money_in", "money_out", "saved"])
@@ -82,9 +96,9 @@ def monthly_cash_flow(txns: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def estimate_monthly_savings(txns: pd.DataFrame, months: int = 6) -> float | None:
+def estimate_monthly_savings(txns: pd.DataFrame, months: int = 6, rules: dict | None = None) -> float | None:
     """Average leftover per month over the last N *complete* months, or None if no data."""
-    cf = monthly_cash_flow(txns)
+    cf = monthly_cash_flow(txns, rules)
     if cf.empty:
         return None
     this_month = pd.Timestamp.today().to_period("M").to_timestamp()
@@ -92,9 +106,9 @@ def estimate_monthly_savings(txns: pd.DataFrame, months: int = 6) -> float | Non
     return float(complete["saved"].mean()) if len(complete) else None
 
 
-def spending_by_category(txns: pd.DataFrame, months: int = 3) -> pd.DataFrame:
+def spending_by_category(txns: pd.DataFrame, months: int = 3, rules: dict | None = None) -> pd.DataFrame:
     """Average monthly spend per category over the last N complete months."""
-    t = enrich(txns)
+    t = enrich(txns, rules)
     this_month = pd.Timestamp.today().to_period("M").to_timestamp()
     start = this_month - pd.DateOffset(months=months)
     t = t[(~t["is_transfer"]) & (t["amount"] < 0) & (t["date"] >= start) & (t["date"] < this_month)]
