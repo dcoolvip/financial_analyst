@@ -11,6 +11,7 @@ import streamlit as st
 
 import finance.importers.base
 import finance.importers.bofa
+import finance.importers.statements
 from finance import categorize, charts, db, demo, forecast, importers, insights, paths
 
 
@@ -23,7 +24,8 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, importers,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.statements,
+             importers,
              insights, forecast, charts, demo]
     seen = _loaded_mtimes()
     first_run = not seen
@@ -36,7 +38,8 @@ def _reload_changed_modules() -> None:
 
 _reload_changed_modules()
 from finance.charts import money  # noqa: E402 - after the reload so it binds the fresh module
-from finance.importers import KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, parse_file  # noqa: E402
+from finance.importers import (KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, apply_statement,  # noqa: E402
+                               parse_file, statements)
 
 st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wide")
 
@@ -492,18 +495,124 @@ with tab_accounts:
 
 # --- add data -----------------------------------------------------------------
 
+NEW_ACCOUNT = "➕ New account"
+STATEMENT_LABELS = {"loan": "Loan statement", "deposit": "Bank statement", "credit_card": "Card statement",
+                    "investment": "Investment statement", "unknown": "Statement (not recognized)"}
+SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex"}
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
+def _read_pdf(data: bytes) -> statements.Statement:
+    try:
+        return statements.parse_pdf(data)
+    except Exception as e:  # noqa: BLE001 - damaged/protected PDFs become a row you fill in by hand
+        return statements.Statement(kind="unknown", notes=[f"Couldn't read this PDF: {e}"])
+
+
+def _suggest_account(s: statements.Statement) -> str:
+    if s.last4:
+        hit = accts[accts["last4"] == s.last4]
+        if len(hit) == 1:
+            return hit["name"].iloc[0]
+    same_type = accts[accts["type"] == s.account_type] if s.account_type else accts.iloc[0:0]
+    return same_type["name"].iloc[0] if len(same_type) == 1 else NEW_ACCOUNT
+
+
+def render_statement_review(pdf_files) -> None:
+    """One editable row per PDF: what was read, and which account it goes to. Nothing is saved until
+    'Save statements' - so a misread value can be fixed first."""
+    st.markdown("#### Statements")
+    st.caption("Read on this Mac - statements are never sent anywhere. Check the values, fix anything that "
+               "looks off, then save.")
+    parsed = [(f, _read_pdf(f.getvalue())) for f in pdf_files]
+    rows = []
+    for f, s in parsed:
+        inst = SHORT_INST.get(s.institution, s.institution)
+        acct_type = s.account_type or "other_asset"
+        rows.append({
+            "save": s.kind != "unknown" or s.balance is not None,
+            "file": f.name, "what": STATEMENT_LABELS[s.kind],
+            "date": s.as_of, "balance": s.balance,
+            "rate": round(s.rate * 100, 3) if s.rate is not None else None,
+            "payment": s.payment,
+            "account": _suggest_account(s),
+            "new_name": f"{inst} {TYPE_LABELS.get(acct_type, 'Account')}".strip(),
+            "type": acct_type,
+        })
+    table = pd.DataFrame(rows)
+    edited = st.data_editor(
+        table, hide_index=True, width="stretch", key=f"stmts_{hash(tuple(f.file_id for f in pdf_files))}",
+        disabled=["file", "what"],
+        column_order=(["save", "what", "date", "balance", "rate", "payment", "account"] if PHONE else
+                      ["save", "file", "what", "date", "balance", "rate", "payment", "account", "new_name", "type"]),
+        column_config={
+            "save": st.column_config.CheckboxColumn("Save", width="small"),
+            "file": "File", "what": "Type of statement",
+            "date": st.column_config.DateColumn("Statement date", format="MMM D, YYYY"),
+            "balance": st.column_config.NumberColumn("Balance / owed", format="$%,.2f",
+                                                     help="Loans: principal owed. Cards: new balance."),
+            "rate": st.column_config.NumberColumn("Rate %", format="%.3f"),
+            "payment": st.column_config.NumberColumn("Loan payment (P&I)", format="$%,.2f",
+                                                     help="Principal + interest only, escrow excluded"),
+            "account": st.column_config.SelectboxColumn("Account", options=list(accts["name"]) + [NEW_ACCOUNT],
+                                                        required=True),
+            "new_name": st.column_config.TextColumn("New account name", help="Used when Account is ➕ New account"),
+            "type": st.column_config.SelectboxColumn("New account type", options=list(TYPE_LABELS)),
+        })
+    for (f, s) in parsed:
+        if s.notes:
+            st.caption(f"**{f.name}**: " + " · ".join(s.notes))
+    with st.expander("Show the text read from each PDF"):
+        for f, s in parsed:
+            st.markdown(f"**{f.name}**")
+            st.code(s.text[:4000] or "(no text)", language=None)
+
+    if st.button("Save statements", type="primary"):
+        chosen = edited[edited["save"]]
+        problems = [r.file for r in chosen.itertuples() if pd.isna(r.date) or pd.isna(r.balance)
+                    or (r.account == NEW_ACCOUNT and not str(r.new_name).strip())]
+        if problems:
+            st.error("Fill in the statement date, balance (and a name for new accounts) for: " + ", ".join(problems))
+            return
+        ids = {}
+        for r in chosen.itertuples():
+            if r.account == NEW_ACCOUNT:
+                ids[r.Index] = db.get_or_create_account(conn, str(r.new_name).strip(),
+                                                        parsed[r.Index][1].institution or "Other", r.type)
+            else:
+                ids[r.Index] = int(accts.loc[accts["name"] == r.account, "id"].iloc[0])
+        newest = chosen.assign(acct=pd.Series(ids)).sort_values("date").groupby("acct").tail(1).index
+        for r in chosen.itertuples():
+            orig = parsed[r.Index][1]
+            s = statements.Statement(
+                kind=orig.kind, institution=orig.institution, last4=orig.last4,
+                as_of=pd.Timestamp(r.date).date(), balance=float(r.balance),
+                rate=float(r.rate) / 100 if pd.notna(r.rate) else None,
+                payment=float(r.payment) if pd.notna(r.payment) else None)
+            apply_statement(conn, s, ids[r.Index], r.file, latest=r.Index in newest)
+        st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
+        st.rerun()
+
+
 with tab_add:
     st.markdown("#### Import a file")
     with st.expander("How to download from Bank of America"):
         st.markdown(
             "- **Checking / savings**: open the account → *Download* → pick a date range → "
-            "*Microsoft Excel format*. Saves a `.csv`.\n"
+            "*Microsoft Excel format*. Saves a `.csv` with every transaction.\n"
             "- **Credit card**: open the card → *Download transactions* → pick a statement → `.csv`.\n"
             "- **Merrill**: *Portfolio* → *Holdings* → the download icon → `.csv`.\n"
-            "- **Mortgage / auto loan / HELOC**: no download. Type the balance into **Accounts**.\n\n"
-            "Overlapping date ranges are fine. Duplicates are skipped automatically.")
-    files = st.file_uploader("Drop CSV files here", type=["csv"], accept_multiple_files=True)
-    for f in files or []:
+            "- **Mortgage / auto loan / HELOC**: download the monthly **statement PDF** - it fills in the "
+            "balance, interest rate and payment for you.\n"
+            "- **Any statement PDF** (checking, savings, card, Merrill) adds that month's balance - handy for "
+            "history older than the CSV download allows.\n\n"
+            "Overlapping files are fine. Duplicates are skipped automatically.")
+    files = st.file_uploader("Drop CSV or statement PDF files here", type=["csv", "pdf"], accept_multiple_files=True)
+    pdf_files = [f for f in files or [] if f.name.lower().endswith(".pdf")]
+    files = [f for f in files or [] if not f.name.lower().endswith(".pdf")]
+    if pdf_files:
+        render_statement_review(pdf_files)
+    for f in files:
         with st.container(border=True):
             try:
                 parsed = parse_file(f.getvalue())

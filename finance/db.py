@@ -84,6 +84,11 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    # Additive migrations for databases created by earlier versions
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
+    if "last4" not in cols:
+        conn.execute("ALTER TABLE accounts ADD COLUMN last4 TEXT")   # from statements, to auto-match later
+        conn.commit()
     return conn
 
 
@@ -114,6 +119,15 @@ def update_account_terms(conn, account_id: int, rate: float | None, payment: flo
     conn.commit()
 
 
+def update_account_details(conn, account_id: int, **fields) -> None:
+    """Set only the given fields (rate, payment, last4); None values are skipped, never cleared."""
+    fields = {k: v for k, v in fields.items() if k in ("rate", "payment", "last4") and v is not None}
+    if fields:
+        conn.execute(f"UPDATE accounts SET {', '.join(f'{k} = ?' for k in fields)} WHERE id = ?",
+                     (*fields.values(), account_id))
+        conn.commit()
+
+
 def delete_account(conn, account_id: int) -> None:
     conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
     conn.commit()
@@ -122,7 +136,7 @@ def delete_account(conn, account_id: int) -> None:
 def accounts(conn) -> pd.DataFrame:
     df = pd.read_sql_query(
         """
-        SELECT a.id, a.name, a.institution, a.type, a.notes, a.rate, a.payment, a.active,
+        SELECT a.id, a.name, a.institution, a.type, a.notes, a.rate, a.payment, a.last4, a.active,
                b.balance, b.date AS as_of
         FROM accounts a
         LEFT JOIN balances b ON b.account_id = a.id

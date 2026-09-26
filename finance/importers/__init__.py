@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .. import db
-from . import bofa
+from . import bofa, statements
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 
 # Add new institutions here; each module exposes parse(content) -> ParsedFile
@@ -35,4 +35,14 @@ def apply(conn, parsed: ParsedFile, account_id: int, filename: str) -> dict:
     }
 
 
-__all__ = ["KIND_ACCOUNT_TYPES", "ParsedFile", "UnrecognizedFile", "apply", "parse_file"]
+def apply_statement(conn, s: "statements.Statement", account_id: int, filename: str, latest: bool = True) -> None:
+    """Save what a PDF statement says about an account. `latest`: this is the account's newest
+    statement in the batch, so its rate/payment become the account's current loan terms."""
+    if s.as_of and s.balance is not None:
+        db.upsert_balance(conn, account_id, s.as_of, abs(s.balance), filename)
+    db.update_account_details(conn, account_id, last4=s.last4,
+                              rate=s.rate if latest and s.kind in ("loan", "credit_card") else None,
+                              payment=s.payment if latest and s.kind == "loan" else None)
+
+
+__all__ = ["apply_statement", "statements", "KIND_ACCOUNT_TYPES", "ParsedFile", "UnrecognizedFile", "apply", "parse_file"]
