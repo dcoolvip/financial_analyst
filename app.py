@@ -41,7 +41,7 @@ def _reload_changed_modules() -> None:
 _reload_changed_modules()
 from finance.charts import money  # noqa: E402 - after the reload so it binds the fresh module
 from finance.importers import (KIND_ACCOUNT_TYPES, UnrecognizedFile, apply, apply_statement,  # noqa: E402
-                               parse_file, statements)
+                               last4_from_filename, parse_file, statements, suggest_csv_account)
 
 st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wide")
 
@@ -743,7 +743,15 @@ with tab_add:
             matches = accts[accts["type"].isin(allowed)]
             options = list(matches["name"]) + ["➕ New account…"]
             k = f.file_id
-            target = st.selectbox("Import into", options, key=f"t{k}")
+            guess, why = suggest_csv_account(conn, parsed, f.name, matches)
+            if guess is None and matches.empty:
+                guess = options[-1]
+            target = st.selectbox("Import into", options, key=f"t{k}_{guess}",   # follows the current best match
+                                  index=options.index(guess) if guess else None, placeholder="Choose the account…")
+            if why and target == guess:
+                st.caption(f"Matched automatically: {why}.")
+            elif guess is None and not matches.empty:
+                st.caption("Couldn't tell which account this file is from - please choose.")
             new_name = new_type = None
             if target == options[-1]:
                 n1, n2 = st.columns(2)
@@ -751,10 +759,12 @@ with tab_add:
                 new_type = n2.selectbox("Type", allowed, format_func=TYPE_LABELS.get, key=f"y{k}")
             if parsed.kind == "credit_card":
                 st.caption("Card files don't include a balance. Add the current balance in **Accounts** afterwards.")
-            if st.button("Import", key=f"b{k}", type="primary", disabled=target == options[-1] and not new_name):
+            if st.button("Import", key=f"b{k}", type="primary",
+                         disabled=target is None or (target == options[-1] and not new_name)):
                 acct_id = (db.get_or_create_account(conn, new_name, parsed.institution, new_type) if new_name
                            else int(matches.loc[matches["name"] == target, "id"].iloc[0]))
                 r = apply(conn, parsed, acct_id, f.name)
+                db.update_account_details(conn, acct_id, last4=last4_from_filename(f.name))
                 if r["transactions_added"] and categorize.available():
                     txns = db.transactions(conn)   # include what was just imported
                     run_ai_categorize()

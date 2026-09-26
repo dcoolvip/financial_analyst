@@ -149,3 +149,38 @@ def test_chase_checking_card_payment_is_a_transfer():
     assert insights.is_transfer("Payment Thank You-Mobile")
     assert insights.is_transfer("PAYMENT - THANK YOU")                       # BofA wording still works
     assert not insights.is_transfer("WHOLE FOODS #10234 SAN JOSE CA")
+
+
+# --- which account does a CSV belong to? -----------------------------------------------
+
+def _two_checking(conn):
+    a = db.add_account(conn, "BofA Everyday", "Bank of America", "checking")
+    b = db.add_account(conn, "BofA Bills", "Bank of America", "checking")
+    return a, b
+
+
+def test_csv_matched_by_overlapping_transactions(conn):
+    from finance.importers import suggest_csv_account
+    a, b = _two_checking(conn)
+    parsed = parse_file(read("bofa_checking.csv"))
+    apply(conn, parsed, b, "august.csv")                                   # an earlier download went to "Bills"
+    name, why = suggest_csv_account(conn, parsed, "stmt.csv", db.accounts(conn))
+    assert name == "BofA Bills" and "5 of these transactions" in why
+
+
+def test_csv_ambiguous_is_left_to_the_user(conn):
+    from finance.importers import suggest_csv_account
+    _two_checking(conn)
+    name, _ = suggest_csv_account(conn, parse_file(read("bofa_checking.csv")), "stmt.csv", db.accounts(conn))
+    assert name is None                                                     # two candidates, no evidence
+
+
+def test_chase_csv_matched_by_digits_in_file_name(conn):
+    from finance.importers import last4_from_filename, suggest_csv_account
+    assert last4_from_filename("Chase4321_Activity_20260926.CSV") == "4321"
+    x = db.add_account(conn, "Chase Freedom", "Chase", "credit_card")
+    y = db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")
+    db.update_account_details(conn, y, last4="4321")
+    name, why = suggest_csv_account(conn, parse_file(read("chase_card.csv")), "Chase4321_Activity_20260926.CSV",
+                                    db.accounts(conn))
+    assert name == "Chase Sapphire" and "4321" in why

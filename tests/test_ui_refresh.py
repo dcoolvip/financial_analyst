@@ -207,3 +207,22 @@ def test_statement_never_defaults_into_another_institutions_account(env):
     accts = db.accounts(conn)
     assert len(accts) == 2                                              # E*TRADE got its own account
     assert accts.loc[accts["name"] == "Merrill Brokerage", "balance"].iloc[0] == 1_000_000   # Merrill untouched
+
+
+def test_csv_preselects_the_right_account_or_asks(env):
+    from finance.importers import apply, parse_file
+    conn, uploads = env
+    db.add_account(conn, "BofA Everyday", "Bank of America", "checking")
+    bills = db.add_account(conn, "BofA Bills", "Bank of America", "checking")
+    data = (FIXTURES / "bofa_checking.csv").read_bytes()
+    at = app()
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("stmt.csv", data)]
+    at.run()
+    box = [s for s in at.selectbox if s.label == "Import into"][0]
+    assert box.value is None                                                # can't tell yet: must choose
+    assert [b for b in at.button if b.label == "Import"][0].disabled
+    apply(conn, parse_file(data), bills, "earlier.csv")                     # now "Bills" has these transactions
+    at.run()
+    assert [s for s in at.selectbox if s.label == "Import into"][0].value == "BofA Bills"
+    assert any("Matched automatically" in c.value for c in at.caption)

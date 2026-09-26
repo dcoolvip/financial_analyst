@@ -290,6 +290,20 @@ def insert_transactions(conn, account_id: int, txns: pd.DataFrame, source: str) 
     return conn.total_changes - before
 
 
+def transaction_overlap(conn, account_ids: list[int], fingerprints: list[str]) -> dict[int, int]:
+    """For each account, how many of these (file-level) fingerprints it already holds."""
+    out = {}
+    for aid in account_ids:
+        keys = [f"{aid}|{fp}" for fp in fingerprints]
+        n = 0
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            n += conn.execute(f"SELECT COUNT(*) FROM transactions WHERE fingerprint IN ({','.join('?' * len(chunk))})",
+                              chunk).fetchone()[0]
+        out[aid] = n
+    return out
+
+
 def transactions(conn, account_ids: list[int] | None = None) -> pd.DataFrame:
     q = """SELECT t.id, t.date, a.name AS account, t.description, t.amount, t.category
            FROM transactions t JOIN accounts a ON a.id = t.account_id"""
