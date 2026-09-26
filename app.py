@@ -246,8 +246,8 @@ with tab_overview:
         missing = accts[accts["balance"].isna()]
         if len(missing):
             notes.append(f"💳 **{len(missing)} account(s) have no balance yet:** " + ", ".join(missing["name"])
-                         + ". Card downloads don't include one - type it into the **Accounts** table "
-                         "(what you owe as a negative number), or import a statement PDF.")
+                         + ". Card downloads don't include one - type the balance from the bank's app into the "
+                         "**Accounts** table, or import a statement PDF.")
         stale = insights.stale_accounts(accts[accts["balance"].notna()])
         if len(stale):
             notes.append(f"⏰ {len(stale)} account(s) haven't been updated in 45+ days: "
@@ -522,14 +522,16 @@ with tab_accounts:
                 "Type": st.column_config.SelectboxColumn("Type ✏️", options=list(TYPE_LABELS.values()), required=True),
                 "shown_balance": st.column_config.NumberColumn(
                     "Balance ✏️", format="$%,.0f" if PHONE else "$%,.2f",
-                    help="Debts are negative (a card you've overpaid is positive). A new value is saved as of today."),
+                    help="Cards and loans: what you owe, as your bank shows it (a card in credit: negative). "
+                         "A new value is saved as of today."),
                 "status": st.column_config.TextColumn(""),
                 "rate_pct": st.column_config.NumberColumn("Rate % ✏️", format="%.3f", min_value=0, max_value=40,
                                                           help="Interest rate, for loans and cards"),
                 "payment": st.column_config.NumberColumn("Payment ✏️", format="$%,.2f", min_value=0,
                                                          help="Monthly principal + interest, for loans"),
                 "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
-        st.caption("Double-click a ✏️ cell to change it. Debts are negative; a new balance is saved as of today."
+        st.caption("Double-click a ✏️ cell to change it. For cards and loans, Balance is what you owe - enter it "
+                   "as your bank shows it. A new balance is saved as of today."
                    + ("" if PHONE else " Rate and payment apply to loans and cards."))
 
         edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)
@@ -561,7 +563,8 @@ with tab_accounts:
                 acct = st.selectbox("Account", list(names))
                 when = st.date_input("As of", value=date.today())
                 amt = st.number_input("Balance ($)", step=100.0,
-                                      help="For cards and loans, enter what you owe as a negative number")
+                                      help="For cards and loans, enter what you owe, as your bank shows it. "
+                                           "A card in credit: a negative number.")
                 if st.form_submit_button("Save balance", type="primary"):
                     liab = bool(accts.loc[accts["name"] == acct, "is_liability"].iloc[0])
                     db.upsert_balance(conn, names[acct], when, editing.to_stored(amt, liab))

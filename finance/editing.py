@@ -9,12 +9,13 @@ def _num(v):
 
 
 def to_display(balance, is_liability: bool):
-    """Stored: debts as amount owed (positive). Shown: debts negative, a card in credit positive."""
-    return None if balance is None or pd.isna(balance) else (-balance if is_liability else balance)
+    """Balances are shown the way banks show them: assets as what you have, cards and loans as what you
+    owe (positive). A card in credit is negative. Same as stored, so a number copied from a bank app is right."""
+    return None if balance is None or pd.isna(balance) else balance
 
 
 def to_stored(shown: float, is_liability: bool) -> float:
-    return -shown if is_liability else shown
+    return shown
 
 
 def balance_edits(before: pd.DataFrame, after: pd.DataFrame) -> dict[int, float]:
