@@ -16,7 +16,7 @@ HOST=${1:-dcool.home}
 IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1 || true)
 [[ -n "$IP" ]] || { echo "Not on Wi-Fi; can't determine this Mac's address." >&2; exit 1; }
 SUBNET=${IP%.*}.0
-DATA=$(.venv/bin/python -c "from finance.paths import data_dir; print(data_dir())")
+source tools/env.sh || exit 1   # sets PY and DATA
 D="$DATA/tls"
 mkdir -p "$D" && chmod 700 "$D"
 umask 077

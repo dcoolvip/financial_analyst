@@ -2,23 +2,15 @@
 # Like Dashboard.command, but reachable from phones/tablets on the same Wi-Fi.
 # Password-protected. Close this window to stop it.
 cd "${0:A:h}"
-if [[ ! -x .venv/bin/streamlit ]]; then
-  echo "First run: setting up (one time)..."
-  python3 -m venv .venv || exit 1
-fi
-# Install/refresh packages whenever requirements.txt has changed since the last launch
-if [[ ! -f .venv/.req-stamp || requirements.txt -nt .venv/.req-stamp ]]; then
-  .venv/bin/pip install -q -r requirements.txt && touch .venv/.req-stamp
-fi
+source tools/env.sh || exit 1   # sets PY (venv outside iCloud) and DATA
 
-DATA=$(.venv/bin/python -c "from finance.paths import data_dir; print(data_dir())")
 if [[ ! -f "$DATA/app_password" || "$1" == "--reset-password" ]]; then
   mkdir -p "$DATA" && chmod 700 "$DATA"
   echo "Choose a password for Wi-Fi access (used on your other devices):"
   read -s "pw?Password: "; echo
   read -s "pw2?Again: "; echo
   [[ "$pw" == "$pw2" && -n "$pw" ]] || { echo "Passwords didn't match."; exit 1; }
-  PW="$pw" PWFILE="$DATA/app_password" .venv/bin/python -c '
+  PW="$pw" PWFILE="$DATA/app_password" "$PY" -c '
 import hashlib, os
 salt = os.urandom(16)
 d = hashlib.scrypt(os.environ["PW"].encode(), salt=salt, n=2**14, r=8, p=1)
@@ -58,11 +50,10 @@ echo ""
 trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
 # Both run under the reloader (like Flask's): code/cert/package changes are picked up automatically and
 # a crash is retried - no need to close this window after updates. Streamlit also hot-reloads app code itself.
-PY=.venv/bin/python
-FINANCE_GATE=1 $PY -m finance.reloader --watch .streamlit/config.toml -- \
-  $PY -m streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
-$PY -m finance.reloader --watch finance/gate.py finance/auth_store.py finance/paths.py requirements.txt \
+FINANCE_GATE=1 "$PY" -m finance.reloader --watch .streamlit/config.toml -- \
+  "$PY" -m streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
+"$PY" -m finance.reloader --watch finance/gate.py finance/auth_store.py finance/paths.py requirements.txt \
     "$DATA/tls/server.pem" "$DATA/tls/server.key" -- \
-  $PY -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
+  "$PY" -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
 sleep 3 && open "https://$HOST:8501"
 wait

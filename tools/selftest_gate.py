@@ -1,7 +1,7 @@
 """End-to-end check of Wi-Fi mode over real HTTPS: gate + Streamlit on spare ports, driven by a client
 that verifies the certificate like a browser would. Uses a throwaway password; your real one is untouched.
 
-    .venv/bin/python tools/selftest_gate.py
+    ~/.venvs/financial-analyst/bin/python tools/selftest_gate.py
 """
 import asyncio
 import hashlib
@@ -29,7 +29,7 @@ def start() -> list[subprocess.Popen]:
     salt = os.urandom(16)
     Path(auth, "app_password").write_text(salt.hex() + ":" + hashlib.scrypt(PW.encode(), salt=salt, n=2**14, r=8, p=1).hex())
     env = {**os.environ, "FINANCE_GATE": "1", "FINANCE_AUTH_DIR": auth}
-    py = str(ROOT / ".venv/bin/python")
+    py = sys.executable
     return [
         subprocess.Popen([py, "-m", "streamlit", "run", "app.py", "--server.port", str(UP),
                           "--server.address", "127.0.0.1", "--server.headless", "true"], cwd=ROOT, env=env,

@@ -6,9 +6,8 @@ It's built with Python, SQLite and Streamlit. Your data never leaves this machin
 ## Run it
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/streamlit run app.py
+source tools/env.sh      # creates ~/.venvs/financial-analyst and installs requirements
+"$PY" -m streamlit run app.py
 ```
 
 Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder: it sets
@@ -37,7 +36,7 @@ Both launchers run under `finance/reloader.py` (like Flask's reloader): code, ce
 `requirements.txt` changes are picked up automatically and crashes are retried, so there's no need to
 reopen the window after updates. Only edits to the `.command` files themselves need a relaunch.
 
-Check the whole chain end to end: `.venv/bin/python tools/selftest_gate.py`
+Check the whole chain end to end: `~/.venvs/financial-analyst/bin/python tools/selftest_gate.py`
 
 The regular `Dashboard.command` stays on `http://localhost`, and that traffic never leaves the Mac.
 
@@ -76,5 +75,5 @@ so the rest of the app doesn't change.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest -q
+~/.venvs/financial-analyst/bin/python -m pytest -q
 ```
