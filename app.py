@@ -282,33 +282,55 @@ with tab_flow:
             plot(charts.category_bars(cats, mode))
 
         st.markdown("#### Transactions")
-        st.caption("Change a category and every transaction from that merchant follows, now and in future imports.")
-        f1, f2 = st.columns([2, 1])
-        q = f1.text_input("Search", placeholder="e.g. amazon, payroll…", label_visibility="collapsed")
-        pick = f2.multiselect("Accounts", sorted(txns["account"].unique()), placeholder="All accounts",
-                              label_visibility="collapsed")
         view = insights.enrich(txns, rule_map)
+        cat_options = sorted(set(categorize.CATEGORIES) | set(view["category"].dropna()))
+        periods = {"All time": None, "This month": 0, "Last 3 months": 3, "Last 12 months": 12}
+
+        f1, f2, f3, f4 = st.columns([2, 1.3, 1.3, 1])
+        q = f1.text_input("Search", placeholder="Search descriptions, e.g. amazon", label_visibility="collapsed")
+        pick_cats = f2.multiselect("Category", cat_options, placeholder="All categories",
+                                   label_visibility="collapsed")
+        pick = f3.multiselect("Accounts", sorted(txns["account"].unique()), placeholder="All accounts",
+                              label_visibility="collapsed")
+        period = f4.selectbox("Period", list(periods), label_visibility="collapsed")
+
         if q:
             view = view[view["description"].str.contains(q, case=False, regex=False)]
+        if pick_cats:
+            view = view[view["category"].isin(pick_cats)]
         if pick:
             view = view[view["account"].isin(pick)]
+        if (months := periods[period]) is not None:
+            start = pd.Timestamp.today().to_period("M").to_timestamp() - pd.DateOffset(months=months)
+            view = view[view["date"] >= start]
         view = view[["date", "account", "description", "merchant", "category", "amount"]].reset_index(drop=True)
+
+        spent, got = -view.loc[view["amount"] < 0, "amount"].sum(), view.loc[view["amount"] > 0, "amount"].sum()
+        st.caption(f"**{len(view)}** transactions · in {money(got)} · out {money(spent)}  —  "
+                   "✏️ **Double-click a category to change it.** Every transaction from that merchant "
+                   "follows, including future imports.")
+
+        # Keyed by the filters so pending edits never get applied to a differently-filtered table
+        editor_key = f"txn_editor_{hash((q, tuple(pick_cats), tuple(pick), period))}"
         edited = st.data_editor(
-            view, hide_index=True, width="stretch", height=420, key="txn_editor",
+            view, hide_index=True, width="stretch", height=460, key=editor_key,
             disabled=["date", "account", "description", "merchant", "amount"],
             column_order=["date", "account", "description", "category", "amount"],
             column_config={
                 "date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
                 "account": "Account", "description": "Description",
-                "category": st.column_config.SelectboxColumn(
-                    "Category", options=categorize.CATEGORIES + ["Other income"], required=True),
+                "category": st.column_config.SelectboxColumn("Category ✏️", options=cat_options, required=True),
                 "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
         if len(changed):
-            for r in changed.itertuples():
+            for r in changed.drop_duplicates("merchant", keep="last").itertuples():
                 categorize.set_rule(conn, r.merchant, r.category, source="user")
-            st.toast(f"Updated {', '.join(changed['merchant'].unique())}")
+            n = int(view["merchant"].isin(changed["merchant"]).sum())
+            st.session_state["flash"] = f"Updated {n} transaction(s) from {', '.join(changed['merchant'].unique())}"
+            del st.session_state[editor_key]
             st.rerun()
+        if msg := st.session_state.pop("flash", None):
+            st.toast(msg, icon="✅")
 
 
 # --- accounts -----------------------------------------------------------------
