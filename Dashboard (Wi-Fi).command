@@ -4,7 +4,11 @@
 cd "${0:A:h}"
 if [[ ! -x .venv/bin/streamlit ]]; then
   echo "First run: setting up (one time)..."
-  python3 -m venv .venv && .venv/bin/pip install -q -r requirements.txt || exit 1
+  python3 -m venv .venv || exit 1
+fi
+# Install/refresh packages whenever requirements.txt has changed since the last launch
+if [[ ! -f .venv/.req-stamp || requirements.txt -nt .venv/.req-stamp ]]; then
+  .venv/bin/pip install -q -r requirements.txt && touch .venv/.req-stamp
 fi
 
 if [[ ! -f data/app_password || "$1" == "--reset-password" ]]; then
@@ -51,7 +55,13 @@ echo ""
 # Streamlit: this Mac only (127.0.0.1). The gate: HTTPS on the Wi-Fi address only, signs people in,
 # and is the only way in from the network.
 trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
-FINANCE_GATE=1 .venv/bin/streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
-.venv/bin/python -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
+# Both run under the reloader (like Flask's): code/cert/package changes are picked up automatically and
+# a crash is retried - no need to close this window after updates. Streamlit also hot-reloads app code itself.
+PY=.venv/bin/python
+FINANCE_GATE=1 $PY -m finance.reloader --watch .streamlit/config.toml -- \
+  $PY -m streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
+$PY -m finance.reloader --watch finance/gate.py finance/auth_store.py requirements.txt \
+    data/tls/server.pem data/tls/server.key -- \
+  $PY -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
 sleep 3 && open "https://$HOST:8501"
 wait

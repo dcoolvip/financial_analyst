@@ -34,6 +34,10 @@ AirDrop it → Settings → General → VPN & Device Management → Install → 
 Certificate Trust Settings → turn it on. The CA is name-constrained to `dcool.home` and the home subnet,
 so it can't vouch for any other site.
 
+Both launchers run under `finance/reloader.py` (like Flask's reloader): code, certificate and
+`requirements.txt` changes are picked up automatically and crashes are retried, so there's no need to
+reopen the window after updates. Only edits to the `.command` files themselves need a relaunch.
+
 Check the whole chain end to end: `.venv/bin/python tools/selftest_gate.py`
 
 The regular `Dashboard.command` stays on `http://localhost`, and that traffic never leaves the Mac.
