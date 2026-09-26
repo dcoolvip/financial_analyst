@@ -1,0 +1,18 @@
+# Personal financial data - never commit
+data/
+*.db
+*.db-journal
+*.csv
+!tests/fixtures/*.csv
+*.qfx
+*.ofx
+*.xlsx
+.env
+.streamlit/secrets.toml
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store

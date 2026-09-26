@@ -1,0 +1,13 @@
+Description,,Summary Amt.
+Beginning balance as of 08/01/2026,,"2,500.00"
+Total credits,,"4,200.00"
+Total debits,,"-1,845.50"
+Ending balance as of 08/31/2026,,"4,854.50"
+
+Date,Description,Amount,Running Bal.
+08/01/2026,Beginning balance as of 08/01/2026,,"2,500.00"
+08/01/2026,"PAYROLL ACME CORP DES:DIRECT DEP","4,200.00","6,700.00"
+08/03/2026,"ZELLE PAYMENT TO JOHN DOE","-50.00","6,650.00"
+08/03/2026,"ZELLE PAYMENT TO JOHN DOE","-50.00","6,600.00"
+08/15/2026,"BANK OF AMERICA MORTGAGE DES:PAYMENT","-1,650.00","4,950.00"
+08/28/2026,"CHECKCARD 0828 WHOLE FOODS","-95.50","4,854.50"
