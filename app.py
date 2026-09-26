@@ -11,6 +11,7 @@ import streamlit as st
 
 import finance.importers.base
 import finance.importers.bofa
+import finance.importers.chase
 import finance.importers.statements
 from finance import categorize, charts, db, demo, editing, forecast, importers, insights, paths, portfolio
 
@@ -24,7 +25,8 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.statements,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.chase,
+             finance.importers.statements,
              importers,
              insights, forecast, charts, demo, portfolio, editing]
     seen = _loaded_mtimes()
@@ -699,8 +701,9 @@ def render_statement_review(pdf_files) -> None:
 
 with tab_add:
     st.markdown("#### Import a file")
-    with st.expander("How to download from Bank of America"):
+    with st.expander("How to download your files"):
         st.markdown(
+            "**Bank of America / Merrill**\n"
             "- **Checking / savings**: open the account → *Download* → pick a date range → "
             "*Microsoft Excel format*. Saves a `.csv` with every transaction.\n"
             "- **Credit card**: open the card → *Download transactions* → pick a statement → `.csv`.\n"
@@ -709,6 +712,10 @@ with tab_add:
             "balance, interest rate and payment for you.\n"
             "- **Any statement PDF** (checking, savings, card, Merrill) adds that month's balance - handy for "
             "history older than the CSV download allows.\n\n"
+            "\n**Chase**\n"
+            "- **Checking / savings / credit card**: open the account → *Download account activity* → pick the "
+            "dates → *Spreadsheet (Excel, CSV)*.\n"
+            "- **Mortgage / auto loan**: download the monthly **statement PDF**.\n\n"
             "Overlapping files are fine. Duplicates are skipped automatically.")
     files = st.file_uploader("Drop CSV or statement PDF files here", type=["csv", "pdf"], accept_multiple_files=True,
                              key=f"uploader_{st.session_state.get('uploads_done', 0)}")
@@ -724,7 +731,7 @@ with tab_add:
             try:
                 parsed = parse_file(f.getvalue())
             except UnrecognizedFile:
-                st.error(f"**{f.name}**: this doesn't look like a Bank of America or Merrill export. "
+                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill and Chase CSVs are supported). "
                          "Share the column headers and I'll add support.")
                 continue
             st.markdown(f"**{f.name}** · {KIND_LABELS[parsed.kind]} · {parsed.summary}"

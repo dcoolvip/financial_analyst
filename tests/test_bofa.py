@@ -107,3 +107,45 @@ def test_loan_without_terms_is_carried_back(conn):
     db.upsert_balance(conn, car, "2025-03-31", 20_000)
     nw = db.net_worth_series(conn)
     assert (nw.loc[nw["date"] <= "2025-03-31", "liabilities"] == 20_000).all()
+
+
+# --- Chase --------------------------------------------------------------------------
+
+def test_chase_checking():
+    p = parse_file(read("chase_checking.csv"))
+    assert (p.kind, p.institution) == ("deposit", "Chase")
+    assert len(p.transactions) == 5 and p.transactions["fingerprint"].is_unique   # two identical Zelles kept
+    bal = dict(zip(p.balances["date"], p.balances["balance"]))
+    assert bal[date(2026, 9, 25)] == pytest.approx(5310.55)                      # newest row = day's close
+    assert bal[date(2026, 9, 20)] == pytest.approx(2694.75)
+    assert p.as_of == date(2026, 9, 25)
+
+
+def test_chase_card():
+    p = parse_file(read("chase_card.csv"))
+    assert (p.kind, p.institution) == ("credit_card", "Chase")
+    assert p.transactions["amount"].sum() == pytest.approx(1500 - 6.45 * 2 - 42.99 + 12.00)
+    assert p.transactions["fingerprint"].is_unique
+
+
+def test_chase_reimport_is_idempotent(conn):
+    acct = db.add_account(conn, "Chase Checking", "Chase", "checking")
+    parsed = parse_file(read("chase_checking.csv"))
+    assert apply(conn, parsed, acct, "a.csv")["transactions_added"] == 5
+    assert apply(conn, parsed, acct, "a.csv")["transactions_added"] == 0
+
+
+def test_chase_card_payment_is_a_transfer_not_spending():
+    from finance import insights
+    t = parse_file(read("chase_card.csv")).transactions.assign(category=None)
+    t["date"] = pd.to_datetime(t["date"])
+    cf = insights.monthly_cash_flow(t)
+    assert cf["money_in"].iloc[0] == pytest.approx(12.00)                        # the return, not the payment
+
+
+def test_chase_checking_card_payment_is_a_transfer():
+    from finance import insights
+    assert insights.is_transfer("Payment to Chase card ending in 1234 09/22")
+    assert insights.is_transfer("Payment Thank You-Mobile")
+    assert insights.is_transfer("PAYMENT - THANK YOU")                       # BofA wording still works
+    assert not insights.is_transfer("WHOLE FOODS #10234 SAN JOSE CA")

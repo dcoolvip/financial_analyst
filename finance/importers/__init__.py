@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from .. import db
-from . import bofa, statements
+from . import bofa, chase, statements
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 
 # Add new institutions here; each module exposes parse(content) -> ParsedFile
-IMPORTERS = [bofa]
+IMPORTERS = [bofa, chase]
 
 
 def parse_file(content: bytes | str) -> ParsedFile:
