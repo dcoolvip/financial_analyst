@@ -80,8 +80,8 @@ def test_net_worth(conn):
     assert last["net_worth"] == pytest.approx(4854.50 + 51000.33 - 300_000)
 
 
-def test_net_worth_has_no_fake_jumps_when_accounts_start_late(conn):
-    """A loan entered today, or a brokerage whose history starts later, must not read as $0 before."""
+def test_net_worth_keeps_history_and_backfills_loans(conn):
+    """A brokerage whose history starts later is marked as added (not a gain); loans are extended back."""
     chk = db.add_account(conn, "Checking", "Bank of America", "checking")
     brk = db.add_account(conn, "Brokerage", "E*TRADE", "brokerage")
     mtg = db.add_account(conn, "Mortgage", "Bank of America", "mortgage")
@@ -92,11 +92,25 @@ def test_net_worth_has_no_fake_jumps_when_accounts_start_late(conn):
         db.upsert_balance(conn, brk, m, 500_000)                 # history starts in March
     db.upsert_balance(conn, mtg, "2025-04-30", 400_000)          # only a current balance
     nw = db.net_worth_series(conn)
-    assert nw["date"].iloc[0] == pd.Timestamp("2025-03-31")      # starts when the brokerage has data
-    mar = nw.iloc[0]
-    # mortgage one month earlier, by reverse amortization: (B + payment) / (1 + r/12)
-    assert mar["liabilities"] == pytest.approx((400_000 + 3000) / 1.005)
-    assert mar["assets"] == pytest.approx(510_000)
+    assert nw["date"].iloc[0] == pd.Timestamp("2025-01-31")      # all history kept
+    mar = nw[nw["date"] == "2025-03-31"].iloc[0]
+    assert mar["added"] == "Brokerage"                           # the step is explained on the chart
+    assert mar["liabilities"] == pytest.approx((400_000 + 3000) / 1.005)   # reverse amortization
+    jan = nw.iloc[0]
+    assert jan["liabilities"] > mar["liabilities"]               # loan was bigger earlier, never $0
+
+
+def test_big_account_added_today_does_not_wipe_history_or_count_as_gain(conn):
+    """Regression: a $3M account with only today's balance collapsed the Overview history to one point."""
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    for i, m in enumerate(pd.date_range(end=pd.Timestamp.today(), periods=14, freq="ME")):
+        db.upsert_balance(conn, chk, m.date(), 10_000 + 1000 * i)
+    new = db.add_account(conn, "DS eTrade Brokerage", "E*TRADE", "brokerage")
+    db.upsert_balance(conn, new, date.today(), 3_000_000)
+    assert len(db.net_worth_series(conn)) > 12
+    change, base, left_out = db.net_worth_change(conn, 12)
+    assert change == pytest.approx(12_000, abs=1_001)            # checking's growth only, not +$3M
+    assert left_out == ["DS eTrade Brokerage"]
 
 
 def test_loan_without_terms_is_carried_back(conn):

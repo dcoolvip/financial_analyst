@@ -207,10 +207,8 @@ tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
 # --- overview -----------------------------------------------------------------
 
 def change_since(months: int) -> float | None:
-    if len(nw) < 2:
-        return None
-    then = nw[nw["date"] <= nw["date"].iloc[-1] - pd.DateOffset(months=months)]
-    return None if then.empty else float(nw["net_worth"].iloc[-1] - then["net_worth"].iloc[-1])
+    """Like-for-like: accounts added since then don't count as a gain."""
+    return db.net_worth_change(conn, months)[0]
 
 
 with tab_overview:
@@ -247,9 +245,11 @@ with tab_overview:
             if spend > 0:
                 notes.append(f"🛟 Your cash would cover **{totals['Cash'] / spend:.1f} months** of spending "
                              f"(3–6 is the usual comfort zone).")
-        if (yr := change_since(12)) is not None and (base := float(nw["net_worth"].iloc[-1]) - yr):
+        yr, base, left_out = db.net_worth_change(conn, 12)
+        if yr is not None and base:
             notes.append(f"📈 Net worth is {'up' if yr >= 0 else 'down'} **{money(abs(yr))}** over the past year "
-                         f"({yr / abs(base):+.0%}).")
+                         f"({yr / abs(base):+.0%})"
+                         + (f", not counting {', '.join(left_out)} (no history that far back yet)." if left_out else "."))
         if own:
             notes.append(f"🏦 Debt is **{owe / own:.0%}** of what you own.")
         missing = accts[accts["balance"].isna()]

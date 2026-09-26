@@ -229,19 +229,14 @@ def balance_history(conn) -> pd.DataFrame:
     return df
 
 
-def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
-    """Month-end assets / liabilities / net worth.
-
-    Each account carries its last known balance forward until a newer one arrives, so accounts
-    updated on different days still line up. Missing history is never read as $0 (which would
-    show fake jumps when an account is first added):
-      * Loans are extended backwards before their first known balance - by reverse amortization
-        when rate and payment are known, otherwise by carrying the first balance back.
-      * The series starts once every significant asset account (>1% of current assets) has data.
-    """
+def _net_worth_wide(conn, freq: str = "ME"):
+    """Per-account month-end balances (dates x account ids). Each account carries its last balance forward.
+    Before an ASSET account's first known balance it's unknown (NaN) - never a made-up $0 or a copy.
+    Loans are extended backwards (reverse amortization with rate and payment, else carried back), since a
+    loan existed before you first typed its balance and its balance moves slowly and predictably."""
     hist = balance_history(conn)
     if hist.empty:
-        return pd.DataFrame(columns=["date", "assets", "liabilities", "net_worth"])
+        return None, [], [], {}
     wide = hist.pivot_table(index="date", columns="account_id", values="balance", aggfunc="last").sort_index()
     end = max(wide.index.max(), pd.Timestamp(date.today()))
     grid = pd.date_range(wide.index.min(), end, freq=freq)
@@ -250,6 +245,7 @@ def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
     liab_ids = set(hist.loc[hist["is_liability"], "account_id"])
     liab_cols = [c for c in wide.columns if c in liab_ids]
     asset_cols = [c for c in wide.columns if c not in liab_ids]
+    names = dict(zip(hist["account_id"], hist["name"]))
 
     terms = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT id, rate, payment FROM accounts")}
     for col in liab_cols:
@@ -265,21 +261,52 @@ def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
                     bal = (bal + payment) / (1 + rate / 12)
             wide.at[d, col] = bal
             later = d
+    return wide, asset_cols, liab_cols, names
 
-    if asset_cols:
-        latest = wide[asset_cols].ffill().iloc[-1].fillna(0)
-        significant = [c for c in asset_cols if latest[c] > 0.01 * max(latest.sum(), 1)]
-        starts = [wide[c].first_valid_index() for c in significant if wide[c].first_valid_index() is not None]
-        if starts:
-            wide = wide.loc[max(starts):]
-    wide = wide.fillna(0.0)
+
+def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
+    """Month-end assets / liabilities / net worth, over all the history there is.
+    `added` names significant accounts whose history starts at that point, so the chart can explain the step
+    instead of it looking like a gain."""
+    wide, asset_cols, liab_cols, names = _net_worth_wide(conn, freq)
+    if wide is None:
+        return pd.DataFrame(columns=["date", "assets", "liabilities", "net_worth", "added"])
+    filled = wide.fillna(0.0)
     out = pd.DataFrame({
         "date": wide.index,
-        "assets": wide[asset_cols].sum(axis=1).values,
-        "liabilities": wide[liab_cols].sum(axis=1).values,
+        "assets": filled[asset_cols].sum(axis=1).values,
+        "liabilities": filled[liab_cols].sum(axis=1).values,
     })
     out["net_worth"] = out["assets"] - out["liabilities"]
+    added = {d: [] for d in wide.index}
+    for c in asset_cols:
+        first = wide[c].first_valid_index()
+        if first is not None and first != wide.index[0]:
+            if wide.at[first, c] > 0.05 * max(filled.loc[first, asset_cols].sum(), 1):
+                added[first].append(names.get(c, str(c)))
+    out["added"] = [", ".join(added[d]) for d in wide.index]
     return out
+
+
+def net_worth_change(conn, months: int):
+    """Like-for-like change in net worth over the last `months`: only accounts that had a value both then
+    and now count, so adding an account never looks like a gain. Returns (change, base, left_out_names)
+    or (None, None, []) if there's no history that far back."""
+    wide, asset_cols, liab_cols, names = _net_worth_wide(conn)
+    if wide is None or len(wide) < 2:
+        return None, None, []
+    now = wide.index[-1]
+    earlier = wide.index[wide.index <= now - pd.DateOffset(months=months)]
+    if not len(earlier):
+        return None, None, []
+    then = earlier[-1]
+    both = [c for c in wide.columns if pd.notna(wide.at[then, c]) and pd.notna(wide.at[now, c])]
+    sign = {c: (-1 if c in liab_cols else 1) for c in wide.columns}
+    change = float(sum(sign[c] * (wide.at[now, c] - wide.at[then, c]) for c in both))
+    base = float(sum(sign[c] * wide.at[then, c] for c in both))
+    left_out = [names.get(c, str(c)) for c in wide.columns
+                if c not in both and pd.notna(wide.at[now, c]) and wide.at[now, c] != 0]
+    return change, base, left_out
 
 
 # --- transactions & holdings --------------------------------------------------

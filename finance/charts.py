@@ -63,6 +63,13 @@ def net_worth_history(nw: pd.DataFrame, mode: str, compact: bool = False) -> go.
         hovertemplate="<b>%{x|%b %Y}</b><br>Net worth $%{y:,.0f}"
                       "<br>Own $%{customdata[0]:,.0f} · Owe $%{customdata[1]:,.0f}<extra></extra>",
     ))
+    if "added" in nw and (steps := nw[nw["added"].astype(bool)]).shape[0]:
+        # an account's history starts here: mark it so the step isn't mistaken for a gain
+        fig.add_trace(go.Scatter(
+            x=steps["date"], y=steps["net_worth"], mode="markers", showlegend=False,
+            marker=dict(symbol="diamond", size=9, color=c["ink2"], line=dict(width=2, color=c["surface"])),
+            customdata=steps[["added"]].values,
+            hovertemplate="<b>%{x|%b %Y}</b><br>Added: %{customdata[0]}<extra></extra>"))
     fig.update_layout(hovermode="x")
     fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
     return _layout(fig, c, compact=compact)
