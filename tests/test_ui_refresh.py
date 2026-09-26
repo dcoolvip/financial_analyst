@@ -326,9 +326,10 @@ def test_balance_cell_edit_saves_as_today():
     from finance.editing import balance_edits, to_display, to_stored
     assert to_display(1200.0, True) == 1200 and to_display(500.0, False) == 500 and to_display(None, True) is None
     assert to_stored(1200.0, True) == 1200 and to_stored(-50.0, True) == -50                 # as banks show it
-    before = pd.DataFrame({"id": [1, 2], "shown_balance": [None, 500.0], "is_liability": [True, False]})
+    before = pd.DataFrame({"id": [1, 2], "shown_balance": [None, 500.0], "is_liability": [True, False],
+                           "new_balance": [None, None]}).astype({"new_balance": "float64"})
     after = before.copy()
-    after.loc[0, "shown_balance"] = 1234.56
+    after.loc[0, "new_balance"] = 1234.56
     assert balance_edits(before, after) == {1: pytest.approx(1234.56)}
 
 
@@ -345,6 +346,11 @@ def test_balances_colored_and_hand_edits_recorded(env):
     accounts = next(d for d in at.dataframe if "shown_balance" in d.value.columns)
     styles = str(accounts.proto)
     assert "d03b3b" in styles and "006300" in styles                   # debts red, what you have green
+    # Streamlit only draws Styler colors on NON-editable columns - the colored Balance column must be read-only
+    import json
+    config = json.loads(accounts.proto.columns)
+    assert config["shown_balance"].get("disabled") is True, "Balance must be read-only or its colors are not drawn"
+    assert not config["new_balance"].get("disabled")                    # editing happens in New balance
     log = db.recent_edits(conn)
     assert log.iloc[0]["account"] == "Chase Sapphire" and log.iloc[0]["new"] == "6337.08"
     assert any(e.label == "🕘 Recent changes" for e in at.expander)

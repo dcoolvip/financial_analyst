@@ -517,10 +517,12 @@ with tab_accounts:
             rate_pct=(accts["rate"] * 100).round(3), payment=accts["payment"],
             shown_balance=[editing.to_display(b, l) for b, l in zip(accts["balance"], accts["is_liability"])],
             status=["⚠️ needs a balance" if pd.isna(b) else "" for b in accts["balance"]],
+            new_balance=None,
         ).sort_values(["is_liability", "Group", "name"]).reset_index(drop=True)
         has_debt = bool(table["is_liability"].any())
-        cols = (["name", "shown_balance", "Updated"] if PHONE else
-                ["name", "Group", "Type", "shown_balance"] + (["rate_pct", "payment"] if has_debt else [])
+        table["new_balance"] = table["new_balance"].astype("float64")
+        cols = (["name", "shown_balance", "new_balance", "Updated"] if PHONE else
+                ["name", "Group", "Type", "shown_balance", "new_balance"] + (["rate_pct", "payment"] if has_debt else [])
                 + ["Updated"] + (["status"] if table["status"].any() else []))
         ver = st.session_state.get("acct_table_ver", 0)
         good, bad = ("#0ca30c", "#e66767") if mode == "dark" else ("#006300", "#d03b3b")
@@ -531,22 +533,25 @@ with tab_accounts:
             return [f"color: {color}" if (c == "shown_balance" and color) else "" for c in row.index]
         edited = st.data_editor(
             table.style.apply(_balance_color, axis=1), hide_index=True, width="stretch", column_order=cols, key=f"acct_table_{ver}",
-            disabled=["Group", "Updated", "status"],
+            disabled=["Group", "shown_balance", "Updated", "status"],   # read-only columns can show colors
             column_config={
                 "name": st.column_config.TextColumn("Account ✏️", required=True),
                 "Type": st.column_config.SelectboxColumn("Type ✏️", options=list(TYPE_LABELS.values()), required=True),
                 "shown_balance": st.column_config.NumberColumn(
-                    "Balance ✏️", format="$%,.0f" if PHONE else "$%,.2f",
-                    help="Cards and loans: what you owe, as your bank shows it (a card in credit: negative). "
-                         "A new value is saved as of today."),
+                    "Balance", format="$%,.0f" if PHONE else "$%,.2f",
+                    help="Green: money you have. Red: what you owe on cards and loans."),
+                "new_balance": st.column_config.NumberColumn(
+                    "New balance ✏️", format="$%,.2f",
+                    help="Type today's balance as your bank shows it (cards and loans: what you owe; "
+                         "a card in credit: negative). Saved as of today."),
                 "status": st.column_config.TextColumn(""),
                 "rate_pct": st.column_config.NumberColumn("Rate % ✏️", format="%.3f", min_value=0, max_value=40,
                                                           help="Interest rate, for loans and cards"),
                 "payment": st.column_config.NumberColumn("Payment ✏️", format="$%,.2f", min_value=0,
                                                          help="Monthly principal + interest, for loans"),
                 "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
-        st.caption("Double-click a ✏️ cell to change it. For cards and loans, Balance is what you owe - enter it "
-                   "as your bank shows it. A new balance is saved as of today."
+        st.caption("Double-click a ✏️ cell to change it. To update a balance, type today's number from your bank "
+                   "into **New balance** (cards and loans: what you owe)."
                    + ("" if PHONE else " Rate and payment apply to loans and cards."))
 
         edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)

@@ -19,11 +19,12 @@ def to_stored(shown: float, is_liability: bool) -> float:
 
 
 def balance_edits(before: pd.DataFrame, after: pd.DataFrame) -> dict[int, float]:
-    """{account_id: value to store} for rows whose Balance cell was edited."""
+    """{account_id: value to store} for rows where something was typed into the (blank) New balance column.
+    The colored Balance column itself is read-only: Streamlit only draws colors on non-editable columns."""
     out = {}
     for b, a in zip(before.itertuples(), after.itertuples()):
-        if _num(a.shown_balance) is not None and _num(a.shown_balance) != _num(b.shown_balance):
-            out[int(b.id)] = to_stored(_num(a.shown_balance), bool(b.is_liability))
+        if _num(a.new_balance) is not None:
+            out[int(b.id)] = to_stored(_num(a.new_balance), bool(b.is_liability))
     return out
 
 
