@@ -240,6 +240,16 @@ with tab_overview:
         if len(holdings):
             pf = portfolio.summarize(holdings)
             st.markdown("#### Investments")
+            grants = db.latest_grants(conn)
+            items = [("Invested", money(pf["total"]))]
+            if pf["gain"] is not None:
+                items.append(("Unrealized gain", ("+" if pf["gain"] >= 0 else "") + money(pf["gain"])))
+            if len(grants):
+                items.append(("Unvested RSUs", money(grants["value"].sum())))
+            kpi_row(items)
+            if len(grants):
+                st.caption(f"Unvested RSUs ({len(grants)} grants, pre-tax estimate) aren't counted in net worth "
+                           "until they vest.")
             for sym, share in pf["concentrated"]:
                 st.warning(f"**{sym}** is **{share:.0%}** of your investments. A single company that large "
                            "adds risk; many planners suggest keeping any one stock under 10%.", icon="⚠️")
@@ -250,10 +260,11 @@ with tab_overview:
             with top_col:
                 st.caption("Top holdings")
                 top = pf["top"].assign(label=lambda d: d["symbol"] + " · " + d["description"].fillna("").str[:28])
-                st.dataframe(top[["label", "value", "share"] if PHONE else ["label", "accounts", "value", "share"]],
+                st.dataframe(top[["label", "value", "share"] if PHONE else ["label", "accounts", "value", "gain", "share"]],
                              hide_index=True, width="stretch", column_config={
                                  "label": "Holding", "accounts": "Account",
                                  "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
+                                 "gain": st.column_config.NumberColumn("Unrealized gain", format="$%,.0f"),
                                  "share": st.column_config.ProgressColumn("Share", format="percent",
                                                                           min_value=0, max_value=1)})
 
@@ -573,13 +584,15 @@ def render_statement_review(pdf_files) -> None:
             "account": _suggest_account(s),
             "new_name": f"{inst} {TYPE_LABELS.get(acct_type, 'Account')}".strip(),
             "type": acct_type,
+            "extras": s.extras,
         })
     table = pd.DataFrame(rows)
     edited = st.data_editor(
         table, hide_index=True, width="stretch", key=f"stmts_{hash(tuple(f.file_id for f in pdf_files))}",
-        disabled=["file", "what"],
-        column_order=(["save", "what", "date", "balance", "rate", "payment", "account"] if PHONE else
-                      ["save", "file", "what", "date", "balance", "rate", "payment", "account", "new_name", "type"]),
+        disabled=["file", "what", "extras"],
+        column_order=(["save", "what", "date", "balance", "account", "extras"] if PHONE else
+                      ["save", "file", "what", "date", "balance", "rate", "payment", "account", "new_name", "type",
+                       "extras"]),
         column_config={
             "save": st.column_config.CheckboxColumn("Save", width="small"),
             "file": "File", "what": "Type of statement",
@@ -593,6 +606,7 @@ def render_statement_review(pdf_files) -> None:
                                                         required=True),
             "new_name": st.column_config.TextColumn("New account name", help="Used when Account is ➕ New account"),
             "type": st.column_config.SelectboxColumn("New account type", options=list(TYPE_LABELS)),
+            "extras": st.column_config.TextColumn("Also found", help="Saved along with the balance"),
         })
     for (f, s) in parsed:
         if s.notes:
@@ -623,7 +637,8 @@ def render_statement_review(pdf_files) -> None:
                 kind=orig.kind, institution=orig.institution, last4=orig.last4,
                 as_of=pd.Timestamp(r.date).date(), balance=float(r.balance),
                 rate=float(r.rate) / 100 if pd.notna(r.rate) else None,
-                payment=float(r.payment) if pd.notna(r.payment) else None)
+                payment=float(r.payment) if pd.notna(r.payment) else None,
+                history=orig.history, holdings=orig.holdings, grants=orig.grants)
             apply_statement(conn, s, ids[r.Index], r.file, latest=r.Index in newest)
         st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
         st.rerun()

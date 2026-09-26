@@ -40,6 +40,13 @@ def apply_statement(conn, s: "statements.Statement", account_id: int, filename: 
     statement in the batch, so its rate/payment become the account's current loan terms."""
     if s.as_of and s.balance is not None:
         db.upsert_balance(conn, account_id, s.as_of, abs(s.balance), filename)
+    for d, value, exact in s.history:
+        (db.upsert_balance if exact else db.add_balance_if_missing)(conn, account_id, d, abs(value), filename)
+    if latest and s.as_of and s.holdings:
+        import pandas as pd
+        db.replace_holdings(conn, account_id, s.as_of, pd.DataFrame(s.holdings))
+    if latest and s.as_of:
+        db.replace_grants(conn, account_id, s.as_of, s.grants)
     db.update_account_details(conn, account_id, last4=s.last4,
                               rate=s.rate if latest and s.kind in ("loan", "credit_card") else None,
                               payment=s.payment if latest and s.kind == "loan" else None)

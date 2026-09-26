@@ -38,17 +38,25 @@ def is_single_company(symbol: str, description: str = "") -> bool:
 def summarize(holdings: pd.DataFrame) -> dict:
     """{'total', 'by_class': {class: value}, 'top': DataFrame, 'concentrated': [(symbol, share)]}"""
     if holdings.empty:
-        return {"total": 0.0, "by_class": {}, "top": holdings, "concentrated": []}
+        return {"total": 0.0, "by_class": {}, "top": holdings, "concentrated": [], "cost_basis": None, "gain": None}
     h = holdings.copy()
     h["class"] = [asset_class(s, d) for s, d in zip(h["symbol"], h["description"])]
     total = float(h["value"].sum())
     by_class = {c: float(h.loc[h["class"] == c, "value"].sum()) for c in ASSET_CLASSES}
     # the same stock held in two accounts counts once
+    if "cost_basis" not in h:
+        h["cost_basis"] = None
     per_symbol = (h.groupby(["symbol"], as_index=False)
                    .agg(description=("description", "first"), value=("value", "sum"),
+                        cost_basis=("cost_basis", lambda c: c.sum(min_count=1)),
                         accounts=("account", lambda s: ", ".join(sorted(set(s)))), asset_class=("class", "first"))
                    .sort_values("value", ascending=False))
+    per_symbol["gain"] = per_symbol["value"] - per_symbol["cost_basis"]
+    known = h["cost_basis"].notna()
+    cost = float(h.loc[known, "cost_basis"].sum()) if known.any() else None
+    gain = float(h.loc[known, "value"].sum()) - cost if cost is not None else None
     per_symbol["share"] = per_symbol["value"] / total if total else 0.0
     concentrated = [(r.symbol, r.share) for r in per_symbol.itertuples()
                     if r.share > CONCENTRATION_LIMIT and is_single_company(r.symbol, r.description)]
-    return {"total": total, "by_class": by_class, "top": per_symbol.head(10), "concentrated": concentrated}
+    return {"total": total, "by_class": by_class, "top": per_symbol.head(10), "concentrated": concentrated,
+            "cost_basis": cost, "gain": gain}

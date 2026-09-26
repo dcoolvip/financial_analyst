@@ -63,6 +63,17 @@ CREATE TABLE IF NOT EXISTS holdings (
     value       REAL NOT NULL,
     PRIMARY KEY (account_id, as_of, symbol)
 );
+CREATE TABLE IF NOT EXISTS equity_grants (
+    account_id  INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    as_of       TEXT NOT NULL,
+    grant_id    TEXT NOT NULL,
+    grant_date  TEXT,
+    type        TEXT,                   -- RSU / PSU
+    symbol      TEXT NOT NULL,
+    quantity    REAL,
+    value       REAL NOT NULL,          -- estimated pre-tax value; NOT counted in net worth until it vests
+    PRIMARY KEY (account_id, as_of, grant_id)
+);
 CREATE TABLE IF NOT EXISTS imports (
     id           INTEGER PRIMARY KEY,
     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -88,6 +99,9 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(accounts)")}
     if "last4" not in cols:
         conn.execute("ALTER TABLE accounts ADD COLUMN last4 TEXT")   # from statements, to auto-match later
+        conn.commit()
+    if "cost_basis" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
+        conn.execute("ALTER TABLE holdings ADD COLUMN cost_basis REAL")
         conn.commit()
     return conn
 
@@ -158,6 +172,13 @@ def accounts(conn) -> pd.DataFrame:
 
 # --- balances -----------------------------------------------------------------
 
+def add_balance_if_missing(conn, account_id: int, on: date | str, balance: float, source: str) -> None:
+    """For approximate history (e.g. read off a statement chart): never overwrites an existing value."""
+    conn.execute("INSERT OR IGNORE INTO balances (account_id, date, balance, source) VALUES (?, ?, ?, ?)",
+                 (account_id, _iso(on), float(balance), source))
+    conn.commit()
+
+
 def upsert_balance(conn, account_id: int, on: date | str, balance: float, source: str = "manual") -> None:
     conn.execute(
         """INSERT INTO balances (account_id, date, balance, source) VALUES (?, ?, ?, ?)
@@ -182,8 +203,12 @@ def balance_history(conn) -> pd.DataFrame:
 def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
     """Month-end assets / liabilities / net worth.
 
-    Each account carries its last known balance forward until a newer one
-    arrives, so accounts updated on different days still line up.
+    Each account carries its last known balance forward until a newer one arrives, so accounts
+    updated on different days still line up. Missing history is never read as $0 (which would
+    show fake jumps when an account is first added):
+      * Loans are extended backwards before their first known balance - by reverse amortization
+        when rate and payment are known, otherwise by carrying the first balance back.
+      * The series starts once every significant asset account (>1% of current assets) has data.
     """
     hist = balance_history(conn)
     if hist.empty:
@@ -192,12 +217,35 @@ def net_worth_series(conn, freq: str = "ME") -> pd.DataFrame:
     end = max(wide.index.max(), pd.Timestamp(date.today()))
     grid = pd.date_range(wide.index.min(), end, freq=freq)
     grid = grid.union([end])  # include "today" so the last point is current
-    wide = wide.reindex(wide.index.union(grid)).ffill().reindex(grid).fillna(0.0)
+    wide = wide.reindex(wide.index.union(grid)).ffill().reindex(grid)
     liab_ids = set(hist.loc[hist["is_liability"], "account_id"])
     liab_cols = [c for c in wide.columns if c in liab_ids]
     asset_cols = [c for c in wide.columns if c not in liab_ids]
+
+    terms = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT id, rate, payment FROM accounts")}
+    for col in liab_cols:
+        first = wide[col].first_valid_index()
+        if first is None or first == wide.index[0]:
+            continue
+        rate, payment = terms.get(col, (None, None))
+        bal, later = float(wide.at[first, col]), first
+        for d in reversed(wide.index[wide.index < first]):
+            if rate and payment:   # undo one month of amortization per month back
+                months = max(1, round((later - d).days / 30.44))
+                for _ in range(months):
+                    bal = (bal + payment) / (1 + rate / 12)
+            wide.at[d, col] = bal
+            later = d
+
+    if asset_cols:
+        latest = wide[asset_cols].ffill().iloc[-1].fillna(0)
+        significant = [c for c in asset_cols if latest[c] > 0.01 * max(latest.sum(), 1)]
+        starts = [wide[c].first_valid_index() for c in significant if wide[c].first_valid_index() is not None]
+        if starts:
+            wide = wide.loc[max(starts):]
+    wide = wide.fillna(0.0)
     out = pd.DataFrame({
-        "date": grid,
+        "date": wide.index,
         "assets": wide[asset_cols].sum(axis=1).values,
         "liabilities": wide[liab_cols].sum(axis=1).values,
     })
@@ -235,19 +283,39 @@ def transactions(conn, account_ids: list[int] | None = None) -> pd.DataFrame:
 def replace_holdings(conn, account_id: int, as_of: date | str, holdings: pd.DataFrame) -> None:
     as_of = _iso(as_of)
     conn.execute("DELETE FROM holdings WHERE account_id = ? AND as_of = ?", (account_id, as_of))
+    has_cost = "cost_basis" in holdings.columns
     conn.executemany(
-        "INSERT INTO holdings VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO holdings (account_id, as_of, symbol, description, quantity, price, value, cost_basis) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            (account_id, as_of, r.symbol, r.description, r.quantity, r.price, float(r.value))
+            (account_id, as_of, r.symbol, r.description, r.quantity, r.price, float(r.value),
+             (None if pd.isna(r.cost_basis) else float(r.cost_basis)) if has_cost else None)
             for r in holdings.itertuples()
         ],
     )
     conn.commit()
 
 
+def replace_grants(conn, account_id: int, as_of: date | str, grants: list[dict]) -> None:
+    as_of = _iso(as_of)
+    conn.execute("DELETE FROM equity_grants WHERE account_id = ? AND as_of = ?", (account_id, as_of))
+    conn.executemany("INSERT INTO equity_grants VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     [(account_id, as_of, str(g["grant_id"]), _iso(g["grant_date"]) if g.get("grant_date") else None,
+                       g.get("type"), g["symbol"], g.get("quantity"), float(g["value"])) for g in grants])
+    conn.commit()
+
+
+def latest_grants(conn) -> pd.DataFrame:
+    return pd.read_sql_query(
+        """SELECT a.name AS account, g.as_of, g.grant_id, g.grant_date, g.type, g.symbol, g.quantity, g.value
+           FROM equity_grants g JOIN accounts a ON a.id = g.account_id
+           WHERE g.as_of = (SELECT MAX(as_of) FROM equity_grants WHERE account_id = g.account_id)
+           ORDER BY g.grant_date""", conn)
+
+
 def latest_holdings(conn) -> pd.DataFrame:
     return pd.read_sql_query(
-        """SELECT a.name AS account, h.as_of, h.symbol, h.description, h.quantity, h.price, h.value
+        """SELECT a.name AS account, h.as_of, h.symbol, h.description, h.quantity, h.price, h.value, h.cost_basis
            FROM holdings h JOIN accounts a ON a.id = h.account_id
            WHERE h.as_of = (SELECT MAX(as_of) FROM holdings WHERE account_id = h.account_id)
            ORDER BY h.value DESC""",

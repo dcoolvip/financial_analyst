@@ -1,5 +1,6 @@
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from finance import db
@@ -77,3 +78,32 @@ def test_net_worth(conn):
     assert last["assets"] == pytest.approx(4854.50 + 51000.33)
     assert last["liabilities"] == pytest.approx(300_000)
     assert last["net_worth"] == pytest.approx(4854.50 + 51000.33 - 300_000)
+
+
+def test_net_worth_has_no_fake_jumps_when_accounts_start_late(conn):
+    """A loan entered today, or a brokerage whose history starts later, must not read as $0 before."""
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    brk = db.add_account(conn, "Brokerage", "E*TRADE", "brokerage")
+    mtg = db.add_account(conn, "Mortgage", "Bank of America", "mortgage")
+    db.update_account_terms(conn, mtg, 0.06, 3000.0)
+    for m in ("2025-01-31", "2025-02-28", "2025-03-31", "2025-04-30"):
+        db.upsert_balance(conn, chk, m, 10_000)
+    for m in ("2025-03-31", "2025-04-30"):
+        db.upsert_balance(conn, brk, m, 500_000)                 # history starts in March
+    db.upsert_balance(conn, mtg, "2025-04-30", 400_000)          # only a current balance
+    nw = db.net_worth_series(conn)
+    assert nw["date"].iloc[0] == pd.Timestamp("2025-03-31")      # starts when the brokerage has data
+    mar = nw.iloc[0]
+    # mortgage one month earlier, by reverse amortization: (B + payment) / (1 + r/12)
+    assert mar["liabilities"] == pytest.approx((400_000 + 3000) / 1.005)
+    assert mar["assets"] == pytest.approx(510_000)
+
+
+def test_loan_without_terms_is_carried_back(conn):
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    car = db.add_account(conn, "Car loan", "Bank of America", "auto_loan")
+    for m in ("2025-01-31", "2025-02-28", "2025-03-31"):
+        db.upsert_balance(conn, chk, m, 10_000)
+    db.upsert_balance(conn, car, "2025-03-31", 20_000)
+    nw = db.net_worth_series(conn)
+    assert (nw.loc[nw["date"] <= "2025-03-31", "liabilities"] == 20_000).all()

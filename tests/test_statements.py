@@ -164,3 +164,100 @@ def test_card_statement_keeps_card_revolving(tmp_path):
     apply_statement(conn, parse_text(CARD), card, "card.pdf")
     loans, revolving = forecast.build_loans(db.accounts(conn))
     assert not loans and revolving == pytest.approx(1_840.22)   # APR saved, but no payment -> not amortized
+
+
+# --- broker layouts (synthetic: same structure as real statements, made-up people and numbers) ---
+
+MERRILL_CMA = """+
+Primary Account: 11X-45678
+12/2212/2312/241Q252Q25 7/25
+0.500
+0.750 0.800
+0.910 1.02
+1.10
+YOUR MERRILL EDGE REPORT July 01, 2025 -July 31, 2025
+PORTFOLIO SUMMARY July 31 June 30 Month Change
+Net Portfolio Value        $1,100,000.00        $1,050,000.00          $50,000.00
+ Total Value (Net Portfolio Value plus Assets Not Held/Valued By MLPF&S, if any) in millions, 2021-2025
+JANE SAMPLE
+ASSETS July 31 June 30
+Cash/Money Accounts               12.50               10.00
+Equities       1,099,987.50       1,049,990.00
+EQUITIES
+Description Symbol Quantity
+APPLE INC AAPL 4,000.0000 150,000.00 200.0000 800,000.00 650,000.00 4,000
+VANGUARD TOTAL STOCK MARKET ETF VTI 1,000.0000 250,000.00 299.9875 299,987.50 49,987.50 1,500
+Merrill Lynch, Pierce, Fenner & Smith Incorporated
+"""
+
+ETRADE = """Beginning Total Value (as of 7/1/25) $1,000,000.00
+Ending Total Value (as of 7/31/25) $1,100,000.00
+CLIENT STATEMENT     For the Period July 1-31, 2025
+E*TRADE is a business of Morgan Stanley.
+Important Information if You are a Margin Customer (not available for certain retirement accounts)
+Morgan Stanley at Work Self-Directed Account
+123-456789-012
+MARKET VALUE OVER TIME
+JAN FEB MAR APR MAY JUN JUL
+($)  Millions
+5.0%
+10.0%
+-10.0% 20.0%
+-5.0%
+5.0%
+10.0%
+The percentages above represent the change in dollar value from the prior period.
+This Year
+(1/1/25-7/31/25)
+TOTAL BEGINNING VALUE $1,000,000.00 $800,000.00
+APPLE INC (AAPL) 5,000.000 $200.000 $400,000.00 $1,000,000.00 $600,000.00 $5,000.00 0.50
+CASH, BDP, AND MMFs 9.09% $100,000.00 $10.00
+STOCK PLAN DETAILS
+07/15/24 111111 RSU AAPL 100.000 $0.00 $200.00 $20,000.00
+09/28/24 222222 RSU AAPL 50.000 0.00 200.00 10,000.00
+"""
+
+
+def test_merrill_history_positions_and_cost_basis():
+    s = parse_text(MERRILL_CMA)
+    assert (s.kind, s.institution, s.account_type, s.last4) == ("investment", "Merrill", "brokerage", "5678")
+    assert s.as_of == date(2025, 7, 31) and s.balance == pytest.approx(1_100_000)
+    hist = {d: (v, exact) for d, v, exact in s.history}
+    assert hist[date(2025, 6, 30)] == (pytest.approx(1_050_000), True)          # exact beats the chart's 1.02M
+    assert hist[date(2022, 12, 31)] == (pytest.approx(500_000), False)          # chart, in millions
+    assert hist[date(2025, 3, 31)] == (pytest.approx(910_000), False)           # "1Q25" -> quarter end
+    assert date(2025, 7, 31) not in hist                                        # the statement date itself is exact
+    aapl = next(h for h in s.holdings if h["symbol"] == "AAPL")
+    assert (aapl["quantity"], aapl["price"], aapl["value"], aapl["cost_basis"]) == (4000, 200, 800_000, 150_000)
+    assert {h["symbol"] for h in s.holdings} == {"AAPL", "VTI", "CASH"}
+
+
+def test_etrade_history_from_percent_chart_with_anchor():
+    s = parse_text(ETRADE)
+    assert (s.institution, s.account_type) == ("E*TRADE", "brokerage")          # not fooled by "retirement accounts"
+    assert s.as_of == date(2025, 7, 31) and s.balance == pytest.approx(1_100_000)
+    hist = {d: (v, exact) for d, v, exact in s.history}
+    assert hist[date(2025, 6, 30)] == (pytest.approx(1_000_000), True)          # beginning value = prior month-end
+    assert hist[date(2024, 12, 31)] == (pytest.approx(800_000), True)           # year-start anchor
+    # Jun = 1.1M / 1.10; May = Jun / 1.05; Apr = May / 0.95 (chronological percentages)
+    assert hist[date(2025, 5, 31)][0] == pytest.approx(1_000_000 / 1.05)
+    assert hist[date(2025, 4, 30)][0] == pytest.approx(1_000_000 / 1.05 / 0.95)
+    assert {h["symbol"]: h["cost_basis"] for h in s.holdings} == {"AAPL": 400_000, "CASH": None}
+    assert [(g["grant_id"], g["quantity"], g["value"]) for g in s.grants] == [("111111", 100, 20_000), ("222222", 50, 10_000)]
+
+
+def test_statement_extras_saved_and_summarized(tmp_path):
+    from finance import db, portfolio
+    from finance.importers import apply_statement
+    conn = db.connect(tmp_path / "t.db")
+    acct = db.add_account(conn, "E*TRADE", "E*TRADE", "brokerage")
+    db.upsert_balance(conn, acct, "2025-05-31", 123.45, "manual")               # an existing exact value...
+    s = parse_text(ETRADE)
+    apply_statement(conn, s, acct, "etrade.pdf")
+    bal = dict(zip(db.balance_history(conn)["date"].dt.strftime("%Y-%m-%d"), db.balance_history(conn)["balance"]))
+    assert bal["2025-05-31"] == pytest.approx(123.45)                           # ...is never overwritten by the chart
+    assert bal["2025-06-30"] == pytest.approx(1_000_000) and bal["2025-07-31"] == pytest.approx(1_100_000)
+    pf = portfolio.summarize(db.latest_holdings(conn))
+    assert pf["total"] == pytest.approx(1_100_000) and pf["gain"] == pytest.approx(600_000)
+    assert pf["concentrated"][0][0] == "AAPL"
+    assert db.latest_grants(conn)["value"].sum() == pytest.approx(30_000)
