@@ -32,6 +32,7 @@ class ParsedFile:
     holdings: pd.DataFrame = field(default_factory=lambda: pd.DataFrame(columns=HOLDING_COLUMNS))
     as_of: date | None = None
     account_hint: str = ""          # e.g. last 4 digits, if the file reveals it
+    note: str = ""                  # something the user should know about this file (shown on import)
 
     @property
     def summary(self) -> str:

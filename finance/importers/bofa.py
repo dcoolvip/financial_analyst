@@ -39,7 +39,7 @@ def _mdy(s: str) -> date:
     return datetime.strptime(s.strip(), "%m/%d/%Y").date()
 
 
-def parse(content: bytes | str) -> ParsedFile:
+def parse(content: bytes | str, filename: str = "") -> ParsedFile:
     lines = _lines(content)
     if (i := _find_header(lines, "date", "description", "amount", "running bal")) is not None:
         return _parse_deposit(lines, i)

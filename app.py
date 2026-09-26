@@ -12,6 +12,7 @@ import streamlit as st
 import finance.importers.base
 import finance.importers.bofa
 import finance.importers.chase
+import finance.importers.wealthfront
 import finance.importers.statements
 from finance import categorize, charts, db, demo, editing, forecast, importers, insights, paths, portfolio
 
@@ -25,7 +26,7 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.chase,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
              insights, forecast, charts, demo, portfolio, editing]
@@ -729,9 +730,9 @@ with tab_add:
             continue
         with st.container(border=True):
             try:
-                parsed = parse_file(f.getvalue())
+                parsed = parse_file(f.getvalue(), filename=f.name)
             except UnrecognizedFile:
-                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill and Chase CSVs are supported). "
+                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill, Chase and Wealthfront CSVs are supported). "
                          "Share the column headers and I'll add support.")
                 continue
             st.markdown(f"**{f.name}** · {KIND_LABELS[parsed.kind]} · {parsed.summary}"
@@ -759,6 +760,8 @@ with tab_add:
                 new_type = n2.selectbox("Type", allowed, format_func=TYPE_LABELS.get, key=f"y{k}")
             if parsed.kind == "credit_card":
                 st.caption("Card files don't include a balance. Add the current balance in **Accounts** afterwards.")
+            if parsed.note:
+                st.caption(f"⚠️ {parsed.note}")
             if st.button("Import", key=f"b{k}", type="primary",
                          disabled=target is None or (target == options[-1] and not new_name)):
                 acct_id = (db.get_or_create_account(conn, new_name, parsed.institution, new_type) if new_name

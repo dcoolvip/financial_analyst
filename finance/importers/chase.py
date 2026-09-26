@@ -32,7 +32,7 @@ def _mdy(s: str):
     return datetime.strptime(s.strip(), "%m/%d/%Y").date()
 
 
-def parse(content: bytes | str) -> ParsedFile:
+def parse(content: bytes | str, filename: str = "") -> ParsedFile:
     header, rows = _rows(content)
     cols = set(header)
     if {"Posting Date", "Description", "Amount", "Balance"} <= cols:

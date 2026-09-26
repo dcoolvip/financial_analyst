@@ -124,7 +124,7 @@ def _line_money(text: str, label: str) -> float | None:
 
 
 def _institution(text: str) -> str:
-    for name in ("E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
+    for name in ("Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
                  "Discover", "U.S. Bank", "Fidelity", "Schwab", "Vanguard", "Rocket Mortgage", "Mr. Cooper"):
         if name.lower() in text.lower():
             return name
@@ -338,6 +338,10 @@ def _etrade_extras(s: Statement, t: str) -> None:
 
 
 def parse_text(text: str) -> Statement:
+    if re.search(r"\bTrade Confirmation\b", text[:400], re.IGNORECASE):
+        return Statement(kind="unknown", institution=_institution(text), text=text, notes=[
+            "This is a trade confirmation (a record of individual trades), not a statement - it doesn't include "
+            "the account's value. Download the monthly statement instead."])
     s = Statement(kind=_kind(text), institution=_institution(text), last4=_last4(text), text=text)
     {"loan": _parse_loan, "deposit": _parse_deposit, "credit_card": _parse_card,
      "investment": _parse_investment}.get(s.kind, lambda *_: None)(s, text)

@@ -2,17 +2,17 @@
 from __future__ import annotations
 
 from .. import db
-from . import bofa, chase, statements
+from . import bofa, chase, statements, wealthfront
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 
 # Add new institutions here; each module exposes parse(content) -> ParsedFile
-IMPORTERS = [bofa, chase]
+IMPORTERS = [bofa, chase, wealthfront]
 
 
-def parse_file(content: bytes | str) -> ParsedFile:
+def parse_file(content: bytes | str, filename: str = "") -> ParsedFile:
     for importer in IMPORTERS:
         try:
-            return importer.parse(content)
+            return importer.parse(content, filename=filename)
         except UnrecognizedFile:
             continue
     raise UnrecognizedFile("No importer recognized this file")

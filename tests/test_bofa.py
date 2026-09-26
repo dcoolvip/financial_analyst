@@ -184,3 +184,37 @@ def test_chase_csv_matched_by_digits_in_file_name(conn):
     name, why = suggest_csv_account(conn, parse_file(read("chase_card.csv")), "Chase4321_Activity_20260926.CSV",
                                     db.accounts(conn))
     assert name == "Chase Sapphire" and "4321" in why
+
+
+# --- Wealthfront ------------------------------------------------------------------------
+
+def test_wealthfront_all_time_builds_balance_history():
+    p = parse_file(read("wealthfront_cash.csv"), filename="Joint Cash Account - All-time.csv")
+    assert (p.kind, p.institution, p.note) == ("deposit", "Wealthfront", "")
+    bal = dict(zip(p.balances["date"], p.balances["balance"]))
+    assert bal[date(2026, 7, 31)] == 5000 and bal[date(2026, 8, 15)] == 4535
+    assert bal[date(2026, 9, 25)] == pytest.approx(5000 + 35 - 500 + 40 - 1000)
+    assert p.transactions["fingerprint"].is_unique
+
+
+def test_wealthfront_partial_range_imports_transactions_only():
+    p = parse_file(read("wealthfront_cash.csv"), filename="Joint Cash Account - 2026.csv")
+    assert len(p.transactions) == 5 and p.balances.empty and "All-time" in p.note
+
+
+def test_wealthfront_categories():
+    from finance import insights
+    p = parse_file(read("wealthfront_cash.csv"), filename="x - All-time.csv")
+    cats = {d: insights.categorize(d, a) for d, a in zip(p.transactions["description"], p.transactions["amount"])}
+    assert cats["August interest"] == "Income"
+    assert cats["Transfer to Joint Investment Account"] == "Transfer"
+    assert cats["Bank of America (Account ****1111)"] == "Transfer"
+    assert insights.categorize("INTEREST CHARGE ON PURCHASES", -12.0) != "Income"      # card interest isn't income
+
+
+def test_trade_confirmation_pdf_is_explained():
+    from tests.test_statements import _pdf
+    from finance.importers.statements import parse_pdf
+    s = parse_pdf(_pdf(["Trade Confirmation", "Date: 9/22/2026", "Wealthfront Brokerage LLC",
+                        "9/22/2026 9/22/2026 Buy 7.77 $1.0000 $7.77 -- $7.77"]))
+    assert s.kind == "unknown" and "trade confirmation" in s.notes[0]
