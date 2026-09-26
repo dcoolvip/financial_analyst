@@ -570,7 +570,7 @@ with tab_accounts:
 # --- add data -----------------------------------------------------------------
 
 NEW_ACCOUNT = "➕ New account"
-SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex"}
+SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex", "Golden 1 Credit Union": "Golden 1"}
 
 
 @st.cache_data(show_spinner=False, max_entries=200)
@@ -639,7 +639,8 @@ def render_statement_review(pdf_files) -> None:
                          "date": s.as_of, "balance": s.balance,
                          "rate": round(s.rate * 100, 3) if s.rate is not None else None, "payment": s.payment,
                          "extras": s.extras, "account": _suggest_account(s),
-                         "new_name": f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip(),
+                         "new_name": (f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip()
+                                      + (f" – {s.name_hint}" if s.name_hint else "")),
                          "type": acct_type})
         cols = ["save"] + ([] if PHONE else ["file"]) + ["date"] + [c for c, _ in fields] + ["account"] \
             + ([] if PHONE else ["new_name"] + (["type"] if len(types) > 1 else []))

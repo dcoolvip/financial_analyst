@@ -303,3 +303,38 @@ def test_muni_bond_funds_count_as_bonds():
     assert portfolio.asset_class("CMF", "ISHARES TR CALIF MUN BD ETF") == "Bonds"
     assert portfolio.asset_class("PWZ", "INVESCO EXCHANGE-TRADED FD TR CALIF AMT MUN") == "Bonds"
     assert portfolio.asset_class("SCHB", "Schwab U.S. Broad Market ETF") == "Stocks"
+
+
+CREDIT_UNION_MORTGAGE = """Make Check Payable To:
+The Sample 7 Credit Union
+MORTGAGE STATEMENT
+Statement Date: 08/03/2025
+Property Address: 12  MAPLE CT
+SPRINGFIELD CA 95000
+Account Number 1234567890
+Amount Due $2,000.00
+Account Information
+Outstanding Principal Balance $300,000.00
+Interest Rate (Until Jul 2028) 6.500%
+Explanation of Amount Due
+Principal $375.00
+Interest $1,625.00
+Escrow (for Taxes and Insurance) $0.00
+Regular Monthly Payment $2,000.00
+Please note: If you have enrolled in our automatic payment service, your payment will process as scheduled.
+TO THE EXTENT YOUR ORIGINAL OBLIGATION IS SUBJECT TO AN AUTOMATIC STAY OF BANKRUPTCY
+"""
+
+
+def test_credit_union_mortgage_not_mistaken_for_auto_loan():
+    s = parse_text(CREDIT_UNION_MORTGAGE)
+    assert (s.kind, s.account_type) == ("loan", "mortgage")            # "automatic payment" is not an auto loan
+    assert s.institution == "Sample 7 Credit Union" and s.name_hint == "12 Maple Ct"
+    assert s.balance == 300_000 and s.rate == pytest.approx(0.065) and s.payment == pytest.approx(2_000)
+    assert s.as_of == date(2025, 8, 3) and s.last4 == "7890"
+
+
+def test_real_auto_loan_still_detected():
+    s = parse_text("Some Bank\nAuto Loan Statement\nVehicle: 2022 Honda\nPrincipal Balance $12,000.00\n"
+                   "Interest Rate 5.0%\nAmount Due $400.00\nloan")
+    assert s.account_type == "auto_loan"

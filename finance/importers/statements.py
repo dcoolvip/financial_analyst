@@ -42,6 +42,7 @@ class Statement:
     holdings: list[dict] = field(default_factory=list)   # symbol, description, quantity, price, value, cost_basis
     grants: list[dict] = field(default_factory=list)     # unvested RSUs: grant_date, grant_id, symbol, quantity, value
     importable: bool = True          # False for documents with nothing to save (e.g. trade confirmations)
+    name_hint: str = ""              # e.g. the property address on a mortgage, to name a new account
 
     @property
     def extras(self) -> str:
@@ -125,6 +126,9 @@ def _line_money(text: str, label: str) -> float | None:
 
 
 def _institution(text: str) -> str:
+    m = re.search(r"\b(?:The\s+)?((?:[A-Z][\w&.'-]*|\d+)(?:\s+(?:[A-Z][\w&.'-]*|\d+)){0,4}\s+Credit Union)\b", text)
+    if m:                                                    # e.g. "The Golden 1 Credit Union"
+        return m.group(1)
     for name in ("Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
                  "Discover", "U.S. Bank", "Fidelity", "Schwab", "Vanguard", "Rocket Mortgage", "Mr. Cooper"):
         if name.lower() in text.lower():
@@ -168,9 +172,13 @@ def _kind(text: str) -> str:
 def _parse_loan(s: Statement, t: str) -> None:
     low = t.lower()
     s.account_type = ("heloc" if ("home equity" in low or "heloc" in low)
-                      else "auto_loan" if ("auto" in low or "vehicle" in low)
-                      else "mortgage" if ("mortgage" in low or "escrow" in low)
+                      else "mortgage" if re.search(r"\bmortgage\b|\bescrow\b|property address", low)
+                      else "auto_loan" if re.search(r"\bauto loan\b|\bvehicle\b|\bvin\b", low)
+                      else "student_loan" if re.search(r"\bstudent loan\b", low)
                       else "personal_loan")
+    m = re.search(r"Property Address:?\s*([0-9]+\s+[A-Za-z0-9 .'-]+?)\s*(?:\n|$)", t)
+    if m:
+        s.name_hint = " ".join(w.capitalize() if w.isupper() else w for w in m.group(1).split())
     s.balance = _money_after(t, [r"unpaid principal balance", r"outstanding principal(?: balance)?",
                                  r"current principal balance", r"principal balance"])
     s.rate = _percent_after(t, [r"interest rate", r"annual percentage rate", r"\bAPR\b"])
