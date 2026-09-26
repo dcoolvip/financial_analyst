@@ -46,7 +46,9 @@ class Statement:
     def extras(self) -> str:
         parts = []
         if self.history:
-            parts.append(f"{len(self.history)} past values")
+            approx = sum(1 for *_, exact in self.history if not exact)
+            span = f"back to {min(d for d, *_ in self.history):%b %Y}"
+            parts.append(f"{len(self.history)} past values {span}" + (f" ({approx} approximate)" if approx else ""))
         if self.holdings:
             parts.append(f"{len(self.holdings)} positions")
         if self.grants:
@@ -181,8 +183,6 @@ def _parse_loan(s: Statement, t: str) -> None:
         escrow = _money_after(t, [r"escrow(?: \(for taxes and/or insurance\))?(?: payment)?"], window=60)
         if regular is not None:
             pi = regular - (escrow or 0)
-            if escrow:
-                s.notes.append("Payment = regular payment minus escrow")
     s.payment = pi
     s.as_of = _date_after(t, [r"statement date", r"as of", r"statement period"])
 
@@ -275,7 +275,6 @@ def _merrill_extras(s: Statement, t: str) -> None:
                     mm, yy = (int(x) for x in lab.split("/"))
                     d = _month_end(2000 + yy, mm)
                 s.history.append((d, v * 1_000_000, False))
-            s.notes.append("Older values come from the statement's chart (rounded to about $10K)")
     # Positions: "APPLE INC AAPL 7,508.0000 219,080.28 308.9100 2,319,296.28 2,100,216.00 8,119"
     for m in re.finditer(r"(?m)^(?P<desc>[A-Z][A-Z0-9&.,'/ -]+?)\s+(?P<sym>[A-Z][A-Z.]{0,5})\s+(?P<qty>[\d,]+\.\d+)\s+"
                          r"(?P<cost>[\d,]+\.\d{2})\s+(?P<price>[\d,]+\.\d+)\s+(?P<value>[\d,]+\.\d{2})\b", t):
@@ -318,7 +317,6 @@ def _etrade_extras(s: Statement, t: str) -> None:
                 vals[i - 1] = anchors.get(dates[i - 1]) or vals[i] / (1 + pcts[i])
             for d_, v in zip(dates[:-1], vals[:-1]):
                 s.history.append((d_, round(v, 2), d_ in anchors))
-            s.notes.append("Monthly history rebuilt from the statement's 13-month chart")
     for d_, v in anchors.items():
         if not any(h[0] == d_ for h in s.history):
             s.history.append((d_, v, True))
@@ -344,7 +342,7 @@ def parse_text(text: str) -> Statement:
     {"loan": _parse_loan, "deposit": _parse_deposit, "credit_card": _parse_card,
      "investment": _parse_investment}.get(s.kind, lambda *_: None)(s, text)
     if s.kind == "unknown":
-        s.notes.append("Couldn't tell what kind of statement this is - fill in the values below")
+        s.notes.append("Couldn't tell what kind of statement this is - pick the account and fill in the values")
     missing = [n for n, v in (("date", s.as_of), ("balance", s.balance)) if v is None]
     if s.kind == "loan":
         missing += [n for n, v in (("rate", s.rate), ("payment", s.payment)) if v is None]

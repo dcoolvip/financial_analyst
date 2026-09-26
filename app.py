@@ -542,8 +542,6 @@ with tab_accounts:
 # --- add data -----------------------------------------------------------------
 
 NEW_ACCOUNT = "➕ New account"
-STATEMENT_LABELS = {"loan": "Loan statement", "deposit": "Bank statement", "credit_card": "Card statement",
-                    "investment": "Investment statement", "unknown": "Statement (not recognized)"}
 SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex"}
 
 
@@ -564,60 +562,71 @@ def _suggest_account(s: statements.Statement) -> str:
     return same_type["name"].iloc[0] if len(same_type) == 1 else NEW_ACCOUNT
 
 
+# Per statement kind: table title, the value columns that apply, and the account types a new account may be
+STATEMENT_VIEWS = {
+    "loan": ("Loans", [("balance", "Principal owed"), ("rate", "Interest rate %"), ("payment", "Monthly payment (P&I)")],
+             ["mortgage", "heloc", "auto_loan", "student_loan", "personal_loan", "other_liability"]),
+    "deposit": ("Bank accounts", [("balance", "Ending balance")], ["checking", "savings"]),
+    "credit_card": ("Credit cards", [("balance", "Statement balance"), ("rate", "Purchase APR %")], ["credit_card"]),
+    "investment": ("Investments", [("balance", "Account value"), ("extras", "Also found")], ["brokerage", "retirement"]),
+    "unknown": ("Not recognized", [("balance", "Balance")], list(TYPE_LABELS)),
+}
+MONEY_COLS = {"balance", "payment"}
+
+
 def render_statement_review(pdf_files) -> None:
-    """One editable row per PDF: what was read, and which account it goes to. Nothing is saved until
-    'Save statements' - so a misread value can be fixed first."""
+    """One small table per kind of statement, showing only the values that apply to it. Nothing is
+    saved until 'Save statements', so a misread value can be fixed first."""
     st.markdown("#### Statements")
-    st.caption("Read on this Mac - statements are never sent anywhere. Check the values, fix anything that "
-               "looks off, then save.")
     parsed = [(f, _read_pdf(f.getvalue())) for f in pdf_files]
-    rows = []
-    for f, s in parsed:
-        inst = SHORT_INST.get(s.institution, s.institution)
-        acct_type = s.account_type or "other_asset"
-        rows.append({
-            "save": s.kind != "unknown" or s.balance is not None,
-            "file": f.name, "what": STATEMENT_LABELS[s.kind],
-            "date": s.as_of, "balance": s.balance,
-            "rate": round(s.rate * 100, 3) if s.rate is not None else None,
-            "payment": s.payment,
-            "account": _suggest_account(s),
-            "new_name": f"{inst} {TYPE_LABELS.get(acct_type, 'Account')}".strip(),
-            "type": acct_type,
-            "extras": s.extras,
-        })
-    table = pd.DataFrame(rows)
-    edited = st.data_editor(
-        table, hide_index=True, width="stretch", key=f"stmts_{hash(tuple(f.file_id for f in pdf_files))}",
-        disabled=["file", "what", "extras"],
-        column_order=(["save", "what", "date", "balance", "account", "extras"] if PHONE else
-                      ["save", "file", "what", "date", "balance", "rate", "payment", "account", "new_name", "type",
-                       "extras"]),
-        column_config={
-            "save": st.column_config.CheckboxColumn("Save", width="small"),
-            "file": "File", "what": "Type of statement",
+    edited_tables = []
+    for kind, (title, fields, types) in STATEMENT_VIEWS.items():
+        idx = [i for i, (_, s) in enumerate(parsed) if s.kind == kind]
+        if not idx:
+            continue
+        rows = []
+        for i in idx:
+            f, s = parsed[i]
+            acct_type = s.account_type if s.account_type in types else types[0]
+            rows.append({"row_id": i, "save": kind != "unknown" or s.balance is not None, "file": f.name,
+                         "date": s.as_of, "balance": s.balance,
+                         "rate": round(s.rate * 100, 3) if s.rate is not None else None, "payment": s.payment,
+                         "extras": s.extras, "account": _suggest_account(s),
+                         "new_name": f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip(),
+                         "type": acct_type})
+        cols = ["save"] + ([] if PHONE else ["file"]) + ["date"] + [c for c, _ in fields] + ["account"] \
+            + ([] if PHONE else ["new_name"] + (["type"] if len(types) > 1 else []))
+        config = {
+            "save": st.column_config.CheckboxColumn("Save", width="small"), "file": "File",
             "date": st.column_config.DateColumn("Statement date", format="MMM D, YYYY"),
-            "balance": st.column_config.NumberColumn("Balance / owed", format="$%,.2f",
-                                                     help="Loans: principal owed. Cards: new balance."),
-            "rate": st.column_config.NumberColumn("Rate %", format="%.3f"),
-            "payment": st.column_config.NumberColumn("Loan payment (P&I)", format="$%,.2f",
-                                                     help="Principal + interest only, escrow excluded"),
             "account": st.column_config.SelectboxColumn("Account", options=list(accts["name"]) + [NEW_ACCOUNT],
                                                         required=True),
-            "new_name": st.column_config.TextColumn("New account name", help="Used when Account is ➕ New account"),
-            "type": st.column_config.SelectboxColumn("New account type", options=list(TYPE_LABELS)),
-            "extras": st.column_config.TextColumn("Also found", help="Saved along with the balance"),
-        })
-    for (f, s) in parsed:
-        if s.notes:
-            st.caption(f"**{f.name}**: " + " · ".join(s.notes))
+            "new_name": st.column_config.TextColumn("Name if new"),
+            "type": st.column_config.SelectboxColumn("Type if new", options=types,
+                                                     help=", ".join(TYPE_LABELS[t] for t in types)),
+        }
+        for c, label in fields:
+            config[c] = (st.column_config.NumberColumn(label, format="$%,.2f") if c in MONEY_COLS
+                         else st.column_config.NumberColumn(label, format="%.3f") if c == "rate"
+                         else st.column_config.TextColumn(label))
+        st.markdown(f"**{title}**")
+        edited = st.data_editor(pd.DataFrame(rows), hide_index=True, width="stretch", column_order=cols,
+                                column_config=config, disabled=["file", "extras"],
+                                key=f"stmts_{kind}_{hash(tuple(parsed[i][0].file_id for i in idx))}")
+        edited_tables.append((kind, edited))
+        for i in idx:
+            if parsed[i][1].notes:
+                st.caption(f"⚠️ **{parsed[i][0].name}**: " + " · ".join(parsed[i][1].notes))
     with st.expander("Show the text read from each PDF"):
         for f, s in parsed:
             st.markdown(f"**{f.name}**")
             st.code(s.text[:4000] or "(no text)", language=None)
 
     if st.button("Save statements", type="primary"):
-        chosen = edited[edited["save"]]
+        chosen = pd.concat([t[t["save"]] for _, t in edited_tables]) if edited_tables else pd.DataFrame()
+        if chosen.empty:
+            st.info("Nothing selected to save.")
+            return
         problems = [r.file for r in chosen.itertuples() if pd.isna(r.date) or pd.isna(r.balance)
                     or (r.account == NEW_ACCOUNT and not str(r.new_name).strip())]
         if problems:
@@ -626,20 +635,21 @@ def render_statement_review(pdf_files) -> None:
         ids = {}
         for r in chosen.itertuples():
             if r.account == NEW_ACCOUNT:
-                ids[r.Index] = db.get_or_create_account(conn, str(r.new_name).strip(),
-                                                        parsed[r.Index][1].institution or "Other", r.type)
+                ids[r.row_id] = db.get_or_create_account(conn, str(r.new_name).strip(),
+                                                     parsed[r.row_id][1].institution or "Other", r.type)
             else:
-                ids[r.Index] = int(accts.loc[accts["name"] == r.account, "id"].iloc[0])
-        newest = chosen.assign(acct=pd.Series(ids)).sort_values("date").groupby("acct").tail(1).index
+                ids[r.row_id] = int(accts.loc[accts["name"] == r.account, "id"].iloc[0])
+        chosen = chosen.assign(acct=chosen["row_id"].map(ids))
+        newest = set(chosen.sort_values("date").groupby("acct").tail(1)["row_id"])
         for r in chosen.itertuples():
-            orig = parsed[r.Index][1]
+            orig = parsed[r.row_id][1]
             s = statements.Statement(
                 kind=orig.kind, institution=orig.institution, last4=orig.last4,
                 as_of=pd.Timestamp(r.date).date(), balance=float(r.balance),
                 rate=float(r.rate) / 100 if pd.notna(r.rate) else None,
                 payment=float(r.payment) if pd.notna(r.payment) else None,
                 history=orig.history, holdings=orig.holdings, grants=orig.grants)
-            apply_statement(conn, s, ids[r.Index], r.file, latest=r.Index in newest)
+            apply_statement(conn, s, ids[r.row_id], r.file, latest=r.row_id in newest)
         st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
         st.rerun()
 
