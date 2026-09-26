@@ -15,6 +15,9 @@ from pathlib import Path
 
 import aiohttp
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from finance.paths import data_dir  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 GATE, UP = 18501, 18502
 ORIGIN = f"https://localhost:{GATE}"
@@ -38,7 +41,7 @@ def start() -> list[subprocess.Popen]:
 
 
 async def run() -> list[tuple[str, bool, str]]:
-    tls = ssl.create_default_context(cafile=str(ROOT / "data/tls/ca.pem"))
+    tls = ssl.create_default_context(cafile=str(data_dir() / "tls/ca.pem"))
     results = []
 
     def check(name, ok, detail=""):
@@ -96,7 +99,7 @@ async def run() -> list[tuple[str, bool, str]]:
 
 
 def main() -> int:
-    if not (ROOT / "data/tls/ca.pem").exists():
+    if not (data_dir() / "tls/ca.pem").exists():
         subprocess.run([str(ROOT / "tools/make_tls.sh")], check=True)
     procs = start()
     try:

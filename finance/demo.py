@@ -1,6 +1,6 @@
 """Synthetic 18-month household, written as real BofA-format CSVs and imported
 through the normal importers - so the demo exercises the same code path your
-files will. Lives in its own DB (data/demo.db); never touches your real data.
+files will. Lives in its own DB (demo.db); never touches your real data.
 """
 from __future__ import annotations
 

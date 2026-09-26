@@ -11,7 +11,7 @@ import streamlit as st
 
 import finance.importers.base
 import finance.importers.bofa
-from finance import categorize, charts, db, demo, forecast, importers, insights
+from finance import categorize, charts, db, demo, forecast, importers, insights, paths
 
 
 @st.cache_resource
@@ -23,7 +23,7 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [categorize, db, finance.importers.base, finance.importers.bofa, importers,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, importers,
              insights, forecast, charts, demo]
     seen = _loaded_mtimes()
     first_run = not seen
@@ -116,14 +116,12 @@ def get_conn(path: str):
 with st.sidebar:
     st.markdown("### Financial Analyst")
     source = st.radio("Data", ["My data", "Demo data"], help="Demo data lives in its own file and never mixes with yours.")
-    st.caption("Your data is stored only on your Mac. This device just displays it." if GATED
-               else f"Your data is stored on this Mac in `{db.DEFAULT_DB.parent}`.")
     if GATED:
         # target=_self: stay in this tab (gate pages, not Streamlit pages)
         st.markdown('<a href="/security" target="_self">🔐 Security &amp; passkeys</a> &nbsp;·&nbsp; '
                     '<a href="/logout" target="_self">Sign out</a>', unsafe_allow_html=True)
 
-conn = get_conn(str(db.ROOT / "data" / ("demo.db" if source == "Demo data" else "finance.db")))
+conn = get_conn(str(paths.data_dir() / ("demo.db" if source == "Demo data" else "finance.db")))
 mode = "dark" if getattr(st.context, "theme", None) and st.context.theme.type == "dark" else "light"
 
 

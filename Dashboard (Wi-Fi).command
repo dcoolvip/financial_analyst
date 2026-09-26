@@ -11,18 +11,19 @@ if [[ ! -f .venv/.req-stamp || requirements.txt -nt .venv/.req-stamp ]]; then
   .venv/bin/pip install -q -r requirements.txt && touch .venv/.req-stamp
 fi
 
-if [[ ! -f data/app_password || "$1" == "--reset-password" ]]; then
-  mkdir -p data
+DATA=$(.venv/bin/python -c "from finance.paths import data_dir; print(data_dir())")
+if [[ ! -f "$DATA/app_password" || "$1" == "--reset-password" ]]; then
+  mkdir -p "$DATA" && chmod 700 "$DATA"
   echo "Choose a password for Wi-Fi access (used on your other devices):"
   read -s "pw?Password: "; echo
   read -s "pw2?Again: "; echo
   [[ "$pw" == "$pw2" && -n "$pw" ]] || { echo "Passwords didn't match."; exit 1; }
-  PW="$pw" .venv/bin/python -c '
+  PW="$pw" PWFILE="$DATA/app_password" .venv/bin/python -c '
 import hashlib, os
 salt = os.urandom(16)
 d = hashlib.scrypt(os.environ["PW"].encode(), salt=salt, n=2**14, r=8, p=1)
-open("data/app_password", "w").write(salt.hex() + ":" + d.hex())'
-  chmod 600 data/app_password
+open(os.environ["PWFILE"], "w").write(salt.hex() + ":" + d.hex())'
+  chmod 600 "$DATA/app_password"
   echo "Saved. (Run this file with --reset-password to change it.)"
 fi
 
@@ -32,7 +33,7 @@ HOST=dcool.home
 
 # HTTPS only: create/renew certificates (no-op when they're current)
 tools/make_tls.sh "$HOST" || exit 1
-if [[ ! -f data/tls/.phone-setup-shown ]]; then
+if [[ ! -f "$DATA/tls/.phone-setup-shown" ]]; then
   cat <<EOF
 
 ──────────────── One-time iPhone setup (so it trusts this dashboard) ────────────────
@@ -43,8 +44,8 @@ if [[ ! -f data/tls/.phone-setup-shown ]]; then
  This certificate can only vouch for $HOST and your home network - nothing else.
 ──────────────────────────────────────────────────────────────────────────────────────
 EOF
-  open -R "data/tls/Financial Analyst CA.cer"
-  touch data/tls/.phone-setup-shown
+  open -R "$DATA/tls/Financial Analyst CA.cer"
+  touch "$DATA/tls/.phone-setup-shown"
 fi
 
 echo ""
@@ -60,8 +61,8 @@ trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
 PY=.venv/bin/python
 FINANCE_GATE=1 $PY -m finance.reloader --watch .streamlit/config.toml -- \
   $PY -m streamlit run app.py --server.port 8502 --server.address 127.0.0.1 &
-$PY -m finance.reloader --watch finance/gate.py finance/auth_store.py requirements.txt \
-    data/tls/server.pem data/tls/server.key -- \
+$PY -m finance.reloader --watch finance/gate.py finance/auth_store.py finance/paths.py requirements.txt \
+    "$DATA/tls/server.pem" "$DATA/tls/server.key" -- \
   $PY -m finance.gate --host "$HOST" --ip "$IP" --port 8501 --upstream-port 8502 &
 sleep 3 && open "https://$HOST:8501"
 wait

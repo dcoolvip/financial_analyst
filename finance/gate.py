@@ -35,6 +35,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
                                       ResidentKeyRequirement, UserVerificationRequirement)
 
 from . import auth_store as store
+from . import paths
 
 COOKIE = "__Host-fa_session"
 PUBLIC = {"/login", "/passkey/auth/options", "/passkey/auth/verify", "/favicon.ico"}
@@ -653,14 +654,15 @@ def main() -> None:
     ap.add_argument("--ip", required=True, help="address to listen on (the Wi-Fi IP)")
     ap.add_argument("--port", type=int, default=8501)
     ap.add_argument("--upstream-port", type=int, default=8502)
-    ap.add_argument("--cert", default="data/tls/server.pem")
-    ap.add_argument("--key", default="data/tls/server.key")
+    ap.add_argument("--cert", default=None, help="default: <data folder>/tls/server.pem")
+    ap.add_argument("--key", default=None, help="default: <data folder>/tls/server.key")
     a = ap.parse_args()
     if not store.password_is_set():
         raise SystemExit("No password set. Start via 'Dashboard (Wi-Fi).command'.")
     tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
-    tls.load_cert_chain(a.cert, a.key)
+    tls_dir = paths.data_dir() / "tls"
+    tls.load_cert_chain(a.cert or tls_dir / "server.pem", a.key or tls_dir / "server.key")
     app = make_app(a.host, a.port, a.upstream_port)
     try:
         asyncio.run(serve(app, a.ip, a.port, tls,

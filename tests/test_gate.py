@@ -15,6 +15,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 
 HOST, PORT = "dcool.home", 8501
+from finance.paths import data_dir  # noqa: E402
+TLS_DIR = data_dir() / "tls"
 ORIGIN = f"https://{HOST}:{PORT}"
 UA_IPHONE = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile Safari/604.1"
 
@@ -276,7 +278,7 @@ def _serve_one(app, send_plain=None, tls_request=None):
         runner = web.AppRunner(app, access_log=None)
         await runner.setup()
         tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        tls.load_cert_chain(root / "data/tls/server.pem", root / "data/tls/server.key")
+        tls.load_cert_chain(TLS_DIR / "server.pem", TLS_DIR / "server.key")
         loop = asyncio.get_running_loop()
         srv, cli = socket.socketpair()
         task = asyncio.create_task(g.route_connection(loop, srv, runner.server, tls, ORIGIN))
@@ -285,7 +287,7 @@ def _serve_one(app, send_plain=None, tls_request=None):
                 cli.sendall(send_plain)
                 await task
                 return cli.recv(4096).decode()
-            ctx = ssl.create_default_context(cafile=str(root / "data/tls/ca.pem"))
+            ctx = ssl.create_default_context(cafile=str(TLS_DIR / "ca.pem"))
             r, w = await asyncio.open_connection(sock=cli, ssl=ctx, server_hostname=HOST)
             w.write(tls_request)
             await w.drain()
@@ -296,14 +298,14 @@ def _serve_one(app, send_plain=None, tls_request=None):
     return asyncio.run(run())
 
 
-@pytest.mark.skipif(not os.path.exists("data/tls/server.pem"), reason="needs tools/make_tls.sh certificates")
+@pytest.mark.skipif(not (TLS_DIR / "server.pem").exists(), reason="needs tools/make_tls.sh certificates")
 def test_plain_http_on_https_port_is_redirected(gate):
     _, app = gate
     out = _serve_one(app, send_plain=b"GET /security?x=1 HTTP/1.1\r\nHost: dcool.home:8501\r\n\r\n")
     assert out.startswith("HTTP/1.1 308") and f"Location: {ORIGIN}/security?x=1" in out
 
 
-@pytest.mark.skipif(not os.path.exists("data/tls/server.pem"), reason="needs tools/make_tls.sh certificates")
+@pytest.mark.skipif(not (TLS_DIR / "server.pem").exists(), reason="needs tools/make_tls.sh certificates")
 def test_https_on_shared_port_serves_gate(gate):
     _, app = gate
     out = _serve_one(app, tls_request=f"GET /login HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nConnection: close\r\n\r\n".encode())

@@ -1,6 +1,6 @@
 """Sessions, passkeys and the password check for the HTTPS gate (see gate.py).
 
-Kept in its own database (data/auth.db) so it never mixes with financial data.
+Kept in its own database (auth.db in the data folder, see paths.py) so it never mixes with financial data.
 Session tokens are stored only as SHA-256 hashes: a copy of auth.db can't be replayed as a cookie.
 """
 from __future__ import annotations
@@ -13,6 +13,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from . import paths
+
 ROOT = Path(__file__).resolve().parent.parent
 REMEMBER_S = 90 * 24 * 3600      # "keep me signed in on this device"
 SHORT_S = 12 * 3600              # otherwise: this browser session, max 12 hours
@@ -20,7 +22,7 @@ TOUCH_EVERY_S = 300
 
 
 def auth_dir() -> Path:
-    return Path(os.environ.get("FINANCE_AUTH_DIR") or ROOT / "data")
+    return Path(os.environ.get("FINANCE_AUTH_DIR") or paths.data_dir())
 
 
 def connect() -> sqlite3.Connection:

@@ -25,11 +25,10 @@ phone/Mac ──HTTPS──▶ gate (Wi-Fi IP:8501) ──▶ Streamlit (127.0.0
 `finance/gate.py` handles sign-in: a password form that Passwords/Face ID can fill, **passkeys**
 (Face ID / Touch ID), "keep me signed in on this device" (90 days), and a **Security** page
 (sidebar → 🔐) to add or remove passkeys and sign out other devices. Sessions are HttpOnly/Secure `__Host-`
-cookies; only their hashes are stored (`data/auth.db`). Logins are rate-limited, and every POST is
+cookies; only their hashes are stored (`auth.db`). Logins are rate-limited, and every POST is
 Origin-checked.
 
-First run: it asks for a password, creates a private certificate authority in `data/tls/`
-(gitignored) and shows `Financial Analyst CA.cer` in Finder. To trust it once on the iPhone:
+First run: it asks for a password, creates a private certificate authority in the data folder (`tls/`) and shows `Financial Analyst CA.cer` in Finder. To trust it once on the iPhone:
 AirDrop it → Settings → General → VPN & Device Management → Install → Settings → General → About →
 Certificate Trust Settings → turn it on. The CA is name-constrained to `dcool.home` and the home subnet,
 so it can't vouch for any other site.
@@ -58,7 +57,8 @@ Re-importing overlapping files is safe because duplicates are skipped.
 
 ```
 app.py                  UI only (tabs: Overview, Future, Money in & out, Accounts, Add data)
-finance/db.py           SQLite schema + queries (data/finance.db, gitignored)
+finance/db.py           SQLite schema + queries
+finance/paths.py        where data lives: ~/Library/Application Support/FinancialAnalyst (never iCloud-synced)
 finance/importers/      one parser per institution -> common ParsedFile shape
 finance/insights.py     grouping, transfer detection, categories, savings estimate
 finance/forecast.py     Monte Carlo net-worth projection with loan amortization

@@ -13,8 +13,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import paths
+
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DB = ROOT / "data" / "finance.db"
 
 ASSET_TYPES = ["checking", "savings", "brokerage", "retirement", "property", "vehicle", "other_asset"]
 LIABILITY_TYPES = ["credit_card", "mortgage", "auto_loan", "heloc", "personal_loan", "student_loan", "other_liability"]
@@ -78,7 +79,7 @@ def is_liability(account_type: str) -> bool:
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
-    path = Path(path or os.environ.get("FINANCE_DB") or DEFAULT_DB)
+    path = Path(path or os.environ.get("FINANCE_DB") or paths.data_dir() / "finance.db")
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.execute("PRAGMA foreign_keys = ON")
