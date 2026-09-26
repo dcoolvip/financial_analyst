@@ -66,6 +66,15 @@ def _is_phone() -> bool:
 
 PHONE = _is_phone()
 
+
+def _device() -> str:
+    ua = (st.context.headers or {}).get("User-Agent", "")
+    for needle, name in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+                         ("Macintosh", "Mac"), ("Windows", "Windows")):
+        if needle in ua:
+            return f"{name} · " + next((b for b in ("Edg", "Chrome", "Firefox", "Safari") if b in ua), "browser")
+    return "this Mac"
+
 # Phone rules are applied directly when the phone is detected (reliable regardless of the
 # browser's reported width), and via a small-screen media query as a fallback. The Mac never
 # sees them.
@@ -514,8 +523,14 @@ with tab_accounts:
                 ["name", "Group", "Type", "shown_balance"] + (["rate_pct", "payment"] if has_debt else [])
                 + ["Updated"] + (["status"] if table["status"].any() else []))
         ver = st.session_state.get("acct_table_ver", 0)
+        good, bad = ("#0ca30c", "#e66767") if mode == "dark" else ("#006300", "#d03b3b")
+
+        def _balance_color(row):
+            v = row["shown_balance"]
+            color = "" if pd.isna(v) or v == 0 else (bad if row["is_liability"] and v > 0 else good)
+            return [f"color: {color}" if (c == "shown_balance" and color) else "" for c in row.index]
         edited = st.data_editor(
-            table, hide_index=True, width="stretch", column_order=cols, key=f"acct_table_{ver}",
+            table.style.apply(_balance_color, axis=1), hide_index=True, width="stretch", column_order=cols, key=f"acct_table_{ver}",
             disabled=["Group", "Updated", "status"],
             column_config={
                 "name": st.column_config.TextColumn("Account ✏️", required=True),
@@ -536,8 +551,14 @@ with tab_accounts:
 
         edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)
         new_balances = editing.balance_edits(table, edited)
+        by_id = table.set_index("id")
         for aid, value in new_balances.items():
             db.upsert_balance(conn, aid, date.today(), value, "manual")
+            db.log_edit(conn, by_id.at[aid, "name"], "balance", by_id.at[aid, "balance"], value, _device())
+        for aid, fields in edits.items():
+            for k, v in fields.items():
+                old = by_id.at[aid, {"name": "name", "type": "type", "rate": "rate", "payment": "payment"}[k]]
+                db.log_edit(conn, by_id.at[aid, "name"], k, old, v, _device())
         if new_balances and not edits:
             st.session_state["flash"] = "Saved balance for " + ", ".join(
                 table.loc[table["id"] == i, "name"].iloc[0] for i in new_balances)
@@ -566,8 +587,9 @@ with tab_accounts:
                                       help="For cards and loans, enter what you owe, as your bank shows it. "
                                            "A card in credit: a negative number.")
                 if st.form_submit_button("Save balance", type="primary"):
-                    liab = bool(accts.loc[accts["name"] == acct, "is_liability"].iloc[0])
-                    db.upsert_balance(conn, names[acct], when, editing.to_stored(amt, liab))
+                    row = accts.loc[accts["name"] == acct].iloc[0]
+                    db.upsert_balance(conn, names[acct], when, editing.to_stored(amt, bool(row["is_liability"])))
+                    db.log_edit(conn, acct, f"balance ({when:%b %-d})", row["balance"], amt, _device())
                     st.rerun()
     with c2:
         with st.form("new_account", clear_on_submit=True, border=True):
@@ -588,7 +610,16 @@ with tab_accounts:
                 if st.button("Remove", disabled=not sure):
                     checkpoints.create(conn, f"Before removing {gone}")
                     db.delete_account(conn, names[gone])
+                    db.log_edit(conn, gone, "removed", None, None, _device())
                     st.rerun()
+
+    changes = db.recent_edits(conn)
+    if len(changes):
+        with st.expander("🕘 Recent changes"):
+            st.dataframe(changes.assign(at=pd.to_datetime(changes["at"])), hide_index=True, width="stretch",
+                         column_config={"at": st.column_config.DatetimeColumn("When", format="MMM D, h:mm a"),
+                                        "account": "Account", "what": "Changed", "old": "From", "new": "To",
+                                        "device": "Device"})
 
 
 # --- add data -----------------------------------------------------------------

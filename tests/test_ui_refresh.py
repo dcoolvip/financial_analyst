@@ -330,3 +330,21 @@ def test_balance_cell_edit_saves_as_today():
     after = before.copy()
     after.loc[0, "shown_balance"] = 1234.56
     assert balance_edits(before, after) == {1: pytest.approx(1234.56)}
+
+
+def test_balances_colored_and_hand_edits_recorded(env):
+    conn, _ = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 10_000)
+    db.upsert_balance(conn, db.add_account(conn, "Mortgage", "Golden 1 Credit Union", "mortgage"), "2026-09-01", 400_000)
+    card = db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")
+    at = app()
+    at.selectbox(key=[s.key for s in at.selectbox if s.label == "Account"][0]).set_value("Chase Sapphire")
+    [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(6337.08)          # as Chase shows it
+    click(at, "Save balance")
+    assert db.accounts(conn).set_index("name").loc["Chase Sapphire", "balance"] == pytest.approx(6337.08)
+    accounts = next(d for d in at.dataframe if "shown_balance" in d.value.columns)
+    styles = str(accounts.proto)
+    assert "d03b3b" in styles and "006300" in styles                   # debts red, what you have green
+    log = db.recent_edits(conn)
+    assert log.iloc[0]["account"] == "Chase Sapphire" and log.iloc[0]["new"] == "6337.08"
+    assert any(e.label == "🕘 Recent changes" for e in at.expander)

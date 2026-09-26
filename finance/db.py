@@ -74,6 +74,15 @@ CREATE TABLE IF NOT EXISTS equity_grants (
     value       REAL NOT NULL,          -- estimated pre-tax value; NOT counted in net worth until it vests
     PRIMARY KEY (account_id, as_of, grant_id)
 );
+CREATE TABLE IF NOT EXISTS edit_log (
+    id          INTEGER PRIMARY KEY,
+    at          TEXT NOT NULL,          -- local time
+    account     TEXT NOT NULL,
+    what        TEXT NOT NULL,          -- balance / name / type / rate / payment / removed
+    old         TEXT,
+    new         TEXT,
+    device      TEXT                    -- e.g. "iPhone · Safari"
+);
 CREATE TABLE IF NOT EXISTS imports (
     id           INTEGER PRIMARY KEY,
     account_id   INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -355,6 +364,18 @@ def latest_holdings(conn) -> pd.DataFrame:
            ORDER BY h.value DESC""",
         conn,
     )
+
+
+def log_edit(conn, account: str, what: str, old, new, device: str = "") -> None:
+    fmt = lambda v: None if v is None or (isinstance(v, float) and pd.isna(v)) else str(v)   # noqa: E731
+    conn.execute("INSERT INTO edit_log (at, account, what, old, new, device) VALUES (?, ?, ?, ?, ?, ?)",
+                 (datetime.now().isoformat(timespec="seconds"), account, what, fmt(old), fmt(new), device[:60]))
+    conn.commit()
+
+
+def recent_edits(conn, limit: int = 20) -> pd.DataFrame:
+    return pd.read_sql_query("SELECT at, account, what, old, new, device FROM edit_log ORDER BY id DESC LIMIT ?",
+                             conn, params=(limit,))
 
 
 def log_import(conn, account_id: int, filename: str, kind: str, rows_added: int) -> None:
