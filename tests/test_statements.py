@@ -338,3 +338,36 @@ def test_real_auto_loan_still_detected():
     s = parse_text("Some Bank\nAuto Loan Statement\nVehicle: 2022 Honda\nPrincipal Balance $12,000.00\n"
                    "Interest Rate 5.0%\nAmount Due $400.00\nloan")
     assert s.account_type == "auto_loan"
+
+
+ROBINHOOD_PAGE = """Robinhood Securities, LLC carries your account as the clearing broker.
+Page  of {page} 9
+08/01/2025 to 08/31/2025
+Jane Sample
+{label} Account #:{acct}
+Account Summary Opening Balance Closing Balance
+Net Account Balance $0.00 $0.00
+Total Securities * ${open} ${close}
+Portfolio Value ${open} ${close}
+Portfolio Summary
+Securities Held in Account Sym/Cusip Acct Type Qty Price Mkt Value Est. Dividend Yield % of Total Portfolio
+SPDR S&P 500 ETF Trust
+Estimated Yield: 1.02% SPY Cash 2 $700.00000 $1,400.00 $14.00 {spy_pct}%
+{extra}Brokerage Cash Balance ${cash} 0.00%
+"""
+
+
+def test_robinhood_multi_account_pdf_splits_into_accounts():
+    from finance.importers.statements import parse_pdf_all
+    text = (ROBINHOOD_PAGE.format(page=1, label="Individual", acct="111114688", open="1,300.00", close="1,400.00",
+                                  spy_pct=100, extra="", cash="0.00")
+            + ROBINHOOD_PAGE.format(page=5, label="Roth IRA", acct="222222941", open="2,000.00", close="2,450.00",
+                                    spy_pct=57, cash="50.00",
+                                    extra="NVIDIA\nEstimated Yield: 0.13% NVDA Cash 5 $200.00000 $1,000.00 $1.30 41%\n"))
+    got = parse_pdf_all(_pdf(text.splitlines()))
+    assert [(s.institution, s.name_hint, s.account_type, s.balance) for s in got] == [
+        ("Robinhood", "Individual …4688", "brokerage", 1_400.0),
+        ("Robinhood", "Roth IRA …2941", "retirement", 2_450.0)]
+    assert got[1].history == [(date(2025, 7, 31), 2_000.0, True)]
+    assert {h["symbol"]: h["value"] for h in got[1].holdings} == {"SPY": 1_400.0, "NVDA": 1_000.0, "CASH": 50.0}
+    assert not any(s.notes for s in got)                                    # values match their positions

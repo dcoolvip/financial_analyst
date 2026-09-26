@@ -634,16 +634,16 @@ SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex", "Golden 1 C
 
 
 @st.cache_data(show_spinner=False, max_entries=200)
-def _read_pdf_cached(data: bytes, reader_version: float) -> statements.Statement:
-    """Cached by file contents AND reader version: when the reading code changes, files are re-read
-    (keying on contents alone kept serving results from the old code after a fix)."""
+def _read_pdf_cached(data: bytes, reader_version: float) -> list[statements.Statement]:
+    """Every account in the PDF. Cached by file contents AND reader version: when the reading code changes,
+    files are re-read (keying on contents alone kept serving results from the old code after a fix)."""
     try:
-        return statements.parse_pdf(data)
+        return statements.parse_pdf_all(data)
     except Exception as e:  # noqa: BLE001 - damaged/protected PDFs become a row you fill in by hand
-        return statements.Statement(kind="unknown", notes=[f"Couldn't read this PDF: {e}"])
+        return [statements.Statement(kind="unknown", notes=[f"Couldn't read this PDF: {e}"])]
 
 
-def _read_pdf(data: bytes) -> statements.Statement:
+def _read_pdf(data: bytes) -> list[statements.Statement]:
     return _read_pdf_cached(data, os.path.getmtime(statements.__file__))
 
 
@@ -675,17 +675,41 @@ STATEMENT_VIEWS = {
 MONEY_COLS = {"balance", "payment"}
 
 
+class _Named:
+    """An uploaded file seen as one account's statement (file name + which account, for multi-account PDFs)."""
+    def __init__(self, f, label: str):
+        self.name, self.file_id, self._f = label, f"{f.file_id}:{label}", f
+
+    def getvalue(self):
+        return self._f.getvalue()
+
+
 def render_statement_review(pdf_files) -> None:
     """One small table per kind of statement, showing only the values that apply to it. Nothing is
     saved until 'Save statements', so a misread value can be fixed first."""
     st.markdown("#### Statements")
-    everything = [(f, _read_pdf(f.getvalue())) for f in pdf_files]
+    # one row per ACCOUNT: a Robinhood PDF can hold several; label them "file · Individual …4688"
+    everything = []
+    for f in pdf_files:
+        found = _read_pdf(f.getvalue())
+        for s in found:
+            label = f"{f.name} · {s.name_hint}" if len(found) > 1 and s.name_hint else f.name
+            everything.append((_Named(f, label), s))
     for f, s in everything:
         if not s.importable:                       # nothing to save: explain, no table row
             st.info(f"**{f.name}** - " + " ".join(s.notes), icon="ℹ️")
     parsed = [(f, s) for f, s in everything if s.importable]
     if not parsed:
         return
+    # Suggested account per row - but never the same existing account for statements with different
+    # account numbers (e.g. three Robinhood accounts vs. one manual "Robinhood" account): those default to new.
+    suggest = {i: _suggest_account(s) for i, (_, s) in enumerate(parsed)}
+    for name in {v for v in suggest.values() if v != NEW_ACCOUNT}:
+        rows_for = [i for i, v in suggest.items() if v == name]
+        if len({parsed[i][1].last4 for i in rows_for}) > 1:
+            for i in rows_for:
+                if accts.loc[accts["name"] == name, "last4"].iloc[0] != parsed[i][1].last4:
+                    suggest[i] = NEW_ACCOUNT
     edited_tables = []
     for kind, (title, fields, types) in STATEMENT_VIEWS.items():
         idx = [i for i, (_, s) in enumerate(parsed) if s.kind == kind]
@@ -698,7 +722,7 @@ def render_statement_review(pdf_files) -> None:
             rows.append({"row_id": i, "save": kind != "unknown" or s.balance is not None, "file": f.name,
                          "date": s.as_of, "balance": s.balance,
                          "rate": round(s.rate * 100, 3) if s.rate is not None else None, "payment": s.payment,
-                         "extras": s.extras, "account": _suggest_account(s),
+                         "extras": s.extras, "account": suggest[i],
                          "new_name": (f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip()
                                       + (f" – {s.name_hint}" if s.name_hint else "")),
                          "type": acct_type})
@@ -747,6 +771,11 @@ def render_statement_review(pdf_files) -> None:
                 got = parsed[r.row_id][1].last4
                 if pd.notna(known) and got and known != got:
                     mismatched.append(f"{r.file} is for an account ending {got}, but {r.account} ends {known}")
+        for acct_name, grp in chosen[chosen["account"] != NEW_ACCOUNT].groupby("account"):
+            digits = {parsed[i][1].last4 for i in grp["row_id"]} - {None}
+            if len(digits) > 1:
+                mismatched.append(f"{acct_name} is chosen for {len(digits)} different accounts "
+                                  f"(ending {', '.join(sorted(digits))})")
         if mismatched:
             st.error("These look like different accounts - pick ➕ New account or the right one: "
                      + "; ".join(mismatched))

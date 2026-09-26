@@ -129,7 +129,7 @@ def _institution(text: str) -> str:
     m = re.search(r"\b(?:The\s+)?((?:[A-Z][\w&.'-]*|\d+)(?:\s+(?:[A-Z][\w&.'-]*|\d+)){0,4}\s+Credit Union)\b", text)
     if m:                                                    # e.g. "The Golden 1 Credit Union"
         return m.group(1)
-    for name in ("Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
+    for name in ("Robinhood", "Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
                  "Discover", "U.S. Bank", "Fidelity", "Schwab", "Vanguard", "Rocket Mortgage", "Mr. Cooper"):
         if name.lower() in text.lower():
             return name
@@ -389,6 +389,56 @@ def parse_text(text: str) -> Statement:
     if missing and s.kind != "unknown":
         s.notes.append("Not found: " + ", ".join(missing))
     return s
+
+
+def _robinhood(t: str) -> Statement:
+    """One Robinhood account section: Portfolio Value (opening -> closing), positions, account number."""
+    s = Statement(kind="investment", institution="Robinhood", text=t)
+    m = re.search(r"(\d{2}/\d{2}/\d{4})\s+to\s+(\d{2}/\d{2}/\d{4})", t)
+    s.as_of = _parse_date(m.group(2)) if m else None
+    m = re.search(r"(?m)^([A-Za-z][A-Za-z ]*?)\s+Account\s*#:\s*(\d+)", t)
+    label = m.group(1).strip() if m else ""
+    if m:
+        s.last4 = m.group(2)[-4:]
+        s.name_hint = f"{label} …{s.last4}"
+    s.account_type = "retirement" if re.search(r"\b(IRA|Roth|Retirement)\b", label) else "brokerage"
+    m = re.search(rf"Portfolio Value\s+{MONEY}\s+{MONEY}", t)
+    if m:
+        s.balance = _money(m.group(2))
+        if s.as_of:
+            s.history.append((_prev_month_end(s.as_of), _money(m.group(1)), True))
+    # "SPDR S&P 500 ETF Trust\nEstimated Yield: 1.02% SPY Margin 37.514726 $767.05000 $28,775.67 ..."
+    for m in re.finditer(r"(?m)^(?P<desc>[^\n$]+)\nEstimated Yield:\s*[\d.]+%\s+(?P<sym>[A-Z.]{1,6})\s+(?:Cash|Margin)\s+"
+                         r"(?P<qty>[\d,]+(?:\.\d+)?)\s+\$(?P<price>[\d,]+\.\d+)\s+\$(?P<value>[\d,]+\.\d{2})", t):
+        s.holdings.append({"symbol": m["sym"], "description": m["desc"].strip(), "quantity": _num(m["qty"]),
+                           "price": _num(m["price"]), "value": _num(m["value"]), "cost_basis": None})
+    m = re.search(r"Brokerage Cash Balance\s+\$([\d,]+\.\d{2})", t)
+    if m and _num(m.group(1)) > 0:
+        s.holdings.append({"symbol": "CASH", "description": "Brokerage cash", "quantity": None, "price": None,
+                           "value": _num(m.group(1)), "cost_basis": None})
+    if s.holdings and s.balance is not None:
+        listed = sum(h["value"] for h in s.holdings)
+        if abs(s.balance - listed) > max(1.0, 0.01 * listed):
+            s.notes.append(f"The account value read (${s.balance:,.2f}) doesn't match the positions listed "
+                           f"(${listed:,.2f}) - check it before saving")
+    if s.balance is None or s.as_of is None:
+        s.notes.append("Not found: " + ", ".join(n for n, v in (("date", s.as_of), ("balance", s.balance)) if v is None))
+    return s
+
+
+def parse_pdf_all(pdf: bytes) -> list[Statement]:
+    """Every account in the PDF. Most statements cover one account; Robinhood (and some brokers) put
+    several accounts in one file, each starting with its own period + account-number header."""
+    text = extract_text(pdf)
+    if len(text.strip()) < 40:
+        return [Statement(kind="unknown", notes=["No text in this PDF (it may be a scan) - enter the values below"])]
+    if "robinhood" in text.lower() and "Account #:" in text:
+        starts = [m.start() for m in re.finditer(
+            r"\d{2}/\d{2}/\d{4}\s+to\s+\d{2}/\d{2}/\d{4}\n[^\n]+\n[^\n]*Account\s*#:", text)]
+        if starts:
+            bounds = starts + [len(text)]
+            return [_robinhood(text[a:b]) for a, b in zip(bounds, bounds[1:])]
+    return [parse_text(text)]
 
 
 def parse_pdf(pdf: bytes) -> Statement:

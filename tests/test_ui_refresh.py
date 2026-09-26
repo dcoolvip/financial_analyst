@@ -268,21 +268,22 @@ def test_statement_is_reread_after_the_reader_changes(env, monkeypatch):
     from tests.test_statements import WEALTHFRONT
     _, uploads = env
     pdf = Upload("STATEMENT_2025-08.pdf", _pdf(WEALTHFRONT.strip().splitlines()))
-    real = statements.parse_pdf
+    real = statements.parse_pdf_all
 
     def old_reader(data):                                    # what the buggy reader produced
-        s = real(data)
-        s.balance, s.holdings, s.history = 0.16, [], []
-        return s
+        out = real(data)
+        for s in out:
+            s.balance, s.holdings, s.history = 0.16, [], []
+        return out
     at = app()                                               # first load reloads modules; patch after it
-    monkeypatch.setattr(statements, "parse_pdf", old_reader)
+    monkeypatch.setattr(statements, "parse_pdf_all", old_reader)
     uploads["active"] = uploads["keys"][-1]
     uploads["files"] = [pdf]
     at.run()
     value = lambda: next(d.value for d in at.dataframe if "balance" in d.value.columns and "extras" in d.value.columns)
     assert value()["balance"].iloc[0] == pytest.approx(0.16)
 
-    monkeypatch.setattr(statements, "parse_pdf", real)       # the fix ships: reader code changes on disk
+    monkeypatch.setattr(statements, "parse_pdf_all", real)   # the fix ships: reader code changes on disk
     st_ = os.stat(statements.__file__)
     os.utime(statements.__file__, (st_.st_atime, st_.st_mtime + 5))
     try:
@@ -354,3 +355,26 @@ def test_balances_colored_and_hand_edits_recorded(env):
     log = db.recent_edits(conn)
     assert log.iloc[0]["account"] == "Chase Sapphire" and log.iloc[0]["new"] == "6337.08"
     assert any(e.label == "🕘 Recent changes" for e in at.expander)
+
+
+def test_multi_account_pdf_never_piles_into_one_existing_account(env):
+    """Three Robinhood accounts + an existing manual 'Robinhood Trading' (no account number): each must get
+    its own new account, not all three saved into the manual one."""
+    from tests.test_statements import ROBINHOOD_PAGE
+    conn, uploads = env
+    manual = db.add_account(conn, "Robinhood Trading", "Robinhood", "brokerage")
+    db.upsert_balance(conn, manual, "2025-08-31", 5_000)
+    pages = "".join(ROBINHOOD_PAGE.format(page=i, label="Individual", acct=a, open="1,000.00", close="1,400.00",
+                                          spy_pct=100, extra="", cash="0.00")
+                    for i, a in ((1, "111114688"), (4, "222222941"), (7, "333334782")))
+    at = app()
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("robinhood.pdf", _pdf(pages.splitlines()))]
+    at.run()
+    table = next(d.value for d in at.dataframe if "extras" in d.value.columns)
+    assert len(table) == 3 and set(table["account"]) == {"➕ New account"}           # one row per account
+    click(at, "Save statements")
+    accts = db.accounts(conn).set_index("name")
+    assert accts.loc["Robinhood Trading", "balance"] == 5_000                          # manual one untouched
+    assert len(accts) == 4                                                              # 3 new + the manual one
+    assert set(accts["last4"].dropna()) == {"4688", "2941", "4782"}
