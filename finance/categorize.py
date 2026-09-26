@@ -14,6 +14,7 @@ Model calls go through Floodgate with your AppleConnect session - see _call_mode
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -106,6 +107,8 @@ def _oidc_token() -> str:
 
 
 def available() -> bool:
+    if os.environ.get("FINANCE_NO_AI") == "1":   # tests / offline use: never call the model
+        return False
     return shutil.which("appleconnect") is not None
 
 

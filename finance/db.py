@@ -140,6 +140,26 @@ def update_account(conn, account_id: int, name: str, type: str) -> None:
     conn.commit()
 
 
+def apply_account_edits(conn, edits: dict[int, dict]) -> None:
+    """Edits from the Accounts table: {account_id: {name?, type?, rate?, payment?}}. A rate/payment of
+    None clears it. All-or-nothing, so a duplicate name doesn't leave half the edits applied."""
+    try:
+        for account_id, f in edits.items():
+            if "type" in f and f["type"] not in ACCOUNT_TYPES:
+                raise ValueError(f"Unknown account type {f['type']!r}")
+            if "name" in f and not str(f["name"]).strip():
+                raise ValueError("Account names can't be empty")
+            sets = {k: (str(v).strip() if k == "name" else v) for k, v in f.items()
+                    if k in ("name", "type", "rate", "payment")}
+            if sets:
+                conn.execute(f"UPDATE accounts SET {', '.join(f'{k} = ?' for k in sets)} WHERE id = ?",
+                             (*sets.values(), account_id))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def update_account_details(conn, account_id: int, **fields) -> None:
     """Set only the given fields (rate, payment, last4); None values are skipped, never cleared."""
     fields = {k: v for k, v in fields.items() if k in ("rate", "payment", "last4") and v is not None}

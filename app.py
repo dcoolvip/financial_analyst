@@ -12,7 +12,7 @@ import streamlit as st
 import finance.importers.base
 import finance.importers.bofa
 import finance.importers.statements
-from finance import categorize, charts, db, demo, forecast, importers, insights, paths, portfolio
+from finance import categorize, charts, db, demo, editing, forecast, importers, insights, paths, portfolio
 
 
 @st.cache_resource
@@ -26,7 +26,7 @@ def _reload_changed_modules() -> None:
     was loaded, dependencies first, so a refresh always runs current code."""
     order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio]
+             insights, forecast, charts, demo, portfolio, editing]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -124,7 +124,31 @@ with st.sidebar:
         st.markdown('<a href="/security" target="_self">🔐 Security &amp; passkeys</a> &nbsp;·&nbsp; '
                     '<a href="/logout" target="_self">Sign out</a>', unsafe_allow_html=True)
 
-conn = get_conn(str(paths.data_dir() / ("demo.db" if source == "Demo data" else "finance.db")))
+DB_PATH = paths.data_dir() / ("demo.db" if source == "Demo data" else "finance.db")
+conn = get_conn(str(DB_PATH))
+
+
+def _data_version() -> int:
+    """Changes whenever anything writes to the database - from this page or another device."""
+    try:
+        return os.stat(DB_PATH).st_mtime_ns
+    except FileNotFoundError:
+        return 0
+
+
+# Other open pages (phone, PC, another tab) redraw on their own when data changes elsewhere: a tiny
+# fragment checks every few seconds and reruns the page only if the database file changed.
+st.session_state["data_version"] = _data_version()
+
+
+@st.fragment(run_every="4s")
+def _watch_for_changes() -> None:
+    if _data_version() != st.session_state.get("data_version"):
+        st.rerun(scope="app")
+
+
+with st.sidebar:
+    _watch_for_changes()
 mode = "dark" if getattr(st.context, "theme", None) and st.context.theme.type == "dark" else "light"
 
 
@@ -161,7 +185,7 @@ def run_ai_categorize() -> None:
         bar.empty()
 
 if msg := st.session_state.pop("flash", None):   # confirmation from the previous action, on any tab
-    st.toast(msg, icon="✅")
+    st.toast(msg, icon="⚠️" if msg.startswith("Couldn't") else "✅")
 
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
     ["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
@@ -465,18 +489,45 @@ with tab_flow:
 
 # --- accounts -----------------------------------------------------------------
 
+LABEL_TO_TYPE = {v: k for k, v in TYPE_LABELS.items()}
+
+
 with tab_accounts:
     if len(accts):
         table = accts.assign(
             Group=accts["type"].map(insights.GROUPS), Type=accts["type"].map(TYPE_LABELS),
             Updated=pd.to_datetime(accts["as_of"]),
-        ).sort_values(["is_liability", "Group", "name"])
-        st.dataframe(table[["name", "balance", "Updated"] if PHONE else ["name", "Group", "Type", "balance", "Updated"]],
-                     hide_index=True, width="stretch", column_config={
-                         "name": "Account",
-                         "balance": st.column_config.NumberColumn("Balance", format="$%,.0f" if PHONE else "$%,.2f"),
-                         "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
-        st.caption("Debts show what you owe as a positive number.")
+            rate_pct=(accts["rate"] * 100).round(3), payment=accts["payment"],
+        ).sort_values(["is_liability", "Group", "name"]).reset_index(drop=True)
+        has_debt = bool(table["is_liability"].any())
+        cols = (["name", "balance", "Updated"] if PHONE else
+                ["name", "Group", "Type", "balance"] + (["rate_pct", "payment"] if has_debt else []) + ["Updated"])
+        ver = st.session_state.get("acct_table_ver", 0)
+        edited = st.data_editor(
+            table, hide_index=True, width="stretch", column_order=cols, key=f"acct_table_{ver}",
+            disabled=["Group", "balance", "Updated"],
+            column_config={
+                "name": st.column_config.TextColumn("Account ✏️", required=True),
+                "Type": st.column_config.SelectboxColumn("Type ✏️", options=list(TYPE_LABELS.values()), required=True),
+                "balance": st.column_config.NumberColumn("Balance", format="$%,.0f" if PHONE else "$%,.2f"),
+                "rate_pct": st.column_config.NumberColumn("Rate % ✏️", format="%.3f", min_value=0, max_value=40,
+                                                          help="Interest rate, for loans and cards"),
+                "payment": st.column_config.NumberColumn("Payment ✏️", format="$%,.2f", min_value=0,
+                                                         help="Monthly principal + interest, for loans"),
+                "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
+        st.caption("Double-click a ✏️ cell to change it. Debts show what you owe as a positive number."
+                   + ("" if PHONE else " Rate and payment apply to loans and cards."))
+
+        edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)
+        if edits:
+            try:
+                db.apply_account_edits(conn, edits)
+                st.session_state["flash"] = "Saved changes to " + ", ".join(
+                    table.loc[table["id"] == i, "name"].iloc[0] for i in edits)
+            except Exception as e:  # noqa: BLE001 - e.g. two accounts with the same name
+                st.session_state["flash"] = f"Couldn't save: {e}"
+            st.session_state["acct_table_ver"] = ver + 1      # fresh editor showing the saved values
+            st.rerun()
 
     names = dict(zip(accts["name"], accts["id"]))
     c1, c2 = st.columns(2, gap="large")
@@ -484,42 +535,14 @@ with tab_accounts:
         if names:
             with st.form("balance", clear_on_submit=True, border=True):
                 st.markdown("**Update a balance**")
-                st.caption("For anything without a CSV: mortgage, home value, car, 401k…")
+                st.caption("For anything without a statement or CSV: home value, car, 401k…")
                 acct = st.selectbox("Account", list(names))
                 when = st.date_input("As of", value=date.today())
                 amt = st.number_input("Balance ($)", min_value=0.0, step=100.0)
                 if st.form_submit_button("Save balance", type="primary"):
                     db.upsert_balance(conn, names[acct], when, amt)
                     st.rerun()
-
-        loans = accts[accts["is_liability"]]
-        if len(loans):
-            with st.form("terms", border=True):
-                st.markdown("**Loan details** (makes the forecast accurate)")
-                ln = st.selectbox("Loan", list(loans["name"]))
-                row = loans[loans["name"] == ln].iloc[0]
-                apr = st.number_input("Interest rate (APR %)", min_value=0.0, max_value=40.0, step=0.125,
-                                      value=float(row["rate"] * 100) if pd.notna(row["rate"]) else 0.0)
-                pay = st.number_input("Monthly payment ($)", min_value=0.0, step=10.0,
-                                      value=float(row["payment"]) if pd.notna(row["payment"]) else 0.0)
-                if st.form_submit_button("Save loan details"):
-                    db.update_account_terms(conn, int(row["id"]), apr / 100, pay or None)
-                    st.rerun()
     with c2:
-        if names:
-            with st.form("edit_account", border=True):
-                st.markdown("**Rename or change an account's type**")
-                ed = st.selectbox("Account", list(names), key="ed_acct")
-                row = accts[accts["name"] == ed].iloc[0]
-                new_name = st.text_input("Name", value=ed, key=f"ed_name_{row['id']}")
-                new_type = st.selectbox("Type", list(TYPE_LABELS), format_func=TYPE_LABELS.get,
-                                        index=list(TYPE_LABELS).index(row["type"]), key=f"ed_type_{row['id']}")
-                if st.form_submit_button("Save changes"):
-                    try:
-                        db.update_account(conn, int(row["id"]), new_name, new_type)
-                        st.rerun()
-                    except Exception as e:  # noqa: BLE001 - duplicate name etc.
-                        st.error(f"Couldn't save: {e}")
         with st.form("new_account", clear_on_submit=True, border=True):
             st.markdown("**Add an account**")
             name = st.text_input("Name", placeholder="e.g. BofA Checking")
@@ -694,6 +717,9 @@ with tab_add:
     if pdf_files:
         render_statement_review(pdf_files)
     for f in files:
+        if f.file_id in st.session_state.get("imported_files", set()):
+            st.caption(f"✅ {f.name} imported")
+            continue
         with st.container(border=True):
             try:
                 parsed = parse_file(f.getvalue())
@@ -722,16 +748,16 @@ with tab_add:
                 acct_id = (db.get_or_create_account(conn, new_name, parsed.institution, new_type) if new_name
                            else int(matches.loc[matches["name"] == target, "id"].iloc[0]))
                 r = apply(conn, parsed, acct_id, f.name)
-                st.success(f"Added {r['transactions_added']} transactions"
-                           + (f" ({r['transactions_skipped']} already there)" if r["transactions_skipped"] else "")
-                           + (f", {r['positions']} positions" if r["positions"] else "")
-                           + (f", {r['balances']} balance points" if r["balances"] else "") + ".")
                 if r["transactions_added"] and categorize.available():
                     txns = db.transactions(conn)   # include what was just imported
                     run_ai_categorize()
                 done = st.session_state.setdefault("imported_files", set())
                 done.add(f.file_id)
+                st.session_state["flash"] = (
+                    f"{f.name}: added {r['transactions_added']} transactions"
+                    + (f" ({r['transactions_skipped']} already there)" if r["transactions_skipped"] else "")
+                    + (f", {r['positions']} positions" if r["positions"] else "")
+                    + (f", {r['balances']} balance points" if r["balances"] else ""))
                 if all(x.file_id in done for x in files):          # every CSV imported: clear the uploader
-                    st.session_state["flash"] = f"Imported {len(files)} file(s)"
                     st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
-                    st.rerun()
+                st.rerun()                                          # every tab reflects the import right away
