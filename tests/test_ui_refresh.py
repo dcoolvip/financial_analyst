@@ -246,3 +246,15 @@ def test_wrong_import_can_be_undone_from_the_ui(env):
     click(at, "Restore")
     assert len(db.transactions(conn)) == 0                                      # back to before the import
     assert any("Restored" in t.value for t in at.toast)
+
+
+def test_trade_confirmation_shows_explanation_not_a_table(env):
+    _, uploads = env
+    at = app()
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("CONFIRM_2026-09-22.pdf", _pdf(["Trade Confirmation", "Date: 9/22/2026",
+                                                               "Wealthfront Brokerage LLC", "Buy 7.77 $1.0000 $7.77"]))]
+    at.run()
+    assert any("trade confirmation" in i.value for i in at.info)
+    assert not [m for m in at.markdown if m.value == "**Not recognized**"]
+    assert not [b for b in at.button if b.label == "Save statements"]           # nothing to save

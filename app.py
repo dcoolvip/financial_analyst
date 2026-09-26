@@ -613,7 +613,13 @@ def render_statement_review(pdf_files) -> None:
     """One small table per kind of statement, showing only the values that apply to it. Nothing is
     saved until 'Save statements', so a misread value can be fixed first."""
     st.markdown("#### Statements")
-    parsed = [(f, _read_pdf(f.getvalue())) for f in pdf_files]
+    everything = [(f, _read_pdf(f.getvalue())) for f in pdf_files]
+    for f, s in everything:
+        if not s.importable:                       # nothing to save: explain, no table row
+            st.info(f"**{f.name}** - " + " ".join(s.notes), icon="ℹ️")
+    parsed = [(f, s) for f, s in everything if s.importable]
+    if not parsed:
+        return
     edited_tables = []
     for kind, (title, fields, types) in STATEMENT_VIEWS.items():
         idx = [i for i, (_, s) in enumerate(parsed) if s.kind == kind]

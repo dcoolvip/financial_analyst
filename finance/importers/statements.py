@@ -41,6 +41,7 @@ class Statement:
     history: list[tuple[date, float, bool]] = field(default_factory=list)   # (date, value, exact?)
     holdings: list[dict] = field(default_factory=list)   # symbol, description, quantity, price, value, cost_basis
     grants: list[dict] = field(default_factory=list)     # unvested RSUs: grant_date, grant_id, symbol, quantity, value
+    importable: bool = True          # False for documents with nothing to save (e.g. trade confirmations)
 
     @property
     def extras(self) -> str:
@@ -339,7 +340,7 @@ def _etrade_extras(s: Statement, t: str) -> None:
 
 def parse_text(text: str) -> Statement:
     if re.search(r"\bTrade Confirmation\b", text[:400], re.IGNORECASE):
-        return Statement(kind="unknown", institution=_institution(text), text=text, notes=[
+        return Statement(kind="unknown", institution=_institution(text), text=text, importable=False, notes=[
             "This is a trade confirmation (a record of individual trades), not a statement - it doesn't include "
             "the account's value. Download the monthly statement instead."])
     s = Statement(kind=_kind(text), institution=_institution(text), last4=_last4(text), text=text)
