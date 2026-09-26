@@ -12,7 +12,7 @@ import streamlit as st
 import finance.importers.base
 import finance.importers.bofa
 import finance.importers.statements
-from finance import categorize, charts, db, demo, forecast, importers, insights, paths
+from finance import categorize, charts, db, demo, forecast, importers, insights, paths, portfolio
 
 
 @st.cache_resource
@@ -26,7 +26,7 @@ def _reload_changed_modules() -> None:
     was loaded, dependencies first, so a refresh always runs current code."""
     order = [paths, categorize, db, finance.importers.base, finance.importers.bofa, finance.importers.statements,
              importers,
-             insights, forecast, charts, demo]
+             insights, forecast, charts, demo, portfolio]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -235,6 +235,27 @@ with tab_overview:
                                            compact=PHONE))
             else:
                 st.success("Nothing. Debt-free! 🎉")
+
+        holdings = db.latest_holdings(conn)
+        if len(holdings):
+            pf = portfolio.summarize(holdings)
+            st.markdown("#### Investments")
+            for sym, share in pf["concentrated"]:
+                st.warning(f"**{sym}** is **{share:.0%}** of your investments. A single company that large "
+                           "adds risk; many planners suggest keeping any one stock under 10%.", icon="⚠️")
+            mix_col, top_col = st.columns([1, 1.4]) if not PHONE else (st.container(), st.container())
+            with mix_col:
+                st.caption(f"Mix of {money(pf['total'])} in positions")
+                plot(charts.breakdown_bars({c: v for c, v in pf["by_class"].items() if v}, mode, compact=PHONE))
+            with top_col:
+                st.caption("Top holdings")
+                top = pf["top"].assign(label=lambda d: d["symbol"] + " · " + d["description"].fillna("").str[:28])
+                st.dataframe(top[["label", "value", "share"] if PHONE else ["label", "accounts", "value", "share"]],
+                             hide_index=True, width="stretch", column_config={
+                                 "label": "Holding", "accounts": "Account",
+                                 "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
+                                 "share": st.column_config.ProgressColumn("Share", format="percent",
+                                                                          min_value=0, max_value=1)})
 
 
 # --- future -------------------------------------------------------------------
@@ -473,6 +494,20 @@ with tab_accounts:
                     db.update_account_terms(conn, int(row["id"]), apr / 100, pay or None)
                     st.rerun()
     with c2:
+        if names:
+            with st.form("edit_account", border=True):
+                st.markdown("**Rename or change an account's type**")
+                ed = st.selectbox("Account", list(names), key="ed_acct")
+                row = accts[accts["name"] == ed].iloc[0]
+                new_name = st.text_input("Name", value=ed, key=f"ed_name_{row['id']}")
+                new_type = st.selectbox("Type", list(TYPE_LABELS), format_func=TYPE_LABELS.get,
+                                        index=list(TYPE_LABELS).index(row["type"]), key=f"ed_type_{row['id']}")
+                if st.form_submit_button("Save changes"):
+                    try:
+                        db.update_account(conn, int(row["id"]), new_name, new_type)
+                        st.rerun()
+                    except Exception as e:  # noqa: BLE001 - duplicate name etc.
+                        st.error(f"Couldn't save: {e}")
         with st.form("new_account", clear_on_submit=True, border=True):
             st.markdown("**Add an account**")
             name = st.text_input("Name", placeholder="e.g. BofA Checking")

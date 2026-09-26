@@ -119,6 +119,13 @@ def update_account_terms(conn, account_id: int, rate: float | None, payment: flo
     conn.commit()
 
 
+def update_account(conn, account_id: int, name: str, type: str) -> None:
+    if type not in ACCOUNT_TYPES:
+        raise ValueError(f"Unknown account type {type!r}")
+    conn.execute("UPDATE accounts SET name = ?, type = ? WHERE id = ?", (name.strip(), type, account_id))
+    conn.commit()
+
+
 def update_account_details(conn, account_id: int, **fields) -> None:
     """Set only the given fields (rate, payment, last4); None values are skipped, never cleared."""
     fields = {k: v for k, v in fields.items() if k in ("rate", "payment", "last4") and v is not None}
