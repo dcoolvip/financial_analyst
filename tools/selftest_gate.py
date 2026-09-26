@@ -95,7 +95,48 @@ async def run() -> list[tuple[str, bool, str]]:
                 check("Live WebSocket through the gate", not ws.closed and ws.protocol == "streamlit", str(ws.protocol))
         except Exception as e:  # noqa: BLE001
             check("Live WebSocket through the gate", False, f"{type(e).__name__}: {e}")
+        # Act like a browser: run the page, then "click" (rerun) again - each run's updates must come back
+        for label, url, sess in (("through the gate", f"wss://localhost:{GATE}/_stcore/stream", s),
+                                 ("direct to Streamlit (baseline)", f"ws://127.0.0.1:{UP}/_stcore/stream", None)):
+            try:
+                result = await _two_reruns(url, sess, tls)
+                check(f"Page updates {label}", all(n > 0 for n in result), f"deltas per run: {result}")
+            except Exception as e:  # noqa: BLE001
+                check(f"Page updates {label}", False, f"{type(e).__name__}: {e}")
     return results
+
+
+async def _two_reruns(url: str, session, tls) -> list[int]:
+    """Send two 'rerun' messages like the browser does after a click; count UI updates for each."""
+    from streamlit.proto.BackMsg_pb2 import BackMsg
+    from streamlit.proto.ClientState_pb2 import ClientState
+    from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
+    own = session is None
+    session = session or aiohttp.ClientSession()
+    counts = []
+    try:
+        async with session.ws_connect(url, protocols=["streamlit"], headers={"Origin": ORIGIN},
+                                      ssl=tls if url.startswith("wss") else False) as ws:
+            for _ in range(2):
+                msg = BackMsg()
+                msg.rerun_script.CopyFrom(ClientState(query_string="", page_script_hash=""))
+                await ws.send_bytes(msg.SerializeToString())
+                deltas = 0
+                while True:
+                    m = await asyncio.wait_for(ws.receive(), 30)
+                    if m.type != aiohttp.WSMsgType.BINARY:
+                        raise RuntimeError(f"connection ended ({m.type.name})")
+                    fm = ForwardMsg()
+                    fm.ParseFromString(m.data)
+                    kind = fm.WhichOneof("type")
+                    deltas += kind == "delta"
+                    if kind == "script_finished":
+                        break
+                counts.append(deltas)
+    finally:
+        if own:
+            await session.close()
+    return counts
 
 
 def main() -> int:

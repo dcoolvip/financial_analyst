@@ -160,6 +160,9 @@ def run_ai_categorize() -> None:
     finally:
         bar.empty()
 
+if msg := st.session_state.pop("flash", None):   # confirmation from the previous action, on any tab
+    st.toast(msg, icon="✅")
+
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
     ["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
     ["Overview", "Future", "Money in & out", "Accounts", "Add data"])
@@ -458,8 +461,6 @@ with tab_flow:
             st.session_state["flash"] = f"Updated {n} transaction(s) from {', '.join(changed['merchant'].unique())}"
             del st.session_state[editor_key]
             st.rerun()
-        if msg := st.session_state.pop("flash", None):
-            st.toast(msg, icon="✅")
 
 
 # --- accounts -----------------------------------------------------------------
@@ -554,12 +555,19 @@ def _read_pdf(data: bytes) -> statements.Statement:
 
 
 def _suggest_account(s: statements.Statement) -> str:
+    """Only suggest an existing account when it's clearly the same one: same account-number digits, or
+    the only account of this type at the same institution (and not already tied to other digits).
+    Otherwise default to a new account - people often have several brokerage/checking accounts."""
     if s.last4:
         hit = accts[accts["last4"] == s.last4]
         if len(hit) == 1:
             return hit["name"].iloc[0]
-    same_type = accts[accts["type"] == s.account_type] if s.account_type else accts.iloc[0:0]
-    return same_type["name"].iloc[0] if len(same_type) == 1 else NEW_ACCOUNT
+    if s.institution and s.account_type:
+        same = accts[(accts["institution"] == s.institution) & (accts["type"] == s.account_type)
+                     & (accts["last4"].isna() | (accts["last4"] == s.last4))]
+        if len(same) == 1:
+            return same["name"].iloc[0]
+    return NEW_ACCOUNT
 
 
 # Per statement kind: table title, the value columns that apply, and the account types a new account may be
@@ -632,6 +640,17 @@ def render_statement_review(pdf_files) -> None:
         if problems:
             st.error("Fill in the statement date, balance (and a name for new accounts) for: " + ", ".join(problems))
             return
+        mismatched = []
+        for r in chosen.itertuples():
+            if r.account != NEW_ACCOUNT:
+                known = accts.loc[accts["name"] == r.account, "last4"].iloc[0]
+                got = parsed[r.row_id][1].last4
+                if pd.notna(known) and got and known != got:
+                    mismatched.append(f"{r.file} is for an account ending {got}, but {r.account} ends {known}")
+        if mismatched:
+            st.error("These look like different accounts - pick ➕ New account or the right one: "
+                     + "; ".join(mismatched))
+            return
         ids = {}
         for r in chosen.itertuples():
             if r.account == NEW_ACCOUNT:
@@ -651,6 +670,7 @@ def render_statement_review(pdf_files) -> None:
                 history=orig.history, holdings=orig.holdings, grants=orig.grants)
             apply_statement(conn, s, ids[r.row_id], r.file, latest=r.row_id in newest)
         st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
+        st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1   # empty the uploader
         st.rerun()
 
 
@@ -667,7 +687,8 @@ with tab_add:
             "- **Any statement PDF** (checking, savings, card, Merrill) adds that month's balance - handy for "
             "history older than the CSV download allows.\n\n"
             "Overlapping files are fine. Duplicates are skipped automatically.")
-    files = st.file_uploader("Drop CSV or statement PDF files here", type=["csv", "pdf"], accept_multiple_files=True)
+    files = st.file_uploader("Drop CSV or statement PDF files here", type=["csv", "pdf"], accept_multiple_files=True,
+                             key=f"uploader_{st.session_state.get('uploads_done', 0)}")
     pdf_files = [f for f in files or [] if f.name.lower().endswith(".pdf")]
     files = [f for f in files or [] if not f.name.lower().endswith(".pdf")]
     if pdf_files:
@@ -708,3 +729,9 @@ with tab_add:
                 if r["transactions_added"] and categorize.available():
                     txns = db.transactions(conn)   # include what was just imported
                     run_ai_categorize()
+                done = st.session_state.setdefault("imported_files", set())
+                done.add(f.file_id)
+                if all(x.file_id in done for x in files):          # every CSV imported: clear the uploader
+                    st.session_state["flash"] = f"Imported {len(files)} file(s)"
+                    st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
+                    st.rerun()
