@@ -574,11 +574,17 @@ SHORT_INST = {"Bank of America": "BofA", "American Express": "Amex"}
 
 
 @st.cache_data(show_spinner=False, max_entries=200)
-def _read_pdf(data: bytes) -> statements.Statement:
+def _read_pdf_cached(data: bytes, reader_version: float) -> statements.Statement:
+    """Cached by file contents AND reader version: when the reading code changes, files are re-read
+    (keying on contents alone kept serving results from the old code after a fix)."""
     try:
         return statements.parse_pdf(data)
     except Exception as e:  # noqa: BLE001 - damaged/protected PDFs become a row you fill in by hand
         return statements.Statement(kind="unknown", notes=[f"Couldn't read this PDF: {e}"])
+
+
+def _read_pdf(data: bytes) -> statements.Statement:
+    return _read_pdf_cached(data, os.path.getmtime(statements.__file__))
 
 
 def _suggest_account(s: statements.Statement) -> str:

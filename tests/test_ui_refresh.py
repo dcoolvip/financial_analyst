@@ -258,3 +258,35 @@ def test_trade_confirmation_shows_explanation_not_a_table(env):
     assert any("trade confirmation" in i.value for i in at.info)
     assert not [m for m in at.markdown if m.value == "**Not recognized**"]
     assert not [b for b in at.button if b.label == "Save statements"]           # nothing to save
+
+
+def test_statement_is_reread_after_the_reader_changes(env, monkeypatch):
+    """Regression: PDF results were cached by file contents only, so after a reader fix the same file
+    kept returning the old (wrong) value - the Wealthfront $0.16."""
+    import os
+    from finance.importers import statements
+    from tests.test_statements import WEALTHFRONT
+    _, uploads = env
+    pdf = Upload("STATEMENT_2025-08.pdf", _pdf(WEALTHFRONT.strip().splitlines()))
+    real = statements.parse_pdf
+
+    def old_reader(data):                                    # what the buggy reader produced
+        s = real(data)
+        s.balance, s.holdings, s.history = 0.16, [], []
+        return s
+    at = app()                                               # first load reloads modules; patch after it
+    monkeypatch.setattr(statements, "parse_pdf", old_reader)
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [pdf]
+    at.run()
+    value = lambda: next(d.value for d in at.dataframe if "balance" in d.value.columns and "extras" in d.value.columns)
+    assert value()["balance"].iloc[0] == pytest.approx(0.16)
+
+    monkeypatch.setattr(statements, "parse_pdf", real)       # the fix ships: reader code changes on disk
+    st_ = os.stat(statements.__file__)
+    os.utime(statements.__file__, (st_.st_atime, st_.st_mtime + 5))
+    try:
+        at.run()
+        assert value()["balance"].iloc[0] == pytest.approx(10_550)   # re-read, not served from the cache
+    finally:
+        os.utime(statements.__file__, (st_.st_atime, st_.st_mtime))
