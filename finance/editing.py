@@ -8,6 +8,24 @@ def _num(v):
     return None if v is None or pd.isna(v) else float(v)
 
 
+def to_display(balance, is_liability: bool):
+    """Stored: debts as amount owed (positive). Shown: debts negative, a card in credit positive."""
+    return None if balance is None or pd.isna(balance) else (-balance if is_liability else balance)
+
+
+def to_stored(shown: float, is_liability: bool) -> float:
+    return -shown if is_liability else shown
+
+
+def balance_edits(before: pd.DataFrame, after: pd.DataFrame) -> dict[int, float]:
+    """{account_id: value to store} for rows whose Balance cell was edited."""
+    out = {}
+    for b, a in zip(before.itertuples(), after.itertuples()):
+        if _num(a.shown_balance) is not None and _num(a.shown_balance) != _num(b.shown_balance):
+            out[int(b.id)] = to_stored(_num(a.shown_balance), bool(b.is_liability))
+    return out
+
+
 def account_edits(before: pd.DataFrame, after: pd.DataFrame, label_to_type: dict[str, str],
                   terms: bool) -> dict[int, dict]:
     """{account_id: {name?, type?, rate?, payment?}} for rows that changed. `terms`: the rate/payment

@@ -290,3 +290,43 @@ def test_statement_is_reread_after_the_reader_changes(env, monkeypatch):
         assert value()["balance"].iloc[0] == pytest.approx(10_550)   # re-read, not served from the cache
     finally:
         os.utime(statements.__file__, (st_.st_atime, st_.st_mtime))
+
+
+def test_cards_without_balance_are_flagged_and_signs_are_intuitive(env):
+    conn, _ = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 10_000)
+    card = db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")
+    at = app()
+    assert any("have no balance yet" in m.value and "Chase Sapphire" in m.value for m in at.markdown)   # Overview
+    accounts = table_with(at, "shown_balance")
+    assert accounts.loc[accounts["name"] == "Chase Sapphire", "status"].iloc[0] == "⚠️ needs a balance"
+
+    at.selectbox(key=[s.key for s in at.selectbox if s.label == "Account"][0]).set_value("Chase Sapphire")
+    [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(-1200.0)          # owe $1,200
+    click(at, "Save balance")
+    assert hero(at) == "$8,800"                                                             # 10,000 - 1,200
+    accounts = table_with(at, "shown_balance")
+    assert accounts.loc[accounts["name"] == "Chase Sapphire", "shown_balance"].iloc[0] == -1200   # shown negative
+    assert db.accounts(conn).set_index("name").loc["Chase Sapphire", "balance"] == 1200           # stored as owed
+    assert not any("have no balance yet" in m.value for m in at.markdown)
+
+
+def test_overpaid_card_counts_as_money_you_have(env):
+    conn, _ = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 10_000)
+    db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")
+    at = app()
+    at.selectbox(key=[s.key for s in at.selectbox if s.label == "Account"][0]).set_value("Chase Sapphire")
+    [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(50.0)             # a $50 credit
+    click(at, "Save balance")
+    assert hero(at) == "$10,050"
+
+
+def test_balance_cell_edit_saves_as_today():
+    from finance.editing import balance_edits, to_display, to_stored
+    assert to_display(1200.0, True) == -1200 and to_display(500.0, False) == 500 and to_display(None, True) is None
+    assert to_stored(-1200.0, True) == 1200 and to_stored(50.0, True) == -50
+    before = pd.DataFrame({"id": [1, 2], "shown_balance": [None, 500.0], "is_liability": [True, False]})
+    after = before.copy()
+    after.loc[0, "shown_balance"] = -1234.56
+    assert balance_edits(before, after) == {1: pytest.approx(1234.56)}

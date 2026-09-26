@@ -243,7 +243,12 @@ with tab_overview:
                          f"({yr / abs(base):+.0%}).")
         if own:
             notes.append(f"🏦 Debt is **{owe / own:.0%}** of what you own.")
-        stale = insights.stale_accounts(accts)
+        missing = accts[accts["balance"].isna()]
+        if len(missing):
+            notes.append(f"💳 **{len(missing)} account(s) have no balance yet:** " + ", ".join(missing["name"])
+                         + ". Card downloads don't include one - type it into the **Accounts** table "
+                         "(what you owe as a negative number), or import a statement PDF.")
+        stale = insights.stale_accounts(accts[accts["balance"].notna()])
         if len(stale):
             notes.append(f"⏰ {len(stale)} account(s) haven't been updated in 45+ days: "
                          + ", ".join(stale["name"]) + ". Update them in **Accounts**.")
@@ -501,27 +506,41 @@ with tab_accounts:
             Group=accts["type"].map(insights.GROUPS), Type=accts["type"].map(TYPE_LABELS),
             Updated=pd.to_datetime(accts["as_of"]),
             rate_pct=(accts["rate"] * 100).round(3), payment=accts["payment"],
+            shown_balance=[editing.to_display(b, l) for b, l in zip(accts["balance"], accts["is_liability"])],
+            status=["⚠️ needs a balance" if pd.isna(b) else "" for b in accts["balance"]],
         ).sort_values(["is_liability", "Group", "name"]).reset_index(drop=True)
         has_debt = bool(table["is_liability"].any())
-        cols = (["name", "balance", "Updated"] if PHONE else
-                ["name", "Group", "Type", "balance"] + (["rate_pct", "payment"] if has_debt else []) + ["Updated"])
+        cols = (["name", "shown_balance", "Updated"] if PHONE else
+                ["name", "Group", "Type", "shown_balance"] + (["rate_pct", "payment"] if has_debt else [])
+                + ["Updated"] + (["status"] if table["status"].any() else []))
         ver = st.session_state.get("acct_table_ver", 0)
         edited = st.data_editor(
             table, hide_index=True, width="stretch", column_order=cols, key=f"acct_table_{ver}",
-            disabled=["Group", "balance", "Updated"],
+            disabled=["Group", "Updated", "status"],
             column_config={
                 "name": st.column_config.TextColumn("Account ✏️", required=True),
                 "Type": st.column_config.SelectboxColumn("Type ✏️", options=list(TYPE_LABELS.values()), required=True),
-                "balance": st.column_config.NumberColumn("Balance", format="$%,.0f" if PHONE else "$%,.2f"),
+                "shown_balance": st.column_config.NumberColumn(
+                    "Balance ✏️", format="$%,.0f" if PHONE else "$%,.2f",
+                    help="Debts are negative (a card you've overpaid is positive). A new value is saved as of today."),
+                "status": st.column_config.TextColumn(""),
                 "rate_pct": st.column_config.NumberColumn("Rate % ✏️", format="%.3f", min_value=0, max_value=40,
                                                           help="Interest rate, for loans and cards"),
                 "payment": st.column_config.NumberColumn("Payment ✏️", format="$%,.2f", min_value=0,
                                                          help="Monthly principal + interest, for loans"),
                 "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
-        st.caption("Double-click a ✏️ cell to change it. Debts show what you owe as a positive number."
+        st.caption("Double-click a ✏️ cell to change it. Debts are negative; a new balance is saved as of today."
                    + ("" if PHONE else " Rate and payment apply to loans and cards."))
 
         edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)
+        new_balances = editing.balance_edits(table, edited)
+        for aid, value in new_balances.items():
+            db.upsert_balance(conn, aid, date.today(), value, "manual")
+        if new_balances and not edits:
+            st.session_state["flash"] = "Saved balance for " + ", ".join(
+                table.loc[table["id"] == i, "name"].iloc[0] for i in new_balances)
+            st.session_state["acct_table_ver"] = ver + 1
+            st.rerun()
         if edits:
             try:
                 db.apply_account_edits(conn, edits)
@@ -541,9 +560,11 @@ with tab_accounts:
                 st.caption("For anything without a statement or CSV: home value, car, 401k…")
                 acct = st.selectbox("Account", list(names))
                 when = st.date_input("As of", value=date.today())
-                amt = st.number_input("Balance ($)", min_value=0.0, step=100.0)
+                amt = st.number_input("Balance ($)", step=100.0,
+                                      help="For cards and loans, enter what you owe as a negative number")
                 if st.form_submit_button("Save balance", type="primary"):
-                    db.upsert_balance(conn, names[acct], when, amt)
+                    liab = bool(accts.loc[accts["name"] == acct, "is_liability"].iloc[0])
+                    db.upsert_balance(conn, names[acct], when, editing.to_stored(amt, liab))
                     st.rerun()
     with c2:
         with st.form("new_account", clear_on_submit=True, border=True):
