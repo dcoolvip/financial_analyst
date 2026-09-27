@@ -182,3 +182,15 @@ def test_overview_insights_are_worked_out_from_the_data():
     assert "Car loan" in out["🏦"]["text"] and "Sep 2027" in out["🏦"]["text"]    # 12 payments of $1,000
     assert "Checking (Aug 1)" in out["⏰"]["text"] and "Gold" not in out["⏰"]["text"]  # gold: fine for months
     assert all(i["help"] for i in out.values())
+
+
+def test_volatility_not_inflated_by_yearly_points():
+    """Regression: gold with yearly values 2021-2025 then monthly 2026 showed ±55%/yr swings - each year's move
+    was treated as one month's."""
+    from finance.assets import volatility
+    yearly = pd.DataFrame({"date": pd.to_datetime([f"{y}-12-31" for y in range(2020, 2026)]),
+                           "balance": 100 * 1.15 ** np.arange(6)})                     # steady +15%/yr
+    monthly = pd.DataFrame({"date": pd.date_range("2026-01-31", periods=9, freq="ME"),
+                            "balance": 100 * 1.15 ** 5 * np.where(np.arange(9) % 2, 1.03, 0.97)})   # ±3% a month
+    v = volatility(pd.concat([yearly, monthly]))
+    assert 0.05 < v < 0.25, v

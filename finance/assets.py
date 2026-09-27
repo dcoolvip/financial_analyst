@@ -53,13 +53,19 @@ def years_of_history(history: pd.DataFrame) -> float:
 
 
 def volatility(history: pd.DataFrame) -> float | None:
-    """Yearly volatility from month-to-month changes in value, or None if there aren't enough."""
+    """Yearly volatility from the changes between recorded values, or None if there aren't enough.
+    Each change is scaled by the time it spans, so yearly points (gold 2021-2025) mixed with monthly ones
+    don't count a year's move as one month's."""
     h = _clean(history)
     if len(h) < MIN_VOL_POINTS + 1:
         return None
     s = h.set_index(pd.to_datetime(h["date"]))["balance"].resample("ME").last().dropna()
-    moves = np.diff(np.log(s.to_numpy(dtype=float)))
-    return float(np.std(moves, ddof=1) * np.sqrt(12)) if len(moves) >= MIN_VOL_POINTS else None
+    if len(s) < MIN_VOL_POINTS + 1:
+        return None
+    r = np.diff(np.log(s.to_numpy(dtype=float)))
+    dt = np.diff(s.index.to_numpy()).astype("timedelta64[D]").astype(float) / 365.25
+    drift = r.sum() / dt.sum()
+    return float(np.sqrt(np.sum((r - drift * dt) ** 2 / dt) / (len(r) - 1)))
 
 
 def outlook(account_type: str, own_rate, history: pd.DataFrame, long_run: float | None = None,
