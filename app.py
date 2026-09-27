@@ -802,9 +802,15 @@ with tab_future:
                     shows = (f"- **Next 12 months:** {money(first['income'])} in, {money(first[out_cols].sum())} out.\n")
                     retired = cfa[cfa["pay"] == 0]
                     if len(retired):
-                        cover = (retired["income"] / retired[out_cols].sum(axis=1)).mean()
+                        spend_cols = [c for c in ("living", "loans", "health", "college", "kid_support") if c in cfa]
+                        tax_cols = [c for c in ("tax_401k", "cg_tax", "income_tax") if c in cfa]
+                        spend = retired[spend_cols].sum(axis=1)
+                        cover = (retired["income"] / spend).mean()
+                        taxes_real = (retired[[f"{c}_real" for c in tax_cols]].sum(axis=1)).mean()
                         shows += (f"- **Once both of you are retired:** Social Security, rent and dividends cover about "
-                                  f"{cover:.0%} of money out; the rest comes from savings and investments.\n")
+                                  f"{cover:.0%} of spending (living costs, healthcare, the kids). The rest, plus about "
+                                  f"{money(taxes_real)} a year of income tax (today's dollars, mostly on the Roth "
+                                  "conversions and 401(k) withdrawals), comes from the 401(k) and investments.\n")
                     kids_line = ""
                     if a.kids:
                         names = " and ".join(k["name"] for k in a.kids)
