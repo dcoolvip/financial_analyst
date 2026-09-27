@@ -835,7 +835,11 @@ with tab_future:
                               f"Medicare; grows {a.health_extra_growth:.0%} faster than inflation.\n"
                             + f"- **401(k):** {strategy}; retired years taxed with real federal + California brackets.\n"
                             + (f"- **Apple ({a.single_stock_share:.0%} of investments, kept as is):** "
-                               f"{history.SINGLE_STOCK_PATHS.get(a.single_stock_scenario, a.single_stock_scenario)}.\n"
+                               + (f"a weighted mix - {a.single_stock_weights.get('economy', 0):.0%} grows with the economy, "
+                                  f"{a.single_stock_weights.get('ibm', 0):.0%} drop and recovery (like IBM), "
+                                  f"{a.single_stock_weights.get('gm', 0):.0%} slow decline to $0 (like GM).\n"
+                                  if a.single_stock_scenario == "mix" else
+                                  f"{history.SINGLE_STOCK_PATHS.get(a.single_stock_scenario, a.single_stock_scenario)}.\n")
                                if a.single_stock_share else "")
                             + f"- **Spending:** today's living costs ({money(a.monthly_living)}/month) rising with inflation "
                               f"({a.inflation:.1%}); shortfalls come from cash, then investments (with capital-gains tax), "
