@@ -745,20 +745,27 @@ with tab_future:
                         f'{money(end[f"p10{sfx}"])} and {money(end[f"p90{sfx}"])}.</p>', unsafe_allow_html=True)
             future_view = st.segmented_control("Future view", ["Net worth", "Own & owe"], default="Net worth",
                                                key="future_view", label_visibility="collapsed") or "Net worth"
-            crash_labels = {"none": "No crashes shown", "every10": "Crashes every ~10 years",
-                            "retire": "A crash when you retire", "extra": "Crashes, worse than history"}
-            crash = st.segmented_control(
-                "Market crashes", list(crash_labels), format_func=crash_labels.get, default="none", key="crash_mode",
-                help="Draws the same plan with market crashes as a dashed line: the market falls 35% and Apple 45% in "
-                     "a crash year. History's average return already includes crashes (2000-02, 2008, 2022), so "
-                     "'every ~10 years' and 'when you retire' keep the long-run average - they show WHEN the drops hit "
-                     "(right at retirement hurts most, because you're selling to live). 'Worse than history' adds the "
-                     "drops on top, with no extra recovery.") or "none"
+            ep_tabs = {"none": "Normal", "lost_decade": "Lost decade", "crisis_2008": "2008 crisis",
+                       "stagflation": "Stagflation", "depression": "Depression", "japan": "Japan"}
+            ep_key = st.segmented_control(
+                "Replay a real crash", list(ep_tabs), format_func=ep_tabs.get, default="none", key="episode",
+                help="Replays a real period year by year - stock returns (Apple swinging 1.25x as hard), inflation "
+                     "(your costs and Social Security raises follow it), cash rates, home prices and dividend cuts - "
+                     "then normal assumptions resume, with no built-in catch-up. Drawn as a dashed line.") or "none"
             crash_fc = None
-            if crash != "none":
+            if ep_key != "none":
+                c1, c2 = st.columns([2, 1]) if not PHONE else (st.container(), st.container())
+                ep_start = c1.radio("Starting", ["retire", "next"], horizontal=True, key="episode_start",
+                                    format_func={"retire": "When you both retire", "next": "Next year"}.get)
+                job_loss = c2.checkbox("Job loss too", key="episode_job_loss",
+                                       help="Pay, 401(k) and new stock stop for the first 2 years of the episode "
+                                            "(only matters if it starts while you're working).")
                 import dataclasses
-                crash_fc = forecast.run(accts, dataclasses.replace(a, crash_mode=crash, simulations=400),
+                crash_fc = forecast.run(accts, dataclasses.replace(a, episode=ep_key, episode_start=ep_start,
+                                                                   episode_job_loss=job_loss, simulations=400),
                                         history=db.balance_history(conn), trend_overrides=trend_overrides())
+                crash_labels = {k: f"the {history.EPISODES[k][0]} replayed" for k in history.EPISODES}
+                crash = ep_key
             if future_view == "Own & owe":
                 plot(charts.forecast_own_owe(nw.tail(24), fc.expected, real, mode, compact=PHONE))
                 e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]
@@ -790,9 +797,18 @@ with tab_future:
             if crash_fc is not None:
                 e_no, e_cr = fc.bands.iloc[-1][f"p50{sfx}"], crash_fc.bands.iloc[-1][f"p50{sfx}"]
                 ex = crash_fc.expected
-                liquid = (ex["cash"] + ex["investments"]) / ((1 + a.inflation) ** (np.arange(len(ex)) / 12) if real else 1)
-                st.caption(f"**{crash_labels[crash]}:** by {end['date']:%Y} typically {money(e_cr)} vs {money(e_no)} without "
-                           f"({(e_cr - e_no) / e_no:+.0%}). Cash + investments never drop below {money(liquid.min())}.")
+                price = forecast.episode_years(dataclasses.replace(a, episode=ep_key, episode_start=ep_start), a.years)["price"]
+                liquid = (ex["cash"] + ex["investments"]) / (price[:len(ex)] if real else 1)
+                starts_in = forecast.episode_years(dataclasses.replace(a, episode=ep_key, episode_start=ep_start), a.years)["start"]
+                name, what, rows = history.EPISODES[ep_key]
+                from_ep = liquid.iloc[12 * (starts_in or 0):]
+                out = from_ep[from_ep <= 0]
+                low = (f"cash + investments **run out in {ex['date'].iloc[out.index[0]]:%Y}** - after that, spending "
+                       "would have to come from the homes (selling or borrowing against them)" if len(out) else
+                       f"from {now_ts.year + (starts_in or 0)} on, cash + investments stay above {money(from_ep.min())}")
+                st.caption(f"**{name}, replayed from {now_ts.year + (starts_in or 0)}:** {what}. By {end['date']:%Y} "
+                           f"typically {money(e_cr)} vs {money(e_no)} normally ({(e_cr - e_no) / e_no:+.0%}); {low}"
+                           + (" (today's dollars)." if real else ".") + f" Data: {history.EPISODE_SOURCE}.")
 
         with detail_col:
             # right under the net worth chart: how money moves in and out explains the line above

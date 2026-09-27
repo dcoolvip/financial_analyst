@@ -112,3 +112,61 @@ def single_stock_swings() -> np.ndarray:
     simulated year is typical-path x a real Apple year's deviation."""
     r = 1 + APPLE.to_numpy(dtype=float)
     return r / (np.prod(r) ** (1 / len(r)))
+
+
+# --- real crash episodes, replayed year by year -----------------------------------------------------------------
+# Each: yearly stocks (total return), inflation, cash (T-bill yield), homes, dividend change - all in percent.
+# 2000-2013 come from YEARLY above; 1929-45, 1973-82 and Japan 1990-2019 are approximate (compiled from memory of
+# the published series: S&P total returns / Nikkei, CPI, T-bill yields, US and Japanese home / land prices,
+# S&P dividends). Japan: Nikkei 225 with ~1% dividends, Japanese CPI, BOJ rates, residential land prices.
+_DEPRESSION = [  # year, stocks, inflation, cash, homes, dividends
+    (1929, -8.4, 0.6, 4.4, -2, 5), (1930, -25.1, -6.4, 2.3, -5, -5), (1931, -43.8, -9.3, 1.4, -8, -20),
+    (1932, -8.6, -10.3, 0.9, -12, -35), (1933, 50.0, 0.8, 0.3, -5, -15), (1934, -1.2, 1.5, 0.2, 3, 5),
+    (1935, 46.7, 3.0, 0.2, 4, 10), (1936, 31.9, 1.4, 0.2, 5, 30), (1937, -35.3, 2.9, 0.3, 3, 10),
+    (1938, 29.3, -2.8, 0.0, -1, -30), (1939, -1.1, 0.0, 0.0, 1, 10), (1940, -10.7, 0.7, 0.0, 2, 5),
+    (1941, -12.8, 9.9, 0.1, 5, 5), (1942, 19.2, 9.0, 0.3, 6, -5), (1943, 25.1, 3.0, 0.4, 8, 5),
+    (1944, 19.0, 2.3, 0.3, 9, 5), (1945, 35.8, 2.2, 0.3, 10, 5)]
+_STAGFLATION = [
+    (1973, -14.7, 8.7, 7.0, 9, 5), (1974, -26.5, 12.3, 7.9, 10, 7), (1975, 37.2, 6.9, 5.8, 8, 3),
+    (1976, 23.8, 4.9, 5.0, 9, 10), (1977, -7.2, 6.7, 5.3, 14, 12), (1978, 6.6, 9.0, 7.2, 13, 10),
+    (1979, 18.4, 13.3, 10.0, 12, 12), (1980, 32.4, 12.5, 11.4, 7, 7), (1981, -4.9, 8.9, 14.0, 5, 6),
+    (1982, 21.4, 3.8, 10.6, 2, 3)]
+_JAPAN = [
+    (1990, -39, 3.1, 7.5, 7, 3), (1991, -3, 3.3, 7.0, -3, 2), (1992, -26, 1.7, 4.0, -6, 0), (1993, 3, 1.3, 2.5, -6, -2),
+    (1994, 13, 0.7, 2.0, -5, -2), (1995, 1, -0.1, 1.0, -5, 0), (1996, -2, 0.1, 0.5, -4, 1), (1997, -21, 1.7, 0.4, -4, 2),
+    (1998, -9, 0.7, 0.3, -5, -3), (1999, 37, -0.3, 0.1, -6, -2), (2000, -27, -0.7, 0.2, -6, 2), (2001, -23, -0.7, 0.1, -6, 0),
+    (2002, -18, -0.9, 0.0, -7, -2), (2003, 25, -0.3, 0.0, -7, 5), (2004, 8, 0.0, 0.0, -6, 10), (2005, 42, -0.3, 0.0, -4, 15),
+    (2006, 8, 0.2, 0.2, -2, 15), (2007, -10, 0.1, 0.5, 0, 10), (2008, -41, 1.4, 0.5, -2, 0), (2009, 20, -1.4, 0.1, -4, -15),
+    (2010, -2, -0.7, 0.1, -3, 0), (2011, -16, -0.3, 0.1, -3, 5), (2012, 24, 0.0, 0.1, -2, 5), (2013, 58, 0.4, 0.1, -1, 10),
+    (2014, 9, 2.7, 0.1, 0, 15), (2015, 10, 0.8, 0.1, 0, 15), (2016, 2, -0.1, 0.0, 0, 5), (2017, 21, 0.5, 0.0, 1, 10),
+    (2018, -11, 1.0, 0.0, 1, 10), (2019, 20, 0.5, 0.0, 1, 5)]
+_US_DIVIDENDS = {2000: 2, 2001: -3, 2002: 1, 2003: 8, 2004: 10, 2005: 12, 2006: 11, 2007: 10, 2008: -1, 2009: -21,
+                 2010: 1, 2011: 16, 2012: 18, 2013: 12}
+
+
+def _from_yearly(first: int, last: int) -> list:
+    y = YEARLY.loc[first:last]
+    return [(yr, r.stocks * 100, r.inflation * 100, r.cash * 100, r.homes * 100, _US_DIVIDENDS.get(yr, 5))
+            for yr, r in y.iterrows()]
+
+
+EPISODES = {   # key: (name, what happened, rows)
+    "lost_decade": ("Lost decade 2000–2012", "dot-com bust then 2008: stocks roughly flat for 13 years with two "
+                    "~50% falls; homes boom then fall", _from_yearly(2000, 2012)),
+    "crisis_2008": ("Financial crisis 2007–2013", "stocks −37% in 2008, homes −27% over 2007–11, dividends cut "
+                    "about 20%, rates near 0%", _from_yearly(2007, 2013)),
+    "stagflation": ("Stagflation 1973–1982", "stocks −41% in 1973–74 while inflation ran 7–13% a year: costs "
+                    "rose fast as savings fell", _STAGFLATION),
+    "depression": ("Great Depression 1929–1945", "stocks −85% by 1932, prices fell ~25%, near-zero rates, a second "
+                   "crash in 1937; about 15 years to recover", _DEPRESSION),
+    "japan": ("Japan 1990–2019", "stocks −80% and land prices falling for 15 years, near-zero inflation and rates - "
+              "no full recovery in 30 years", _JAPAN),
+}
+EPISODE_SOURCE = ("Yearly stock total returns, inflation, T-bill rates, home prices and dividend changes; 2000-2013 "
+                  "from the history above, 1929-45, 1973-82 and Japan approximate")
+
+
+def episode(key: str) -> pd.DataFrame:
+    """The episode's years as fractions: stocks, inflation, cash, homes, dividends (change)."""
+    rows = EPISODES[key][2]
+    return pd.DataFrame(rows, columns=["year", "stocks", "inflation", "cash", "homes", "dividends"]).set_index("year") / 100

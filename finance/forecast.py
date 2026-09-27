@@ -51,12 +51,12 @@ class Assumptions:
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
-    # Market crashes made visible: "none"; "every10" (every ~10 years, long-run average kept - history's average
-    # already includes crashes); "retire" (one when everyone has retired, average kept); "extra" (every ~10 years on
-    # top of normal returns - worse than history). crash_drop: market fall; one company falls crash_drop_single.
-    crash_mode: str = "none"
-    crash_drop: float = 0.35
-    crash_drop_single: float = 0.45
+    # Replay a real crash period (history.EPISODES): its yearly stock returns, inflation, cash rates, home prices and
+    # dividend changes, starting "next" year or when everyone has "retire"d; normal assumptions before and after.
+    episode: str = "none"
+    episode_start: str = "retire"
+    episode_job_loss: bool = False            # pay, 401(k) and new stock stop for the episode's first 2 years
+    single_stock_beta: float = 1.25           # the one company moves this much more than the market (vs cash)
     single_stock_share: float = 0.0       # share of investments held in one company (Apple), kept as is
     single_stock_scenario: str = "mix"      # its path: history.SINGLE_STOCK_PATHS
     # with "mix", each simulation draws one path with these weights (a judgment call; see SINGLE_STOCK_PATHS)
@@ -173,6 +173,32 @@ def valuables_table(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame |
                                        "years", "weight", "long_run", "why"])
 
 
+def episode_years(a: "Assumptions", n_years: int) -> dict:
+    """Yearly inflation, and (NaN outside the episode) stocks, cash, homes and dividend change, with the chosen
+    episode placed at its start year. Also the price level per month, which drives costs and 'today's dollars'."""
+    infl = np.full(n_years, a.inflation)
+    out = {k: np.full(n_years, np.nan) for k in ("stocks", "cash", "homes", "dividends")}
+    start = None
+    if a.episode and a.episode != "none":
+        from .history import episode
+        ep = episode(a.episode)
+        if a.episode_start == "retire" and a.people:
+            from .retirement import age_on
+            now = pd.Timestamp.today().normalize()
+            start = int(np.ceil(max(p.get("retire_age", 65) - age_on(p["born"], now) for p in a.people if p.get("born"))))
+        else:
+            start = 1
+        for i, (_, row) in enumerate(ep.iterrows()):
+            y = start + i
+            if 0 <= y < n_years:
+                infl[y] = row["inflation"]
+                for k in out:
+                    out[k][y] = row[k]
+    monthly = np.repeat((1 + infl) ** (1 / 12), 12)
+    price = np.concatenate([[1.0], np.cumprod(monthly)])          # price level at the start of each month
+    return {"inflation": infl, "price": price, "start": start, **out}
+
+
 def rate_path(rate: float, long_run: float, years_of_history: float, source: str, months: int) -> np.ndarray:
     """Yearly growth rate for each coming month. A trend seen over N years says little about decade N+10, so a
     rate built from history moves back toward the long-run rate for the asset's kind, over about as many years
@@ -226,36 +252,32 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             swings = single_stock_swings()
             yearly = np.where(yearly <= 0, 0.0, yearly * swings[rng.integers(0, len(swings), size=(sims, n_years))])
         stk_growth = np.repeat(np.maximum(yearly, 0.0) ** (1 / 12), 12, axis=1)[:, :months]
-    if a.crash_mode != "none":
-        years_idx = np.arange(n_years)
-        if a.crash_mode == "retire" and a.people:
-            from . import retirement as ret_
-            now_ = pd.Timestamp.today().normalize()
-            last = max(p.get("retire_age", 65) - ret_.age_on(p["born"], now_) for p in a.people if p.get("born"))
-            crash_years = [int(np.ceil(last))] if last < n_years else []
-        else:
-            first = max(0, 2030 - pd.Timestamp.today().year)
-            crash_years = list(range(first, n_years, 10))
-
-        def overlay(drop):
-            f = np.ones(n_years)
-            f[[y for y in crash_years if y < n_years]] = 1 - drop
-            if a.crash_mode in ("every10", "retire") and crash_years:
-                # keep the long-run average: the years after each crash recover the fall (to the next crash / the end)
-                marks = sorted(crash_years) + [n_years]
-                for c, nxt in zip(marks, marks[1:]):
-                    span = nxt - c - 1
-                    if span > 0:
-                        f[c + 1:nxt] = (1 / (1 - drop)) ** (1 / span)
-            return np.repeat(f ** (1 / 12), 12)[:months]
-        growth = growth * overlay(a.crash_drop)
-        stk_growth = stk_growth * overlay(a.crash_drop_single)
+    ep = episode_years(a, n_years)
+    in_ep = ~np.isnan(ep["stocks"])
+    if in_ep.any():                          # the episode's real years replace the market's and the stock's
+        mkt = np.where(in_ep, ep["stocks"], 0.0)
+        mk_m = np.repeat((1 + mkt) ** (1 / 12), 12)[:months]
+        on_m = np.repeat(in_ep, 12)[:months]
+        growth = np.where(on_m, mk_m, growth)
+        if share:
+            one = np.maximum(ep["cash"] + a.single_stock_beta * (mkt - ep["cash"]), -0.95)   # swings harder
+            one = np.where(in_ep, one, 0.0)
+            stk_growth = np.where(on_m, np.repeat((1 + one) ** (1 / 12), 12)[:months], stk_growth)
     paths_r = np.stack([rate_path(r.rate, r.long_run, r.years, r.source, months) for r in vt.itertuples()], axis=1) \
         if len(vt) else np.zeros((months, 0))                    # months x assets: each one's rate, fading
+    if in_ep.any() and len(vt):
+        homes_m = np.repeat(np.where(in_ep, ep["homes"], np.nan), 12)[:months]
+        is_home = (vt["type"] == "property").to_numpy()
+        paths_r[:, is_home] = np.where(np.isnan(homes_m)[:, None], paths_r[:, is_home], homes_m[:, None])
     v_mu = np.log1p(paths_r) / 12 - v_vol**2 / 24
     v_growth = np.exp(rng.normal(v_mu, v_vol / np.sqrt(12), size=(sims, months, len(v_rate)))) \
         if len(v_rate) else np.ones((sims, months, 0))
-    cash_r = (1 + a.cash_yield) ** (1 / 12) - 1
+    cash_y = np.where(in_ep, ep["cash"], a.cash_yield)
+    cash_rs = np.repeat((1 + cash_y) ** (1 / 12) - 1, 12)[:months]              # per month
+    div_level = np.ones(n_years)                                                 # dividends: inflation, or episode
+    for y in range(1, n_years):
+        chg = ep["dividends"][y] if in_ep[y] else ep["inflation"][y]
+        div_level[y] = div_level[y - 1] * (1 + chg)
 
     cash = np.full(sims, cash0, dtype=float)
     stk = np.full(sims, share * inv0, dtype=float)            # the one company's shares
@@ -358,16 +380,19 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
 
         if people:
             years = (m - 1) / 12
-            price = (1 + a.inflation) ** years
+            price = ep["price"][m - 1]                    # real inflation path (episode years included)
+            y_idx = (m - 1) // 12
+            laid_off = a.episode_job_loss and ep["start"] is not None and ep["start"] <= y_idx < ep["start"] + 2
             ages = [a0 + years for a0 in ages0]
             working = [age < p.get("retire_age", 65) for age, p in zip(ages, people)]
+            employed = [w and not laid_off for w in working]      # a job loss stops pay, 401(k), new stock
             bracket = a.use_tax_brackets and not any(working)
             raise_ = (1 + a.income_growth) ** ((m - 1) // 12)
-            pay = sum(p.get("pay", 0) for p, w in zip(people, working) if w) * raise_
-            other = (a.other_income or 0) * price
-            div = min(a.dividends_monthly or 0, a.other_income or 0) * price
+            pay = sum(p.get("pay", 0) for p, w in zip(people, employed) if w) * raise_
+            div = min(a.dividends_monthly or 0, a.other_income or 0) * div_level[min(y_idx, n_years - 1)]
+            other = ((a.other_income or 0) - min(a.dividends_monthly or 0, a.other_income or 0)) * price + div
             ss = sum(ret.social_security(p) * price for p, age in zip(people, ages) if age >= p.get("ss_claim_age", 67))
-            hprice = (1 + a.inflation + a.health_extra_growth) ** years
+            hprice = price * (1 + a.health_extra_growth) ** years
             health = sum(ret.health_cost(age, w, any(w2 for j, w2 in enumerate(working) if j != i),
                                          a.private_health_yearly, a.medicare_yearly)
                          for i, (age, w) in enumerate(zip(ages, working))) / 12 * hprice
@@ -376,16 +401,16 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             living = (a.monthly_living - (a.kid_costs_monthly * gone / len(kids) if kids else 0.0)
                       - (a.income_tax_monthly if bracket else 0.0)) * price  # retired: tax computed instead
             in_college = sum(1 for k in kid_ages if a.college_start_age <= k < a.college_start_age + a.college_years)
-            college = in_college * a.college_yearly / 12 * (1 + a.inflation + a.college_extra_growth) ** years
+            college = in_college * a.college_yearly / 12 * price * (1 + a.college_extra_growth) ** years
             after = a.college_start_age + a.college_years
             supported = sum(1 for k in kid_ages if after <= k < a.kid_support_until_age)
             support = supported * a.kid_support_yearly / 12 * price
             income = pay + other + ss
             save = income - living - paid - health - college - support
             # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
-            pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
-            rth += sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
-            new_stock = sum(p.get("stock_yearly", 0) for p, w in zip(people, working) if w) / 12   # RSU/ESPP shares
+            pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, employed) if w) / 12
+            rth += sum(p.get("roth_yearly", 0) for p, w in zip(people, employed) if w) / 12
+            new_stock = sum(p.get("stock_yearly", 0) for p, w in zip(people, employed) if w) / 12   # RSU/ESPP shares
             if share:                           # at the vest / purchase price: no gain yet
                 stk += new_stock
                 stk_basis += new_stock
@@ -429,7 +454,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         pre = pre * growth[:, m - 1]
         rth = rth * growth[:, m - 1]
         stk = stk * stk_growth[:, m - 1]
-        cash = cash * (1 + cash_r)
+        cash = cash * (1 + cash_rs[m - 1])
         if save >= 0:
             inv += save * a.invest_share
             inv_basis += save * a.invest_share
@@ -439,8 +464,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             need = np.maximum(-cash, 0)          # cash first, then sell
             cash = np.maximum(cash, 0)
             left = raise_cash(need)
-            if not people:
-                inv -= left                      # nothing left to sell: shown as borrowing
+            inv -= left                          # nothing left to sell: the rest is borrowed (shows as a loss)
         if people and bracket and m % 12 == 0:   # year end: the year's income tax, paid from cash / sales
             from .taxes import income_tax
             tax = income_tax((other - div) * 12 + yr_ord + yr_conv, div * 12 + yr_gain, ss * 12, scale=price)
@@ -448,7 +472,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             short = np.maximum(-cash, 0)
             cash = np.maximum(cash, 0)
             if short.any():
-                raise_cash(short)
+                inv -= raise_cash(short)
             flow[m - 1, 12] = float(tax.mean())
         if people and m % 12 == 0:               # year end: cash beyond a year of spending gets invested
             spare = np.maximum(cash - 12 * (living + paid + health + college + support), 0)
@@ -470,7 +494,7 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     """history: balance history (for each valuable's own trend and volatility); trend_overrides: {account_id:
     (trend, years)} where a same-items price trend is more honest than the raw value history."""
     dates = pd.date_range(pd.Timestamp.today().normalize(), periods=a.years * 12 + 1, freq="MS")
-    deflator = (1 + a.inflation) ** (np.arange(len(dates)) / 12)
+    deflator = episode_years(a, -(-a.years * 12 // 12))["price"][:len(dates)]   # real price path (episodes too)
 
     nw, _, loans, _, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
     p10, p25, p50, p75, p90 = np.percentile(nw, [10, 25, 50, 75, 90], axis=0)

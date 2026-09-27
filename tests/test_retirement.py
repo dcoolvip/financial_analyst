@@ -135,3 +135,10 @@ def test_kids_supported_after_college_worst_case():
     assert life.loc[29, "kid_support"] == pytest.approx(2 * 35_000)          # for life
     until26 = _run(years=30, kids=kids, kid_support_yearly=35_000, kid_support_until_age=26).cash_flow.set_index("period")
     assert until26.loc[20, "kid_support"] == 0 and none["kid_support"].sum() == 0
+
+
+def test_spending_nobody_can_cover_shows_as_borrowing_not_nothing():
+    """Regression: once everything sellable was gone, retired-year spending silently vanished - a plan that ran out
+    of money looked fine. The unpaid remainder must show up (as borrowing)."""
+    broke = _run(years=40, other_income=0, monthly_living=40_000)          # spends far more than it has
+    assert broke.expected["investments"].iloc[-1] < 0                        # the shortfall is visible

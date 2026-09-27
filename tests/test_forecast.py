@@ -402,17 +402,20 @@ def test_single_stock_paths_like_past_dominant_companies():
     assert half.expected["investments"].iloc[-1] == pytest.approx(500_000 * 1.10 ** 30, rel=0.01)   # the rest lives on
 
 
-def test_market_crashes_toggle():
-    """Crashes every ~10 years keep the long-run average (history already includes them) but show the drops;
-    'extra' crashes on top of normal returns end lower."""
+def test_replaying_a_real_crash_episode():
+    """An episode replays its real years - stocks, inflation (costs and today's dollars), homes - then normal
+    assumptions resume, with no built-in catch-up."""
+    from finance import history
     port = accts([("Brokerage", "brokerage", 1_000_000, None, None)])
-    run = lambda mode: forecast.run(port, forecast.Assumptions(years=30, investment_return=0.08, inflation=0.0,   # noqa: E731
-                                                               investment_volatility=0.0, crash_mode=mode, simulations=50))
-    none, every, extra = run("none"), run("every10"), run("extra")
-    path = every.expected.set_index("date")["investments"]
-    assert path.min() < none.expected["investments"].min() * 10                 # sanity: ran
-    yearly = path.iloc[::12]                                                    # the forecast's own 12-month steps
-    assert (yearly.pct_change() < -0.25).any()                                  # a visible crash year
-    last = lambda fc: fc.expected["investments"].iloc[-1]                       # noqa: E731
-    assert last(extra) < 0.6 * last(none)                                       # worse than history
-    assert last(every) == pytest.approx(last(none), rel=0.35)                   # average kept (roughly)
+    run = lambda ep: forecast.run(port, forecast.Assumptions(years=20, investment_return=0.08, inflation=0.03,   # noqa: E731
+                                                             investment_volatility=0.0, episode=ep,
+                                                             episode_start="next", simulations=50))
+    none, dep, stag = run("none"), run("depression"), run("stagflation")
+    inv = dep.expected.set_index("date")["investments"].iloc[::12]
+    e = history.episode("depression")
+    assert inv.iloc[2] / inv.iloc[1] == pytest.approx(1 + e["stocks"].iloc[0], rel=1e-3)   # 1929's real return
+    assert dep.expected["investments"].iloc[-1] < none.expected["investments"].iloc[-1]
+    # stagflation's high inflation: today's-dollar value of the same money falls faster
+    assert stag.bands["p50_real"].iloc[-1] < stag.bands["p50"].iloc[-1] / 1.03 ** 20
+    after = dep.expected.set_index("date")["investments"].iloc[::12]
+    assert after.iloc[-1] / after.iloc[-2] == pytest.approx(1.08, rel=1e-3)     # after it ends: normal returns
