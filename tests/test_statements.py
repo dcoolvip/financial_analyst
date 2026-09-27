@@ -449,6 +449,8 @@ def test_fidelity_401k_statement():
     assert [h["symbol"] for h in s.holdings] == ["LIFEPATH2040", "LIFEPATH2045"]
     assert s.holdings[1]["value"] == 120_000 and "82% stocks" in s.holdings[1]["description"]
     assert s.tax_sources == {"pre_tax": 100_000, "after_tax": 0.0, "employer_match": 55_000, "roth": 5_000}
+    assert not s.notes                                         # nothing to warn about: it's shown as a detail
+    assert "pre-tax $155,000 + Roth $5,000" in s.extras
     from finance import portfolio
     import pandas as pd
     pf = portfolio.summarize(pd.DataFrame(s.holdings).assign(account="401k"))

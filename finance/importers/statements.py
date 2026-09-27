@@ -56,6 +56,10 @@ class Statement:
             parts.append(f"{len(self.holdings)} positions")
         if self.grants:
             parts.append(f"{len(self.grants)} unvested grants")
+        if self.tax_sources:
+            roth = self.tax_sources.get("roth", 0)
+            pre = sum(v for k, v in self.tax_sources.items() if k != "roth")
+            parts.append(f"pre-tax ${pre:,.0f} + Roth ${roth:,.0f}")
         return ", ".join(parts)
 
 
@@ -421,8 +425,6 @@ def _fidelity_401k(t: str) -> Statement:
         m = re.search(rf"{label}[^$\n]*(?:\n[^$\n]*){{0,3}}?\s*\$[\d,.]+\s*\$[\d,.]+\s*\d+%\s*\$([\d,]+\.\d{{2}})", t)
         if m:
             s.tax_sources[key] = _num(m.group(1))
-    if s.tax_sources:
-        s.notes.append("By tax type: " + ", ".join(f"{k.replace('_', ' ')} ${v:,.0f}" for k, v in s.tax_sources.items()))
     if s.holdings and s.balance is not None:
         listed = sum(h["value"] for h in s.holdings)
         if abs(s.balance - listed) > max(1.0, 0.01 * listed):
