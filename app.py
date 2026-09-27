@@ -464,6 +464,13 @@ with tab_future:
         if household and db.get_setting(conn, "assumptions") is None:     # through the oldest turning 90
             saved.years = int(min(50, round(90 - max(retirement.age_on(p["born"], now_ts) for p in household))))
         saved_people = {q.get("name"): q for q in (saved.people or [])}
+        kids = db.get_setting(conn, "household_kids") or []
+        kid_costs = 0.0
+        if kids and baseline:                  # today's school, activities, care: they end when college starts
+            kc = enriched_all[(~enriched_all["is_transfer"]) & (enriched_all["date"] >= baseline["start"])
+                              & (enriched_all["date"] < now_ts.to_period("M").to_timestamp())
+                              & enriched_all["category"].isin(["Kids & childcare", "Education"])]
+            kid_costs = float(-kc["amount"].sum() / baseline["months"])
 
         if PHONE:  # chart first, sliders tucked under it, details below
             chart_col, ctrl_col, detail_col = st.container(), st.expander("⚙️ Adjust assumptions"), st.container()
@@ -533,6 +540,21 @@ with tab_future:
                             value=float(saved.other_income if saved.other_income is not None else round(other_default, -2)),
                             help="Continues after retiring and grows with inflation.")
                         a.monthly_income = sum(q["pay"] for q in people_now) + a.other_income
+                        if kids:
+                            st.markdown("**Kids**", help="There's no separate college fund, so college is paid from "
+                                        "savings and investments (selling shares, with capital-gains tax).")
+                            ages = ", ".join(f"{k['name']} {retirement.age_on(k['born'], now_ts):.0f}" for k in kids)
+                            a.kids = kids
+                            a.kid_costs_monthly = kid_costs
+                            a.college_yearly = st.number_input(
+                                "College per child per year ($)", step=5_000.0, value=float(saved.college_yearly),
+                                help="Today's dollars, tuition + housing + books. UC in-state ~$40K, private ~$90K. 4 years "
+                                     "from age 18.")
+                            a.college_extra_growth = st.slider(
+                                "College costs grow faster than inflation by", 0.0, 5.0, saved.college_extra_growth * 100,
+                                0.25, format="%.2f%%", help="Tuition has historically outpaced prices in general.") / 100
+                            st.caption(f"{ages} now. Today's kids' costs ({money(kid_costs)}/month: school, activities, "
+                                       "care) leave the budget when each starts college.")
                         a.pretax_balance = pretax_total
                         a.private_health_yearly = st.number_input(
                             "Private insurance before 65, per person per year ($)", step=500.0,
@@ -752,6 +774,11 @@ with tab_future:
                     events += [(born.year + person.get("retire_age", 65), f"{who} retires"),
                                (born.year + person.get("ss_claim_age", 67), f"{who} Social Security"),
                                (born.year + retirement.MEDICARE_AGE, f"{who} Medicare")]
+                starts = sorted({pd.Timestamp(f"{k['born']}-01").year + a.college_start_age for k in (a.kids or [])})
+                for y in starts:
+                    names = " & ".join(k["name"] for k in a.kids
+                                       if pd.Timestamp(f"{k['born']}-01").year + a.college_start_age == y)
+                    events.append((y, f"{names} start college"))
                 events = [(y, l) for y, l in sorted(events) if cfa["year"].min() <= y <= cfa["year"].max()]
                 plot(charts.cash_flow_ahead(cfa, False, mode, compact=PHONE, events=events))   # future dollars
                 first, last = cfa.iloc[0], cfa.iloc[-1]

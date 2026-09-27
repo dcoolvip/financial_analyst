@@ -85,3 +85,14 @@ def test_selling_shares_to_cover_spending_pays_capital_gains_tax():
     untaxed = _run(years=30, capital_gains_rate=0.0)
     assert taxed.cash_flow["cg_tax"].sum() > 0 and untaxed.cash_flow["cg_tax"].sum() == 0
     assert taxed.expected["net_worth"].iloc[-1] < untaxed.expected["net_worth"].iloc[-1]
+
+
+def test_college_is_paid_and_kids_costs_end():
+    now = pd.Timestamp.today()
+    kids = [{"name": "K1", "born": f"{now.year - 10}-{now.month:02d}"}, {"name": "K2", "born": f"{now.year - 10}-{now.month:02d}"}]
+    fc = _run(years=15, kids=kids, kid_costs_monthly=2_000, college_yearly=80_000, college_extra_growth=0.0)
+    f = fc.cash_flow.set_index("period")
+    assert f.loc[7, "college"] == 0                                          # age 17
+    assert f.loc[8, "college"] == pytest.approx(2 * 80_000)                  # both in college (no inflation here)
+    assert f.loc[12, "college"] == 0                                         # graduated
+    assert f.loc[7, "living"] - f.loc[9, "living"] == pytest.approx(12 * 2_000)   # their day-to-day costs ended

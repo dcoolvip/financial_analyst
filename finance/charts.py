@@ -269,7 +269,7 @@ def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = Fal
     fig = go.Figure()
     taxes = col("tax_401k") + col("cg_tax")               # 401(k) withdrawals + capital gains on shares sold
     for label, values, color in (("Living costs", col("living"), c["s2"]), ("Loan payments", col("loans"), c["muted"]),
-                                 ("Healthcare", col("health"), c["ink2"]),
+                                 ("Healthcare", col("health"), c["ink2"]), ("College", col("college"), c["ink"]),
                                  ("Taxes on selling & 401(k) withdrawals", taxes, c["axis"])):
         if values.abs().sum() > 0:
             fig.add_trace(go.Bar(x=cf["year"], y=values, name=label, marker=dict(color=color),

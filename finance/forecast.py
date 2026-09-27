@@ -66,6 +66,12 @@ class Assumptions:
     health_extra_growth: float = 0.02         # healthcare costs grow this much faster than inflation
     pretax_tax_rate: float = 0.30             # tax on pre-tax 401(k) money when it comes out
     rmd_age: int = 75                         # required withdrawals start (born 1960 or later)
+    kids: list = field(default_factory=list)  # [{name, born 'YYYY-MM'}]: their costs end at college, college paid
+    kid_costs_monthly: float = 0.0            # the part of living costs that's the kids' (school, activities, care)
+    college_yearly: float = 80_000.0          # per child per year, today's dollars (UC ~$40K, private ~$90K)
+    college_years: int = 4
+    college_start_age: int = 18
+    college_extra_growth: float = 0.02        # college costs grow this much faster than inflation
     capital_gains_rate: float = 0.33          # on the gain when shares are sold: ~20% federal + 3.8% NIIT + CA
     gain_share: float = 0.70                  # how much of a sale is gain (RSU / ESPP / old shares: low basis)
     simulations: int = 1000
@@ -232,8 +238,10 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         pre = np.zeros(sims)
     # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
     # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending),
-    # capital-gains tax on shares sold to cover spending
-    flow = np.zeros((months, 10))
+    # capital-gains tax on shares sold to cover spending, college
+    flow = np.zeros((months, 11))
+    kids = [k for k in (a.kids or []) if k.get("born")] if people else []
+    kid_ages0 = [ret.age_on(k["born"], now) for k in kids] if kids else []
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
     paths = np.empty((months + 1, val.shape[1]))
@@ -277,9 +285,13 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             health = sum(ret.health_cost(age, w, any(w2 for j, w2 in enumerate(working) if j != i),
                                          a.private_health_yearly, a.medicare_yearly)
                          for i, (age, w) in enumerate(zip(ages, working))) / 12 * hprice
-            living = a.monthly_living * price
+            kid_ages = [k0 + years for k0 in kid_ages0]
+            gone = sum(1 for k in kid_ages if k >= a.college_start_age)     # their day-to-day costs end at college
+            living = (a.monthly_living - (a.kid_costs_monthly * gone / len(kids) if kids else 0.0)) * price
+            in_college = sum(1 for k in kid_ages if a.college_start_age <= k < a.college_start_age + a.college_years)
+            college = in_college * a.college_yearly / 12 * (1 + a.inflation + a.college_extra_growth) ** years
             income = pay + other + ss
-            save = income - living - paid - health
+            save = income - living - paid - health - college
             # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
             pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
             inv += sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
@@ -296,6 +308,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                 tax_401k += float((out * a.pretax_tax_rate).mean())
                 out_401k += float(out.mean())
             flow[m - 1, :7] = [income, living, paid, health, pay, ss, other]
+            flow[m - 1, 10] = college
         elif split:
             income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
             living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
@@ -375,7 +388,7 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     cash_flow = pd.DataFrame()
     if flow is not None:                                  # per year, nominal and in today's dollars
         f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k",
-                                        "out_401k", "cg_tax"])
+                                        "out_401k", "cg_tax", "college"])
         f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
         f["deflator"] = deflator[1:]
         f["month"] = dates[1:]
@@ -383,12 +396,14 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
                                             loans=("loans", "sum"), health=("health", "sum"), pay=("pay", "sum"),
                                             ss=("ss", "sum"), other=("other", "sum"), tax_401k=("tax_401k", "sum"),
                                             out_401k=("out_401k", "sum"), cg_tax=("cg_tax", "sum"),
+                                            college=("college", "sum"),
                                             deflator=("deflator", "mean"),
                                             months=("income", "size"), first=("month", "min"), last=("month", "max"))
         cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
-        cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
+        cash_flow["saved"] = (cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
+                              - cash_flow["college"])
         for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "out_401k", "cg_tax",
-                  "saved"):
+                  "college", "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
     return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)
