@@ -518,7 +518,9 @@ with tab_future:
                                                        "person's paychecks (bonus included, averaged).")
                             benefit = retirement.social_security(person, ca)
                             st.caption(f"Social Security {money(benefit)}/month from {born.year + ca} (today's dollars, "
-                                       + ("SSA estimate" if person.get("ss_table") else "estimate - add the SSA statement")
+                                       + ("inferred - her/his own SSA statement would confirm it"
+                                          if str(person.get("ss_source", "")).startswith("inferred") else
+                                          "SSA estimate" if person.get("ss_table") else "estimate - add the SSA statement")
                                        + f"). While working: {money(person.get('k401_yearly', 0))}/yr into the 401(k), "
                                        f"{money(person.get('stock_yearly', 0) + person.get('roth_yearly', 0))}/yr of stock "
                                        "and Roth into investments.")
