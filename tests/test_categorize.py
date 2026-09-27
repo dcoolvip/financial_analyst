@@ -222,3 +222,11 @@ def test_taxes_renamed_to_income_tax_and_the_rest_moved(conn):
     assert r["MDE COURT EPAY"][0] == r["WWW.ZENBUSINESS.COM"][0] == "Government & legal"
     assert "Taxes" not in categorize.CATEGORIES
     assert insights.categorize("IRS DES:USATAXPYMT ID:1", -100) == "Income tax"
+
+
+def test_rental_income_counts_as_money_in(conn):
+    categorize.set_rule(conn, "HOME SOLUTIONS R PAYROLL", "Rental income", "user")
+    t = txns([("HOME SOLUTIONS R DES:PAYROLL ID:1 INDN:X", 3_900.0), ("SAFEWAY", -100.0)])
+    cf = insights.monthly_cash_flow(t, categorize.rules(conn))
+    assert cf["money_in"].iloc[0] == 3_900 and cf["money_out"].iloc[0] == 100
+    assert "Rental income" in categorize.CATEGORIES

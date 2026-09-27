@@ -77,7 +77,7 @@ def categorize(description: str, amount: float, rules: dict | None = None) -> st
 
 # Categories that are money coming in. Anything else that's positive is a refund or credit: it reduces
 # that category's spending instead of counting as income.
-INCOME_CATEGORIES = {"Income", "Other income", "Payments to people"}
+INCOME_CATEGORIES = {"Income", "Rental income", "Other income", "Payments to people"}
 AVERAGE_MONTHS = 12          # a full year, so once-a-year bills (income tax, property tax) count once
 
 

@@ -29,6 +29,7 @@ BATCH = 80
 # What each category covers - shown in the app and given to the AI, so both use the same definitions.
 CATEGORY_HELP = {
     "Income": "Pay, salary and direct deposits from employers, interest, dividends, tax refunds, card rewards.",
+    "Rental income": "Rent from a property you own, incl. what a property manager passes on.",
     "Other income": "Other money in: refunds, reimbursements, things you sold, cash deposits.",
     "Mortgage": "Monthly payments on a home loan (principal + interest, plus escrow for property tax and home "
                 "insurance when the lender collects it).",
