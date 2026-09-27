@@ -301,3 +301,22 @@ def test_planned_refinance_lowers_the_payment_from_that_month():
     assert f1.loc[0, "loans"] == pytest.approx(2 * 12_051.47 + 10 * 9_000)         # months 1-2 old, then new
     assert f1.loc[1, "saved"] - f0.loc[1, "saved"] == pytest.approx(12 * (12_051.47 - 9_000))
     assert forecast.Assumptions.from_dict(forecast.Assumptions(**base, loan_changes=[{"loan": "x", "payment": 1}]).to_dict()).loan_changes
+
+
+def test_history_averages_match_the_published_long_run_figures():
+    from finance import history
+    h = history.summary(30)
+    assert 0.02 < h["inflation"] < 0.03 and 0.095 < h["stocks"] < 0.115 and 0.15 < h["stock_volatility"] < 0.2
+    assert history.summary(10)["from"] == history.YEARLY.index[-10]
+
+
+def test_range_replays_real_market_years():
+    """The forecast's range comes from real stock years (crashes included), scaled to the chosen return."""
+    a = forecast.Assumptions(years=10, investment_return=0.07, inflation=0.0, simulations=2000)
+    fc = forecast.run(accts([("Brokerage", "brokerage", 100_000, None, None)]), a)
+    end = fc.bands.iloc[-1]
+    assert end["p50"] == pytest.approx(100_000 * 1.07 ** 10, rel=0.12)       # typical outcome at the chosen return
+    assert end["p10"] < 0.75 * end["p50"] < end["p50"] < end["p90"]            # real years' ups and downs
+    flat = forecast.run(accts([("Brokerage", "brokerage", 100_000, None, None)]),
+                        forecast.Assumptions(years=10, investment_return=0.07, replay_history=False, simulations=2000))
+    assert flat.bands.iloc[-1]["p90"] != end["p90"]                           # a different engine was used

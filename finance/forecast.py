@@ -50,6 +50,7 @@ class Assumptions:
     # planned changes to a loan, e.g. a refinance: [{"loan": name, "month": months from now, "payment": new
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
+    replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
     simulations: int = 1000
     seed: int = 7
 
@@ -144,8 +145,17 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     loans, revolving = build_loans(bal)
 
     rng = np.random.default_rng(a.seed)
-    mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
-    growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
+    if a.replay_history and sigma > 0:
+        # each simulated year is a real year from history, picked at random, scaled so the typical outcome
+        # matches the return you chose (history's shape - crashes, booms - with your level)
+        from .history import _growth, stock_years
+        real = stock_years()
+        scaled = (1 + real) * (1 + a.investment_return) / (1 + _growth(pd.Series(real))) - 1
+        picks = scaled[rng.integers(0, len(scaled), size=(sims, -(-months // 12)))]
+        growth = np.repeat((1 + picks) ** (1 / 12), 12, axis=1)[:, :months]
+    else:
+        mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
+        growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
     v_mu = np.log1p(v_rate) / 12 - v_vol**2 / 24
     v_growth = np.exp(rng.normal(v_mu, v_vol / np.sqrt(12), size=(sims, months, len(v_rate)))) \
         if len(v_rate) else np.ones((sims, months, 0))

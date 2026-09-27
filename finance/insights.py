@@ -425,3 +425,23 @@ def cash_flow_baseline(enriched: pd.DataFrame, today: pd.Timestamp | None = None
             "income": float(t.loc[is_in & (t["amount"] > 0), "amount"].sum() / months),
             "living": float(-t.loc[~is_in & ~loans, "amount"].sum() / months),
             "loans_seen": float(-t.loc[loans, "amount"].sum() / months)}
+
+
+def cash_yield(enriched: pd.DataFrame, balances: pd.DataFrame, today: pd.Timestamp | None = None) -> dict | None:
+    """What your cash actually earned over the last 12 months: interest credited to checking and savings
+    accounts, divided by their average balance. None if there's too little to tell."""
+    if enriched.empty or balances.empty or "account_type" not in enriched:
+        return None
+    today = (today or pd.Timestamp.today()).normalize()
+    end = today.to_period("M").to_timestamp()
+    start = end - pd.DateOffset(months=12)
+    cash_types = {"checking", "savings"}
+    t = enriched[(enriched["date"] >= start) & (enriched["date"] < end) & enriched["account_type"].isin(cash_types)]
+    interest = t.loc[(t["amount"] > 0) & t["description"].str.contains(r"INTEREST", case=False), "amount"].sum()
+    b = balances[balances["type"].isin(cash_types)]
+    wide = b.pivot_table(index="date", columns="account_id", values="balance", aggfunc="last").sort_index()
+    grid = pd.date_range(start, end, freq="ME")
+    avg = wide.reindex(wide.index.union(grid)).ffill().reindex(grid).fillna(0).sum(axis=1).mean() if len(wide) else 0
+    if interest <= 0 or avg <= 1_000:
+        return None
+    return {"yield": float(interest / avg), "interest": float(interest), "average_cash": float(avg)}

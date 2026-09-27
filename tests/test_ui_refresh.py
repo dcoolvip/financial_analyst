@@ -540,4 +540,9 @@ def test_future_shows_spending_rising_with_inflation(env):
     assert inputs["Income per month ($)"] == 12_000 and inputs["Living costs per month ($)"] == 6_000   # loans apart
     assert any(m.value.startswith("#### Money in & out ahead") for m in at.markdown)
     note = next(c.value for c in at.caption if c.value.startswith("In future dollars"))
-    assert "3.0% inflation" in note and "fixed, and they stop" in note
+    from finance import history
+    assert f"{history.summary(30)['inflation']:.1%} inflation" in note and "fixed, and they stop" in note   # history
+    assert "0.0% raises" in note                                           # income kept at today's level
+    sliders = {x.label: x.value for x in at.slider}
+    assert sliders["Investment return (per year)"] == pytest.approx(history.summary(30)["stocks"] * 100, abs=0.01)
+    assert any(e.label == "📜 Where these come from" for e in at.expander)

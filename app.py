@@ -18,7 +18,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, categorize, charts, checkpoints, db, demo, editing, pokemon, forecast, importers, insights, paths, portfolio
+from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, portfolio
 
 
 @st.cache_resource
@@ -384,9 +384,25 @@ with tab_future:
         st.info("Add some accounts first. The forecast starts from your current balances.")
     else:
         saved = forecast.Assumptions.from_dict(db.get_setting(conn, "assumptions"))
+        enriched_all = insights.enrich(txns, rule_map)
+        h30 = history.summary(30)
+        your_cash = insights.cash_yield(enriched_all, db.balance_history(conn))
+        liquid = totals.get("Cash", 0) + totals.get("Investments", 0)
+        # Starting assumptions come from history and your own data, not generic guesses (see history.py)
+        from_history = {"inflation": h30["inflation"], "investment_return": h30["stocks"],
+                        "investment_volatility": h30["stock_volatility"], "home_appreciation": h30["homes"],
+                        "cash_yield": your_cash["yield"] if your_cash else h30["cash"],
+                        "invest_share": totals.get("Investments", 0) / liquid if liquid else 0.8,
+                        "income_growth": 0.0}
         if db.get_setting(conn, "assumptions") is None:
             saved.monthly_savings = round(est_savings or 0, -1)
-        baseline = insights.cash_flow_baseline(insights.enrich(txns, rule_map))
+            for k, v in from_history.items():
+                setattr(saved, k, round(v, 4))
+        baseline = insights.cash_flow_baseline(enriched_all)
+        pct = lambda v: f"{v:.1%}"                                           # noqa: E731
+        hist_line = lambda key: (f"History ({h30['from']}–{h30['to']}): 30-yr {pct(history.summary(30)[key])}, "  # noqa: E731
+                                 f"20-yr {pct(history.summary(20)[key])}, 10-yr {pct(history.summary(10)[key])}, "
+                                 f"last year {pct(float(history.YEARLY[key].iloc[-1]))}.")
         if baseline and saved.monthly_income is None:        # from your last 12 months, until you set your own
             saved.monthly_income = round(baseline["income"], -2)
             saved.monthly_living = round(baseline["living"], -2)
@@ -403,12 +419,16 @@ with tab_future:
                     st.markdown("**Your assumptions**")
                 a = forecast.Assumptions(
                     years=st.slider("Years ahead", 5, 30, saved.years),
-                    inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.25, format="%.2f%%",
-                                        help="Living costs rise at this rate every year. Loan payments don't - a "
-                                             "mortgage payment stays the same until the loan is paid off.") / 100,
-                    investment_return=st.slider("Investment return (per year)", 0.0, 12.0,
-                                                saved.investment_return * 100, 0.25, format="%.2f%%",
-                                                help="Before inflation. ~7% is a common long-run estimate for a stock-heavy mix.") / 100,
+                    inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.05, format="%.2f%%",
+                                        help="Living costs rise at this rate every year; loan payments don't. "
+                                             "Starts at the 30-year average of US consumer prices. "
+                                             + hist_line("inflation")) / 100,
+                    investment_return=st.slider("Investment return (per year)", 0.0, 15.0,
+                                                saved.investment_return * 100, 0.05, format="%.2f%%",
+                                                help="Before inflation. Your investments are almost all stocks, so this "
+                                                     "starts at the S&P 500's 30-year compounded return, dividends "
+                                                     "included. The range of outcomes replays real market years. "
+                                                     + hist_line("stocks")) / 100,
                 )
                 if split:
                     avg = (f"Your average over the last {baseline['months']} months: " if baseline else "")
@@ -421,18 +441,29 @@ with tab_future:
                         help=avg + (money(baseline["living"]) if baseline else "") + ". Everything spent except loan "
                              "payments (those come from each loan in Accounts), in today's prices.")
                     a.income_growth = st.slider("Raises per year", 0.0, 8.0, saved.income_growth * 100, 0.25,
-                                                format="%.2f%%", help="How fast income grows.") / 100
+                                                format="%.2f%%", help="0% keeps income at today's level. Set it if "
+                                                "you expect raises.") / 100
                 else:
                     a.monthly_savings = st.number_input(
                         "Saved per month ($)", value=float(saved.monthly_savings), step=100.0,
                         help=f"What's left after all bills, loan payments included. "
                              f"Your recent average: {money(est_savings or 0)}.")
                 with st.expander("More assumptions"):
-                    a.invest_share = st.slider("Share of savings invested", 0, 100, int(saved.invest_share * 100), 5,
-                                               format="%d%%", help="The rest stays in cash.") / 100
-                    a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.25, format="%.2f%%") / 100
-                    a.home_appreciation = st.slider("Home value growth", -2.0, 8.0, saved.home_appreciation * 100, 0.25,
-                                                    format="%.2f%%") / 100
+                    a.invest_share = st.slider("Share of savings invested", 0, 100, int(round(saved.invest_share * 100)), 1,
+                                               format="%d%%", help=f"The rest stays in cash. Starts at how you hold "
+                                               f"money today: {pct(from_history['invest_share'])} of your cash + "
+                                               f"investments is invested.") / 100
+                    a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.05, format="%.2f%%",
+                                             help=(f"What your cash actually earned over the last 12 months: "
+                                                   f"{money(your_cash['interest'])} of interest on "
+                                                   f"{money(your_cash['average_cash'])} average cash = "
+                                                   f"{pct(your_cash['yield'])}. " if your_cash else "")
+                                                  + hist_line("cash").replace("History", "Treasury bills")) / 100
+                    a.home_appreciation = st.slider("Home value growth (long-run)", -2.0, 8.0,
+                                                    saved.home_appreciation * 100, 0.05, format="%.2f%%",
+                                                    help="Each home also uses its own value history (Redfin) - this "
+                                                         "is the long-run rate it's blended with. US home prices, "
+                                                         + hist_line("homes").replace("History ", "")) / 100
                     loan_names = [l.name for l in forecast.build_loans(accts)[0]]
                     if loan_names:
                         st.markdown("**Planned refinance**", help="A loan whose payment will change - e.g. an ARM "
@@ -462,12 +493,25 @@ with tab_future:
                 if c1.button("Save", width="stretch"):
                     db.set_setting(conn, "assumptions", a.to_dict())
                     st.toast("Assumptions saved")
-                if c2.button("Reset", width="stretch"):
+                if c2.button("Reset to history", width="stretch"):
                     conn.execute("DELETE FROM settings WHERE key = 'assumptions'")
                     conn.commit()
                     st.rerun()
                 real = st.toggle("Show in today's dollars", value=True,
                                  help="Removes inflation so future numbers feel like today's money.")
+                with st.expander("📜 Where these come from"):
+                    t = history.table()
+                    st.dataframe(t, hide_index=True, width="stretch", column_config={
+                        "measure": "", "last_year": st.column_config.NumberColumn("Last year", format="percent"),
+                        "y10": st.column_config.NumberColumn("10 yrs", format="percent"),
+                        "y20": st.column_config.NumberColumn("20 yrs", format="percent"),
+                        "y30": st.column_config.NumberColumn("30 yrs", format="percent")})
+                    yours = [f"Your cash earned **{pct(your_cash['yield'])}** over the last 12 months" if your_cash else "",
+                             f"**{pct(from_history['invest_share'])}** of your cash + investments is invested",
+                             (f"Income **{money(baseline['income'])}** and living costs **{money(baseline['living'])}** a "
+                              f"month: your average over the last {baseline['months']} months" if baseline else "")]
+                    st.markdown("\n".join(f"- {y}" for y in yours if y))
+                    st.caption(f"Sources: {history.SOURCE}. Averages are compounded (what $1 actually did).")
 
         fc = forecast.run(accts, a, history=db.balance_history(conn), trend_overrides=trend_overrides())
         sfx = "_real" if real else ""
