@@ -469,8 +469,8 @@ def test_accounts_in_sections_with_plain_column_names_and_details(env, monkeypat
     db.insert_transactions(conn, chk, pd.DataFrame([("2026-09-01", "SAFEWAY #123", -80.0, "s1")],
                                                    columns=["date", "description", "amount", "fingerprint"]), "x")
     at.run()
-    own = next(d.value for d in at.dataframe if "category" in d.value.columns and "merchant" in d.value.columns
-               and set(d.value["account"]) == {"Checking"} and len(d.value) == 1)
+    # the Account details list is the last table with transactions on the page (Money in & out comes first)
+    own = [d.value for d in at.dataframe if {"category", "account", "description"} <= set(d.value.columns)][-1]
     assert own["category"].iloc[0] == "Groceries"                          # regression: showed None
     at.selectbox(key="acct_detail").set_value("Car loan").run()
     assert any("payments left" in m.value for m in at.markdown)
