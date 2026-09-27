@@ -79,6 +79,7 @@ APPLE = pd.Series([25.6, 32.6, 8.1, 40.0, -3.0, 12.5, 48.5, -5.4, 89.0, 82.3, 34
 # After a stylized episode ends, the stock grows with the economy again.
 GROWS_WITH_ECONOMY = 0.074     # ~4.5%/yr nominal GDP growth + ~2.9%/yr returned via buybacks and dividends
 SINGLE_STOCK_PATHS = {
+    "mix": "Weighted mix of the paths below (recommended)",
     "economy": "Grows with the economy (~7.4%/yr)",
     "market": "Keeps up with the stock market",
     "ibm": "Like IBM after 1985: -75% over 6 years, then recovers",
@@ -90,6 +91,8 @@ SINGLE_STOCK_PATHS = {
 def single_stock_path(kind: str, years: int, market_return: float) -> np.ndarray:
     """Typical yearly return of the single stock for each coming year."""
     tail = lambda n: [GROWS_WITH_ECONOMY] * max(n, 0)          # noqa: E731
+    if kind == "mix":                                           # the typical single path of a mix: the middle one
+        kind = "ibm"
     if kind == "market":
         path = [market_return] * years
     elif kind == "ibm":

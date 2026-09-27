@@ -62,3 +62,19 @@ def test_pretax_401k_is_taxed_when_it_has_to_be_used():
     assert fc.cash_flow["tax_401k"].sum() > 0                       # required withdrawals / spending, taxed
     plain = _run(years=45, pretax_balance=0)
     assert fc.expected["net_worth"].iloc[-1] < plain.expected["net_worth"].iloc[-1]   # tax makes pre-tax worth less
+
+
+def test_401k_withdrawals_count_as_money_in_and_their_tax_as_money_out():
+    """Regression: required 401(k) withdrawals showed only their tax (as money out), so the chart looked like a
+    huge shortfall - the withdrawal itself (mostly reinvested) was missing from money in."""
+    from finance import charts
+    fc = _run(years=45, pretax_balance=2_000_000, pretax_tax_rate=0.30)
+    f = fc.cash_flow
+    late = f[f["tax_401k"] > 0].iloc[-1]
+    assert late["out_401k"] == pytest.approx(late["tax_401k"] / 0.30, rel=0.02)          # gross vs its tax
+    fig = charts.cash_flow_ahead(f, False, "light", events=[(2040, "A retires"), (2040, "A Medicare")])
+    money_in = next(d for d in fig.data if d.name == "Money in")
+    assert list(money_in.y) == pytest.approx(list(f["income"] + f["out_401k"]))
+    labels = [a.text for a in fig.layout.annotations]
+    assert labels == ["A retires · A Medicare"]                                            # one label per year
+    assert fig.layout.legend.y < 0                                                         # legend below the chart

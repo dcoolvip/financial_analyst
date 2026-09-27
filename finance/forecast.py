@@ -52,7 +52,9 @@ class Assumptions:
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
     single_stock_share: float = 0.0       # share of investments held in one company (Apple), kept as is
-    single_stock_scenario: str = "economy"  # its path: history.SINGLE_STOCK_PATHS
+    single_stock_scenario: str = "mix"      # its path: history.SINGLE_STOCK_PATHS
+    # with "mix", each simulation draws one path with these weights (a judgment call; see SINGLE_STOCK_PATHS)
+    single_stock_weights: dict = field(default_factory=lambda: {"economy": 0.40, "ibm": 0.45, "gm": 0.15})
     # Retirement (see retirement.py). people: [{name, born 'YYYY-MM', retire_age, pay (monthly take-home),
     # ss_monthly (today's $, at 67), ss_claim_age, k401_yearly (pre-tax in), roth_yearly, stock_yearly (RSU/ESPP
     # net)}]. With people, income = each person's pay until they retire + other_income + Social Security.
@@ -189,8 +191,14 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     stk_growth = np.ones((sims, months))
     if share:
         from .history import single_stock_path, single_stock_swings
-        path = single_stock_path(a.single_stock_scenario, n_years, a.investment_return)
-        yearly = np.tile(1 + path, (sims, 1))
+        weights = {k: v for k, v in (a.single_stock_weights or {}).items() if v > 0}
+        if a.single_stock_scenario == "mix" and sims > 1 and weights:
+            kinds = list(weights)
+            base = np.stack([single_stock_path(k, n_years, a.investment_return) for k in kinds])
+            pick = rng.choice(len(kinds), size=sims, p=np.array(list(weights.values())) / sum(weights.values()))
+            yearly = 1 + base[pick]                                  # each simulation lives one of the paths
+        else:
+            yearly = np.tile(1 + single_stock_path(a.single_stock_scenario, n_years, a.investment_return), (sims, 1))
         if sigma > 0:
             swings = single_stock_swings()
             yearly = np.where(yearly <= 0, 0.0, yearly * swings[rng.integers(0, len(swings), size=(sims, n_years))])
@@ -221,8 +229,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     else:
         pre = np.zeros(sims)
     # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
-    # tax on 401(k) withdrawals
-    flow = np.zeros((months, 8))
+    # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending)
+    flow = np.zeros((months, 9))
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
     paths = np.empty((months + 1, val.shape[1]))
@@ -252,7 +260,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             payoff[loans[i].name] = m
         freed = loan_pay[~active].sum()          # loans already cleared before this month
 
-        tax_401k = 0.0
+        tax_401k = out_401k = 0.0
         if people:
             years = (m - 1) / 12
             price = (1 + a.inflation) ** years
@@ -283,7 +291,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                 pre -= out
                 inv += out * (1 - a.pretax_tax_rate)
                 tax_401k += float((out * a.pretax_tax_rate).mean())
-            flow[m - 1] = [income, living, paid, health, pay, ss, other, 0.0]
+                out_401k += float(out.mean())
+            flow[m - 1] = [income, living, paid, health, pay, ss, other, 0.0, 0.0]
         elif split:
             income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
             living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
@@ -314,8 +323,9 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                 gross = need / (1 - rate)
                 pre -= gross
                 tax_401k += float((gross - need).mean())
+                out_401k += float(gross.mean())
         if people:
-            flow[m - 1, 7] = tax_401k
+            flow[m - 1, 7:9] = [tax_401k, out_401k]
         val = val * v_growth[:, m - 1, :]
         paths[m] = val.mean(axis=0)
         debt = loan_bal.sum() + revolving
@@ -332,9 +342,9 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     deflator = (1 + a.inflation) ** (np.arange(len(dates)) / 12)
 
     nw, _, loans, _, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
-    p10, p50, p90 = np.percentile(nw, [10, 50, 90], axis=0)
-    bands = pd.DataFrame({"date": dates, "p10": p10, "p50": p50, "p90": p90})
-    for c in ("p10", "p50", "p90"):
+    p10, p25, p50, p75, p90 = np.percentile(nw, [10, 25, 50, 75, 90], axis=0)
+    bands = pd.DataFrame({"date": dates, "p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90})
+    for c in ("p10", "p25", "p50", "p75", "p90"):
         bands[f"{c}_real"] = bands[c] / deflator
 
     _, parts, _, payoff, vt, paths, flow = _simulate(accts, a, 1, 0.0, history, trend_overrides)  # expected path
@@ -359,18 +369,20 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     valuable_paths = pd.DataFrame(paths, columns=list(vt["name"]), index=dates)
     cash_flow = pd.DataFrame()
     if flow is not None:                                  # per year, nominal and in today's dollars
-        f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k"])
+        f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k",
+                                        "out_401k"])
         f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
         f["deflator"] = deflator[1:]
         f["month"] = dates[1:]
         cash_flow = f.groupby("period").agg(income=("income", "sum"), living=("living", "sum"),
                                             loans=("loans", "sum"), health=("health", "sum"), pay=("pay", "sum"),
                                             ss=("ss", "sum"), other=("other", "sum"), tax_401k=("tax_401k", "sum"),
+                                            out_401k=("out_401k", "sum"),
                                             deflator=("deflator", "mean"),
                                             months=("income", "size"), first=("month", "min"), last=("month", "max"))
         cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
         cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
-        for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "saved"):
+        for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "out_401k", "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
     return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)

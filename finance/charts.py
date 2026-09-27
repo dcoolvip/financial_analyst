@@ -198,6 +198,45 @@ def account_history(hist: pd.DataFrame, mode: str, debt: bool = False, compact: 
     return _layout(fig, c, height=280, legend=bool(hist["estimate"].any()), compact=compact)
 
 
+SCENARIO_STYLE = {   # band color, legend name - best / middle / worse for the one company's stock
+    "economy": ("s1", "Apple grows with the economy"),
+    "ibm": ("muted", "Drop and recovery (like IBM)"),
+    "gm": ("s2", "Slow decline to $0 (like GM)"),
+}
+
+
+def forecast_scenarios(history: pd.DataFrame, scenarios: dict, blend: pd.DataFrame, real: bool, mode: str,
+                       compact: bool = False) -> go.Figure:
+    """Net worth ahead under each scenario for the one company's stock - a band per scenario (its middle half
+    of outcomes) - and the dark line: the middle of all simulations with the scenarios mixed by weight."""
+    c = PALETTE[mode]
+    sfx = "_real" if real else ""
+    alpha = {"light": 0.18, "dark": 0.26}[mode]
+
+    def rgba(hex_, a):
+        h = hex_.lstrip("#")
+        return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a})"
+    fig = go.Figure()
+    if len(history):
+        fig.add_trace(go.Scatter(x=history["date"], y=history["net_worth"], mode="lines", name="So far",
+                                 line=dict(color=c["ink2"], width=2),
+                                 hovertemplate="<b>%{x|%b %Y}</b><br>Actual $%{y:,.0f}<extra></extra>"))
+    for kind, b in scenarios.items():
+        key, name = SCENARIO_STYLE.get(kind, ("muted", kind))
+        fig.add_trace(go.Scatter(x=b["date"], y=b[f"p75{sfx}"], mode="lines", line=dict(width=0), showlegend=False,
+                                 hoverinfo="skip", legendgroup=kind))
+        fig.add_trace(go.Scatter(x=b["date"], y=b[f"p25{sfx}"], mode="lines", line=dict(width=1, color=rgba(c[key], 0.5)),
+                                 fill="tonexty", fillcolor=rgba(c[key], alpha), name=name, legendgroup=kind,
+                                 customdata=b[[f"p50{sfx}"]].values,
+                                 hovertemplate=f"{name}: typically $%{{customdata[0]:,.0f}}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=blend["date"], y=blend[f"p50{sfx}"], mode="lines", name="Weighted blend (most likely)",
+                             line=dict(color=c["s1"], width=3),
+                             hovertemplate="<b>%{x|%b %Y}</b><br>Most likely (blend) $%{y:,.0f}<extra></extra>"))
+    fig.update_layout(hovermode="x unified")
+    fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
+    return _layout(fig, c, height=400, legend=True, compact=compact)
+
+
 def forecast_own_owe(history: pd.DataFrame, expected: pd.DataFrame, real: bool, mode: str,
                      compact: bool = False) -> go.Figure:
     """What you own and what you owe: recorded so far (solid) and the most likely path ahead (dashed)."""
@@ -221,8 +260,8 @@ def forecast_own_owe(history: pd.DataFrame, expected: pd.DataFrame, real: bool, 
 def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = False,
                     events: list | None = None) -> go.Figure:
     """Each coming year: living costs, loan payments, healthcare and tax on 401(k) withdrawals (stacked)
-    against income (pay + Social Security + rent/dividends). events: [(year, label)] marked on the chart -
-    retirements, Social Security, Medicare."""
+    against money in (pay + Social Security + rent/dividends + 401(k) withdrawals). events: [(year, label)]
+    drawn as dotted lines, labels written along them (one per year, so they never pile up)."""
     c = PALETTE[mode]
     sfx = "_real" if real else ""
     span = [f"{a:%b %Y} – {b:%b %Y}" for a, b in zip(cf["first"], cf["last"])]
@@ -233,24 +272,29 @@ def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = Fal
         if col(name).abs().sum() > 0:
             fig.add_trace(go.Bar(x=cf["year"], y=col(name), name=label, marker=dict(color=color),
                                  hovertemplate=f"{label} $%{{y:,.0f}}<extra></extra>"))
-    parts = pd.concat([pd.Series(span, index=cf.index), col("pay"), col("ss"), col("other")], axis=1).values
+    money_in = col("income") + col("out_401k")
+    parts = pd.concat([pd.Series(span, index=cf.index), col("pay"), col("ss"), col("other"), col("out_401k")], axis=1).values
     has_parts = col("pay").abs().sum() + col("ss").abs().sum() > 0
-    fig.add_trace(go.Scatter(x=cf["year"], y=col("income"), name="Income", mode="lines+markers",
+    fig.add_trace(go.Scatter(x=cf["year"], y=money_in, name="Money in", mode="lines+markers",
                              line=dict(color=c["s1"], width=2), marker=dict(size=6 if len(cf) > 20 else 8),
                              customdata=parts,
-                             hovertemplate="<b>%{customdata[0]}</b><br>Income $%{y:,.0f}"
+                             hovertemplate="<b>%{customdata[0]}</b><br>Money in $%{y:,.0f}"
                                            + ("<br>  pay $%{customdata[1]:,.0f} · Social Security $%{customdata[2]:,.0f}"
-                                              " · rent & dividends $%{customdata[3]:,.0f}" if has_parts else "")
+                                              "<br>  rent & dividends $%{customdata[3]:,.0f} · 401(k) withdrawals "
+                                              "$%{customdata[4]:,.0f}" if has_parts else "")
                                            + "<extra></extra>"))
-    for i, (year, label) in enumerate(events or []):
+    by_year: dict = {}
+    for year, label in events or []:
+        by_year.setdefault(year, []).append(label)
+    for year, labels in sorted(by_year.items()):
         fig.add_vline(x=year, line=dict(color=c["axis"], width=1, dash="dot"))
-        fig.add_annotation(x=year, y=1, yref="paper", yanchor="bottom", text=label, showarrow=False,
-                           font=dict(size=10, color=c["ink2"]), yshift=12 * (i % 3))
+        fig.add_annotation(x=year, y=0.98, yref="paper", xanchor="left", yanchor="top", textangle=-90,
+                           text=" · ".join(labels), showarrow=False, font=dict(size=10, color=c["ink2"]),
+                           bgcolor=c["surface"], opacity=0.9, xshift=2)
     fig.update_layout(barmode="stack", hovermode="x unified", bargap=0.3)
     fig.update_xaxes(dtick=5 if len(cf) > 20 else 1, tickformat="d")
-    fig = _layout(fig, c, height=360, legend=True, compact=compact)
-    if events:
-        fig.update_layout(margin=dict(t=60 if not compact else 50))
+    fig = _layout(fig, c, height=420 if events else 360, legend=True, compact=compact)
+    fig.update_layout(legend=dict(orientation="h", yanchor="top", y=-0.12, x=0))      # below, out of the way
     return fig
 
 

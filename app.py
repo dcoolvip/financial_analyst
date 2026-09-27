@@ -589,6 +589,16 @@ with tab_future:
                                  "US GDP); keeping up with the market for 43 years would take Apple to ~44% of US GDP, "
                                  "which no company has come close to. IBM, GE and GM show what happened to past #1 "
                                  "US companies after their peak.")
+                        if a.single_stock_scenario == "mix":
+                            st.caption("How likely each path is (a judgment call - past #1 companies mostly lost their "
+                                       "lead and lagged; a few collapsed; some kept compounding):")
+                            w0 = saved.single_stock_weights or {"economy": 0.40, "ibm": 0.45, "gm": 0.15}
+                            w = {k: st.slider(charts.SCENARIO_STYLE[k][1], 0, 100, int(round(w0.get(k, 0) * 100)), 5,
+                                              format="%d%%", key=f"weight_{k}") for k in ("economy", "ibm", "gm")}
+                            total = sum(w.values()) or 1
+                            a.single_stock_weights = {k: v / total for k, v in w.items()}
+                            if total != 100:
+                                st.caption(f"(weights add up to {total}% - used in proportion)")
                     a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.05, format="%.2f%%",
                                              help=(f"What your cash actually earned over the last 12 months: "
                                                    f"{money(your_cash['interest'])} of interest on "
@@ -670,6 +680,18 @@ with tab_future:
                 st.caption(f"Typical path (each holding at its typical return): you own {money(own0)} → {money(own1)} and owe {money(e0[f'debt{sfx}'])} "
                            f"→ {money(e1[f'debt{sfx}'])} by {e1['date']:%Y}" + (" (today's dollars)." if real else ".")
                            + " Solid: recorded so far. Dashed: ahead.")
+            elif a.single_stock_share and a.single_stock_scenario == "mix":
+                import dataclasses
+                runs = {k: forecast.run(accts, dataclasses.replace(a, single_stock_scenario=k, simulations=400),
+                                        history=db.balance_history(conn), trend_overrides=trend_overrides()).bands
+                        for k in ("economy", "ibm", "gm")}
+                plot(charts.forecast_scenarios(nw.tail(24), runs, fc.bands, real, mode, compact=PHONE))
+                ends = {k: b.iloc[-1][f"p50{sfx}"] for k, b in runs.items()}
+                st.caption(f"By {end['date']:%Y}, typically: " + " · ".join(
+                    f"**{charts.SCENARIO_STYLE[k][1]}** {money(v)}" for k, v in ends.items())
+                    + f". Dark line: the {a.single_stock_weights['economy']:.0%} / {a.single_stock_weights['ibm']:.0%} / "
+                      f"{a.single_stock_weights['gm']:.0%} blend. Each band is that scenario's middle half of outcomes"
+                    + (" (today's dollars)." if real else "."))
             else:
                 plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
 
@@ -718,10 +740,10 @@ with tab_future:
                 events = []
                 for person in a.people or []:
                     born = pd.Timestamp(f"{person['born']}-01")
-                    first = person["name"][0]
-                    events += [(born.year + person.get("retire_age", 65), f"{first} retires"),
-                               (born.year + person.get("ss_claim_age", 67), f"{first} Social Security"),
-                               (born.year + retirement.MEDICARE_AGE, f"{first} Medicare")]
+                    who = person["name"]
+                    events += [(born.year + person.get("retire_age", 65), f"{who} retires"),
+                               (born.year + person.get("ss_claim_age", 67), f"{who} Social Security"),
+                               (born.year + retirement.MEDICARE_AGE, f"{who} Medicare")]
                 events = [(y, l) for y, l in sorted(events) if cfa["year"].min() <= y <= cfa["year"].max()]
                 plot(charts.cash_flow_ahead(cfa, False, mode, compact=PHONE, events=events))   # future dollars
                 first, last = cfa.iloc[0], cfa.iloc[-1]
