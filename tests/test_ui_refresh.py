@@ -634,7 +634,7 @@ def test_future_retirement_controls_from_household_settings(env):
     assert any("SSA estimate" in c.value for c in at.caption)                             # Blair has SSA figures
     at.slider(key="retire_Alex").set_value(55).run()
     assert not at.exception
-    assert any("**Alex** retires" in c.value and "(at 55)" in c.value for c in at.caption)
+    assert any("**Alex:** retires in" in m.value and " at 55," in m.value for m in at.markdown)
 
 
 def test_future_summarizes_the_plan_under_money_in_and_out(env):
@@ -655,7 +655,9 @@ def test_future_summarizes_the_plan_under_money_in_and_out(env):
     db.set_setting(conn, "household_kids", [{"name": "Kim", "born": f"{today.year - 8}-01"}])
     at = app()
     assert not at.exception, [e.value for e in at.exception]
-    summary = next(m.value for m in at.markdown if m.value.startswith("**What this plan assumes**"))
+    summary = next(m.value for m in at.markdown if "**What this plan assumes**" in m.value)
     assert f"until Blair (the younger of you) is 95, in {today.year - 45 + 95}" in summary
     assert "Kim:" in summary and "for the rest of the plan (worst case: no jobs)" in summary
-    assert "Alex:** retires at 65" in summary and "24% bracket" in summary
+    assert f"Alex:** retires in {today.year - 50 + 65} at 65" in summary and "24% bracket" in summary
+    assert "**Next 12 months:**" in summary                               # the old separate captions live here now
+    assert not any(c.value.startswith("Next 12 months") for c in at.caption)

@@ -794,21 +794,17 @@ with tab_future:
                 first, last = cfa.iloc[0], cfa.iloc[-1]
                 if a.people:
                     order = sorted(a.people, key=lambda q: q["born"])
-                    st.caption(" · ".join(f"**{q['name']}** retires {pd.Timestamp(q['born'] + '-01').year + q['retire_age']} "
-                                          f"(at {q['retire_age']}), Social Security from "
-                                          f"{pd.Timestamp(q['born'] + '-01').year + q['ss_claim_age']}" for q in order)
-                               + f". Future dollars. Living costs grow with inflation ({a.inflation:.1%}), healthcare "
-                                 f"{a.inflation + a.health_extra_growth:.1%} a year; loan payments stay fixed.")
-                    retired = cfa[cfa["pay"] == 0]
-                    note = f"Next 12 months: {money(first['income'])} in, {money(first['living'] + first['loans'] + first['health'])} out."
-                    if len(retired):
-                        cover = (retired["income"] / retired[["living", "loans", "health", "tax_401k"]].sum(axis=1)).mean()
-                        note += (f" Once both of you are retired, money in (Social Security, rent, dividends) covers "
-                                 f"about {cover:.0%} of money out; the rest comes from savings and investments.")
-                    st.caption(note)
-                    order = sorted(a.people, key=lambda q: q["born"])
                     young = order[-1]
-                    end_year = pd.Timestamp(f"{young['born']}-01").year + a.planning_age
+                    year_of = lambda q, age: pd.Timestamp(f"{q['born']}-01").year + age          # noqa: E731
+                    end_year = year_of(young, a.planning_age)
+                    out_cols = ["living", "loans", "health", "college", "kid_support", "tax_401k", "cg_tax", "income_tax"]
+                    out_cols = [c for c in out_cols if c in cfa]
+                    shows = (f"- **Next 12 months:** {money(first['income'])} in, {money(first[out_cols].sum())} out.\n")
+                    retired = cfa[cfa["pay"] == 0]
+                    if len(retired):
+                        cover = (retired["income"] / retired[out_cols].sum(axis=1)).mean()
+                        shows += (f"- **Once both of you are retired:** Social Security, rent and dividends cover about "
+                                  f"{cover:.0%} of money out; the rest comes from savings and investments.\n")
                     kids_line = ""
                     if a.kids:
                         names = " and ".join(k["name"] for k in a.kids)
@@ -816,23 +812,27 @@ with tab_future:
                                    f"then supported at {money(a.kid_support_yearly)} a year each "
                                    + ("for the rest of the plan (worst case: no jobs)" if a.kid_support_until_age >= 100
                                       else f"until age {a.kid_support_until_age}"))
-                        kids_line = (f"- **{names}:** college at {money(a.college_yearly)} a year each from 18 "
-                                     f"({a.college_years} years), {support}.\n")
+                        starts = sorted({year_of(k, a.college_start_age) for k in a.kids})
+                        kids_line = (f"- **{names}:** college from {', '.join(map(str, starts))} at "
+                                     f"{money(a.college_yearly)} a year each ({a.college_years} years), {support}.\n")
                     strategy = {"fill22": "converted to Roth up to the 22% bracket each retired year",
                                 "fill24": "converted to Roth up to the 24% bracket each retired year",
                                 "fill32": "converted to Roth up to the 32% bracket each retired year",
                                 "required": "only the required withdrawals, from 75"}.get(a.withdrawal_strategy, "")
                     with st.container(border=True):
                         st.markdown(
-                            "**What this plan assumes**\n"
+                            "**What it shows** (the chart is in future dollars)\n" + shows
+                            + "\n**What this plan assumes**\n"
                             f"- **Lifespan:** planned until {young['name']} (the younger of you) is {a.planning_age}, in "
                             f"{end_year}.\n"
-                            + "".join(f"- **{q['name']}:** retires at {q['retire_age']}, Social Security from "
-                                      f"{q['ss_claim_age']} ({money(retirement.social_security(q, q['ss_claim_age']))}/month "
-                                      "today's dollars).\n" for q in order)
+                            + "".join(f"- **{q['name']}:** retires in {year_of(q, q['retire_age'])} at {q['retire_age']}, "
+                                      f"Social Security from {year_of(q, q['ss_claim_age'])} at {q['ss_claim_age']} "
+                                      f"({money(retirement.social_security(q, q['ss_claim_age']))}/month today's dollars).\n"
+                                      for q in order)
                             + kids_line
                             + f"- **Healthcare:** employer plans while working, private until 65 if retired earlier, then "
-                              f"Medicare; grows {a.health_extra_growth:.0%} faster than inflation.\n"
+                              f"Medicare; grows {a.inflation + a.health_extra_growth:.1%} a year "
+                              f"({a.health_extra_growth:.0%} faster than inflation).\n"
                             + f"- **401(k):** {strategy}; retired years taxed with real federal + California brackets.\n"
                             + (f"- **Apple ({a.single_stock_share:.0%} of investments, kept as is):** "
                                + (f"a weighted mix - {a.single_stock_weights.get('economy', 0):.0%} grows with the economy, "
@@ -842,8 +842,8 @@ with tab_future:
                                   f"{history.SINGLE_STOCK_PATHS.get(a.single_stock_scenario, a.single_stock_scenario)}.\n")
                                if a.single_stock_share else "")
                             + f"- **Spending:** today's living costs ({money(a.monthly_living)}/month) rising with inflation "
-                              f"({a.inflation:.1%}); shortfalls come from cash, then investments (with capital-gains tax), "
-                              "then the 401(k), then Roth.")
+                              f"({a.inflation:.1%}); loan payments stay fixed until paid off; shortfalls come from cash, "
+                              "then investments (with capital-gains tax), then the 401(k), then Roth.")
                 else:
                     st.caption(
                         f"In future dollars, next 12 months → {last['year']}: living costs {money(first['living'])} → "
