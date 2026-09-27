@@ -300,3 +300,30 @@ def test_apple_card_reimport_is_idempotent(conn):
     parsed = parse_file(read("apple_card.csv"))
     assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 6
     assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 0
+
+
+def test_mortgage_not_extended_back_before_the_home(conn):
+    """Regression: a car's history from 2019 stretched the chart back, the mortgages were extended with it
+    but the homes (recorded from Sep 2021) weren't - net worth showed -$2.3M before the homes appeared."""
+    car = db.add_account(conn, "Civic", "Honda", "vehicle")
+    home = db.add_account(conn, "Home", "Redfin", "property")
+    mtg = db.add_account(conn, "Mortgage", "Golden 1", "mortgage")
+    for m in pd.date_range("2019-11-30", "2021-12-31", freq="ME"):
+        db.upsert_balance(conn, car, m.date(), 20_000)
+    for m in ("2021-09-30", "2021-10-31", "2021-11-30", "2021-12-31"):
+        db.upsert_balance(conn, home, m, 3_000_000)
+    db.upsert_balance(conn, mtg, "2021-12-31", 2_000_000)
+    nw = db.net_worth_series(conn)
+    before = nw[nw["date"] < "2021-09-30"]
+    assert len(before) and (before["liabilities"] == 0).all() and (before["net_worth"] == 20_000).all()
+    sep = nw[nw["date"] == "2021-09-30"].iloc[0]
+    assert sep["liabilities"] == 2_000_000 and sep["added"] == "Home"
+
+
+def test_net_worth_chart_shows_one_tooltip_per_point():
+    from finance import charts
+    nw = pd.DataFrame({"date": pd.to_datetime(["2021-08-31", "2021-09-30"]), "assets": [1.0, 3e6],
+                       "liabilities": [0.0, 2e6], "net_worth": [1.0, 1e6], "added": ["", "Home"]})
+    fig = charts.net_worth_history(nw, "light")
+    assert [t.hoverinfo for t in fig.data[1:]] == ["skip"]            # the "added" marker has no tooltip
+    assert list(fig.data[0].customdata[:, 2]) == ["", "<br>Added: Home"]   # the line's tooltip says it

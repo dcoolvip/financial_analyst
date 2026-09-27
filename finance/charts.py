@@ -57,19 +57,20 @@ def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False,
 
 def net_worth_history(nw: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
     c = PALETTE[mode]
+    added = (nw["added"].fillna("") if "added" in nw else pd.Series("", index=nw.index)).astype(str)
+    note = added.map(lambda a: f"<br>Added: {a}" if a else "")
     fig = go.Figure(go.Scatter(
         x=nw["date"], y=nw["net_worth"], mode="lines", line=dict(color=c["s1"], width=2),
-        customdata=nw[["assets", "liabilities"]].values,
+        customdata=pd.concat([nw[["assets", "liabilities"]], note.rename("note")], axis=1).values,
         hovertemplate="<b>%{x|%b %Y}</b><br>Net worth $%{y:,.0f}"
-                      "<br>Own $%{customdata[0]:,.0f} · Owe $%{customdata[1]:,.0f}<extra></extra>",
+                      "<br>Own $%{customdata[0]:,.0f} · Owe $%{customdata[1]:,.0f}%{customdata[2]}<extra></extra>",
     ))
-    if "added" in nw and (steps := nw[nw["added"].astype(bool)]).shape[0]:
-        # an account's history starts here: mark it so the step isn't mistaken for a gain
+    if (steps := nw[added != ""]).shape[0]:
+        # an account's history starts here: mark it so the step isn't mistaken for a gain. The line's own
+        # tooltip names it - the marker has none, so hovering never shows two boxes.
         fig.add_trace(go.Scatter(
-            x=steps["date"], y=steps["net_worth"], mode="markers", showlegend=False,
-            marker=dict(symbol="diamond", size=9, color=c["ink2"], line=dict(width=2, color=c["surface"])),
-            customdata=steps[["added"]].values,
-            hovertemplate="<b>%{x|%b %Y}</b><br>Added: %{customdata[0]}<extra></extra>"))
+            x=steps["date"], y=steps["net_worth"], mode="markers", showlegend=False, hoverinfo="skip",
+            marker=dict(symbol="diamond", size=9, color=c["ink2"], line=dict(width=2, color=c["surface"]))))
     fig.update_layout(hovermode="x")
     fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
     return _layout(fig, c, compact=compact)

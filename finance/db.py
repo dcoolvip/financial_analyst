@@ -232,6 +232,9 @@ def balance_history(conn) -> pd.DataFrame:
     return df
 
 
+LOAN_SECURES = {"mortgage": "property", "heloc": "property", "auto_loan": "vehicle"}
+
+
 def _net_worth_wide(conn, freq: str = "ME"):
     """Per-account month-end balances (dates x account ids). Each account carries its last balance forward.
     Before an ASSET account's first known balance it's unknown (NaN) - never a made-up $0 or a copy.
@@ -251,13 +254,23 @@ def _net_worth_wide(conn, freq: str = "ME"):
     names = dict(zip(hist["account_id"], hist["name"]))
 
     terms = {r[0]: (r[1], r[2]) for r in conn.execute("SELECT id, rate, payment FROM accounts")}
+    types = dict(zip(hist["account_id"], hist["type"]))
+    # A mortgage is only extended back while a home's value is recorded (else the loan shows up years before
+    # the house and net worth dives), a car loan while a car's is. No such asset recorded -> no limit.
+    starts = {}
+    for loan_type, asset_type in LOAN_SECURES.items():
+        firsts = [wide[c].first_valid_index() for c in asset_cols if types.get(c) == asset_type]
+        firsts = [f for f in firsts if f is not None]
+        if firsts:
+            starts[loan_type] = min(firsts)
     for col in liab_cols:
         first = wide[col].first_valid_index()
         if first is None or first == wide.index[0]:
             continue
         rate, payment = terms.get(col, (None, None))
         bal, later = float(wide.at[first, col]), first
-        for d in reversed(wide.index[wide.index < first]):
+        floor = starts.get(types.get(col), wide.index[0])
+        for d in reversed(wide.index[(wide.index < first) & (wide.index >= floor)]):
             if rate and payment:   # undo one month of amortization per month back
                 months = max(1, round((later - d).days / 30.44))
                 for _ in range(months):
