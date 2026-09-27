@@ -12,6 +12,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from . import paths
@@ -296,7 +297,19 @@ def _net_worth_wide(conn, freq: str = "ME"):
     end = max(wide.index.max(), pd.Timestamp(date.today()))
     grid = pd.date_range(wide.index.min(), end, freq=freq)
     grid = grid.union([end])  # include "today" so the last point is current
-    wide = wide.reindex(wide.index.union(grid)).ffill().reindex(grid)
+    # Between two recorded values the account moved from one to the other - draw that path (steady growth)
+    # rather than holding the old value and jumping on the day of the next one (a 401(k) with values in 2020 and
+    # 2026 otherwise showed six years of growth as one month's gain). After the last value it carries forward.
+    wide = wide.reindex(wide.index.union(grid))
+    for col in wide.columns:
+        v = wide[col]
+        if v.notna().sum() >= 2:
+            if (v.dropna() > 0).all():
+                path = np.exp(np.log(v).interpolate(method="time", limit_area="inside"))
+            else:
+                path = v.interpolate(method="time", limit_area="inside")
+            wide[col] = v.where(v.notna(), path)          # only the gaps; recorded values stay exact
+    wide = wide.ffill().reindex(grid)
     liab_ids = set(hist.loc[hist["is_liability"], "account_id"])
     liab_cols = [c for c in wide.columns if c in liab_ids]
     asset_cols = [c for c in wide.columns if c not in liab_ids]

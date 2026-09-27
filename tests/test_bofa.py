@@ -364,3 +364,15 @@ def test_net_worth_chart_shows_one_tooltip_per_point():
     fig = charts.net_worth_history(nw, "light")
     assert [t.hoverinfo for t in fig.data[1:]] == ["skip"]            # the "added" marker has no tooltip
     assert list(fig.data[0].customdata[:, 2]) == ["", "<br>Added: Home"]   # the line's tooltip says it
+
+
+def test_value_between_two_sparse_statements_is_a_path_not_a_jump(conn):
+    """Regression: a 401(k) with values in Dec 2020 and Sep 2026 showed six years of growth as one month's gain."""
+    k = db.add_account(conn, "401(k)", "Fidelity", "retirement")
+    db.upsert_balance(conn, k, "2020-12-31", 460_000)
+    db.upsert_balance(conn, k, "2026-08-31", 800_000)
+    nw = db.net_worth_series(conn).set_index("date")["net_worth"]
+    assert nw[pd.Timestamp("2020-12-31")] == 460_000 and nw[pd.Timestamp("2026-08-31")] == 800_000   # exact
+    jul = nw[pd.Timestamp("2026-07-31")]
+    assert 790_000 < jul < 800_000                                 # a month of steady growth, not $340K
+    assert nw[pd.Timestamp("2023-10-31")] == pytest.approx(460_000 * (800_000 / 460_000) ** 0.5, rel=0.01)
