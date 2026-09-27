@@ -191,3 +191,9 @@ def test_store_name_glued_to_its_number_is_kept():
     assert merchant_key("BP#9563966TTA# 39") == "BP 39"
     assert merchant_key("Arco#82967senter Stqps") == "ARCO STQPS"
     assert merchant_key("99 RANCH #1779") == "99 RANCH"
+
+
+def test_common_chains_known_without_ai():
+    assert insights.categorize("BP#9563966TTA# 39", -27.47) == "Transport"
+    assert insights.categorize("MICRO CENTER# 195", -518.98) == "Shopping"
+    assert insights.categorize("BPX CONSULTING", -50) != "Transport"          # whole word only
