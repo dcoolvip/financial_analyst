@@ -236,6 +236,11 @@ def trend_overrides() -> dict:
             if g and g.get("account_id") in set(accts["id"]) else {})
 
 
+def dividends_by_account() -> dict[str, float]:
+    """Yearly dividends per brokerage account: today's shares x the per-share rate from statements."""
+    return insights.yearly_dividends(db.latest_holdings(conn), db.get_setting(conn, "dividend_rates"))
+
+
 def run_ai_categorize(recheck: bool = False) -> None:
     """Runs the AI and leaves the outcome in session state: the page reruns right after, which would
     wipe anything drawn here (an error must stay visible until it's read)."""
@@ -289,7 +294,8 @@ with tab_overview:
         with st.container(border=True):
             for n in insights.overview(insights.enrich(txns, rule_map), accts, totals, db.account_changes(conn, 12),
                                        db.net_worth_change(conn, 12),
-                                       property_tax_shares=db.get_setting(conn, "property_tax_shares")):
+                                       property_tax_shares=db.get_setting(conn, "property_tax_shares"),
+                                       dividends=dividends_by_account()):
                 st.markdown(f"{n['icon']} {n['text']}", help=n["help"])
 
         head, pick_range, pick_view = st.columns([2, 1.3, 1.3]) if not PHONE else (st, st, st)
@@ -399,6 +405,13 @@ with tab_future:
             for k, v in from_history.items():
                 setattr(saved, k, round(v, 4))
         baseline = insights.cash_flow_baseline(enriched_all)
+        yearly_div = sum(dividends_by_account().values())
+        div_yield = yearly_div / totals["Investments"] if totals.get("Investments") else 0.0
+        if baseline and yearly_div:                     # dividends are income; take them out of the return
+            baseline = {**baseline, "income": baseline["income"] + yearly_div / 12, "dividends": yearly_div / 12}
+            from_history["investment_return"] = h30["stocks"] - div_yield
+            if db.get_setting(conn, "assumptions") is None:
+                saved.investment_return = round(from_history["investment_return"], 4)
         pct = lambda v: f"{v:.1%}"                                           # noqa: E731
         hist_line = lambda key: (f"History ({h30['from']}–{h30['to']}): 30-yr {pct(history.summary(30)[key])}, "  # noqa: E731
                                  f"20-yr {pct(history.summary(20)[key])}, 10-yr {pct(history.summary(10)[key])}, "
@@ -426,16 +439,21 @@ with tab_future:
                     investment_return=st.slider("Investment return (per year)", 0.0, 15.0,
                                                 saved.investment_return * 100, 0.05, format="%.2f%%",
                                                 help="Before inflation. Your investments are almost all stocks, so this "
-                                                     "starts at the S&P 500's 30-year compounded return, dividends "
-                                                     "included. The range of outcomes replays real market years. "
+                                                     "starts at the S&P 500's 30-year compounded return"
+                                                     + (f", minus your dividend yield ({div_yield:.1%}) since "
+                                                        "dividends are counted in income" if yearly_div else
+                                                        ", dividends included") + ". The range of outcomes replays "
+                                                     "real market years. "
                                                      + hist_line("stocks")) / 100,
                 )
                 if split:
                     avg = (f"Your average over the last {baseline['months']} months: " if baseline else "")
                     a.monthly_income = st.number_input(
                         "Income per month ($)", value=float(saved.monthly_income), step=500.0,
-                        help=avg + (money(baseline["income"]) if baseline else "") + ". Pay and other income after "
-                             "tax withholding; stock vesting isn't included.")
+                        help=avg + (money(baseline["income"]) if baseline else "") + ". Pay (after tax withholding), "
+                             "rent and interest" + (f", plus {money(baseline['dividends'])} a month of dividends"
+                                                    if baseline and baseline.get("dividends") else "")
+                             + ". Stock vesting and money paid back to you aren't income.")
                     a.monthly_living = st.number_input(
                         "Living costs per month ($)", value=float(saved.monthly_living), step=500.0,
                         help=avg + (money(baseline["living"]) if baseline else "") + ". Everything spent except loan "

@@ -75,9 +75,10 @@ def categorize(description: str, amount: float, rules: dict | None = None) -> st
     return "Other income" if amount > 0 else "Other"
 
 
-# Categories that are money coming in. Anything else that's positive is a refund or credit: it reduces
-# that category's spending instead of counting as income.
-INCOME_CATEGORIES = {"Income", "Rental income", "Other income", "Payments to people"}
+# Categories that are new money coming in: pay, rent, interest. Anything else that's positive - insurance
+# reimbursements, Zelle paying you back, returns, card credits, deposited checks - is money you'd already
+# spent coming back: it reduces spending instead of counting as income.
+INCOME_CATEGORIES = {"Income", "Rental income"}
 AVERAGE_MONTHS = 12          # a full year, so once-a-year bills (income tax, property tax) count once
 
 
@@ -275,7 +276,7 @@ def _m(v: float) -> str:
 
 def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: pd.DataFrame,
              year_change: tuple, today: pd.Timestamp | None = None,
-             property_tax_shares: dict | None = None) -> list[dict]:
+             property_tax_shares: dict | None = None, dividends: dict | None = None) -> list[dict]:
     """Plain-language takeaways, worked out from everything imported so far. Each: icon, text, help (how it's
     calculated - shown on the ⓘ). enriched = enrich(transactions); moves = db.account_changes(conn, 12);
     year_change = db.net_worth_change(conn, 12). property_tax_shares = {home name: its share of each property tax
@@ -293,7 +294,8 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
     spend = 0.0
     if months:
         is_in = recent["category"].isin(INCOME_CATEGORIES)
-        came_in = recent.loc[is_in & (recent["amount"] > 0), "amount"].sum()
+        div = sum((dividends or {}).values()) * months / 12      # paid inside brokerages, not in bank data
+        came_in = recent.loc[is_in & (recent["amount"] > 0), "amount"].sum() + div
         spending = recent[~is_in]
         went_out = -spending["amount"].sum()
         income, spend = came_in / months, went_out / months            # monthly, for the cash cushion below
@@ -309,6 +311,8 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
         else:
             text = (f"Over {period}, **{_m(went_out)} went out and {_m(came_in)} came in: {_m(-gap)} more than came "
                     "in.**")
+        if div:
+            text += f" Came in includes {_m(div)} of dividends from your brokerages."
         text += f" Biggest costs: {top}."
         others = spending[(spending["amount"] <= -10_000) & ~spending["category"].isin(top3)].sort_values("amount")
         if len(others):                                 # big payments the costs above don't already explain
@@ -326,7 +330,8 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
                 text += (f" The difference came from investments: net {_m(net)} ("
                          + " and ".join(ins[:3]) + (", less " + " and ".join(outs[:2]) if outs else "") + ").")
         how = (f"Totals over {period} - a full year, so once-a-year bills like income and property tax count "
-               "once. Came in = pay and other income; went out = spending net of refunds, incl. mortgage, taxes and "
+               "once. Came in = pay, rent, interest and dividends; went out = spending net of anything paid back "
+               "(refunds, insurance reimbursements, Zelle from friends, card credits), incl. mortgage, taxes and "
                "card purchases. Transfers between your own accounts and card bill payments are left out. Stock "
                "vesting and investment growth aren't cash coming in - they show in net worth."
                + (f" Coverage: {covered}." if covered else " Every account has transactions for the whole period."))
@@ -402,6 +407,15 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
 
 
 LOAN_CATEGORIES = {"Mortgage", "Loan payments"}
+
+
+def yearly_dividends(holdings: pd.DataFrame, rates: dict | None) -> dict[str, float]:
+    """Dividends a year per account: shares held today x each stock's yearly dividend per share (rates, from
+    statements). Dividends are paid inside the brokerage, so bank transactions never show them."""
+    if holdings.empty or not rates:
+        return {}
+    h = holdings[holdings["symbol"].isin(rates)]
+    return {a: float(sum(r.quantity * rates[r.symbol] for r in g.itertuples())) for a, g in h.groupby("account")}
 
 
 def cash_flow_baseline(enriched: pd.DataFrame, today: pd.Timestamp | None = None) -> dict | None:

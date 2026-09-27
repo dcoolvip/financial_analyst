@@ -320,3 +320,18 @@ def test_range_replays_real_market_years():
     flat = forecast.run(accts([("Brokerage", "brokerage", 100_000, None, None)]),
                         forecast.Assumptions(years=10, investment_return=0.07, replay_history=False, simulations=2000))
     assert flat.bands.iloc[-1]["p90"] != end["p90"]                           # a different engine was used
+
+
+def test_money_paid_back_is_not_income_but_dividends_are():
+    t = pd.DataFrame({"date": pd.to_datetime(["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]),
+                      "description": ["ACME DES:PAYROLL", "UNITED HEALTHCAR INS PAYMNT", "ZELLE PAYMENT FROM A FRIEND",
+                                      "BOFA FIN CTR DEPOSIT", "KAISER"],
+                      "amount": [10_000.0, 600.0, 200.0, 1_000.0, -900.0], "category": None})
+    rules = {"UNITED HEALTHCAR INS PAYMNT": ("Other income", "ai"), "KAISER": ("Health", "ai"),
+             "ZELLE PAYMENT FROM A FRIEND": ("Payments to people", "ai")}
+    cf = insights.monthly_cash_flow(t, rules)
+    assert cf["money_in"].iloc[0] == 10_000                      # only the pay
+    assert cf["money_out"].iloc[0] == pytest.approx(900 - 600 - 200 - 1_000)   # paid back reduces spending
+    h = pd.DataFrame({"account": ["DS", "DS", "Merrill"], "symbol": ["AAPL", "CASH", "AAPL"],
+                      "quantity": [100.0, 0.0, 50.0], "value": [1.0, 1.0, 1.0]})
+    assert insights.yearly_dividends(h, {"AAPL": 1.06}) == {"DS": pytest.approx(106.0), "Merrill": pytest.approx(53.0)}
