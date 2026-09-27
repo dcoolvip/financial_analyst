@@ -206,12 +206,12 @@ def trend_overrides() -> dict:
             if g and g.get("account_id") in set(accts["id"]) else {})
 
 
-def run_ai_categorize() -> None:
+def run_ai_categorize(recheck: bool = False) -> None:
     """Runs the AI and leaves the outcome in session state: the page reruns right after, which would
     wipe anything drawn here (an error must stay visible until it's read)."""
     bar = st.progress(0.0, text="Categorizing merchants…")
     try:
-        n = categorize.auto_categorize(conn, db.transactions(conn), insights.is_transfer,
+        n = categorize.auto_categorize(conn, db.transactions(conn), insights.is_transfer, recheck=recheck,
                                        progress=lambda f: bar.progress(f, text="Categorizing merchants…"))
         left = len(categorize.uncategorized_merchants(conn, db.transactions(conn), insights.is_transfer))
         st.session_state["ai_flash"] = (f"Categorized {n} merchants" if not left else
@@ -499,16 +499,24 @@ with tab_flow:
         if err := st.session_state.pop("ai_error", None):
             st.error(err, icon="⚠️")
         todo = categorize.uncategorized_merchants(conn, txns, insights.is_transfer)
-        if len(todo):
+        recheck = categorize.needs_recheck(conn)
+        if len(todo) or recheck:
             with st.container(border=True):
                 a1, a2 = st.columns([3, 1], vertical_alignment="center")
-                a1.markdown(f"✨ **{len(todo)} merchants** ({int(todo['n'].sum())} transactions) haven't been "
-                            "categorized by AI yet. Only cleaned merchant names and rough amounts are sent "
-                            "(no account numbers, names or dates).")
-                if a2.button("Categorize with AI", type="primary", width="stretch",
+                if recheck:
+                    n_all = len(categorize.uncategorized_merchants(conn, txns, insights.is_transfer, recheck=True))
+                    a1.markdown(f"✨ **Categories were improved** (new: Mortgage, Loan payments; clearer definitions "
+                                f"for all). Re-check **{n_all} merchants** with AI? Categories you set yourself are "
+                                "kept. Only cleaned merchant names and rough amounts are sent (no account numbers, "
+                                "names or dates).")
+                else:
+                    a1.markdown(f"✨ **{len(todo)} merchants** ({int(todo['n'].sum())} transactions) haven't been "
+                                "categorized by AI yet. Only cleaned merchant names and rough amounts are sent "
+                                "(no account numbers, names or dates).")
+                if a2.button("Re-check with AI" if recheck else "Categorize with AI", type="primary", width="stretch",
                              disabled=not categorize.available(),
                              help=None if categorize.available() else "Needs AppleConnect installed and signed in"):
-                    run_ai_categorize()
+                    run_ai_categorize(recheck=recheck)
                     st.rerun()
 
         cf = insights.monthly_cash_flow(txns, rule_map)
@@ -530,6 +538,9 @@ with tab_flow:
             if PHONE:
                 st.caption("Monthly average, last 3 months")
             plot(charts.category_bars(cats, mode, compact=PHONE))
+
+        with st.expander("ℹ️ What each category covers"):
+            st.markdown("\n".join(f"- **{c}** - {d}" for c, d in categorize.CATEGORY_HELP.items()))
 
         st.markdown("#### Transactions")
         view = insights.enrich(txns, rule_map)
@@ -578,7 +589,9 @@ with tab_flow:
                 "date": st.column_config.DateColumn("Date", format="MMM D" if PHONE else "MMM D, YYYY"),
                 "account": "Account", "description": "Description",
                 "purchaser": st.column_config.TextColumn("Who", help="Who made the purchase, on a shared card"),
-                "category": st.column_config.SelectboxColumn("Category ✏️", options=cat_options, required=True),
+                "category": st.column_config.SelectboxColumn(
+                    "Category ✏️", options=cat_options, required=True,
+                    help="What each category covers: see ℹ️ above the table"),
                 "amount": st.column_config.NumberColumn("Amount", format="$%,.0f" if PHONE else "$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
         if len(changed):

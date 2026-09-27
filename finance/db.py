@@ -120,6 +120,11 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE transactions ADD COLUMN purchaser TEXT")   # who made it, on shared cards
         _split_purchasers(conn)
         conn.commit()
+    if get_setting(conn, "merchant_key_version", 1) < 2:
+        # merchant names now keep short numbers ("99 RANCH", not "RANCH"): carry saved categories over
+        from .categorize import upgrade_rule_keys
+        upgrade_rule_keys(conn, [d for (d,) in conn.execute("SELECT description FROM transactions")])
+        set_setting(conn, "merchant_key_version", 2)
     return conn
 
 
@@ -132,7 +137,7 @@ def _split_purchasers(conn) -> None:
     `purchaser`, and carry each merchant rule over to the name-free merchant so no category is lost.
     A suffix counts as a person when it's 2+ words and repeats on 5+ of an account's transactions."""
     from collections import Counter
-    from .categorize import merchant_key
+    from .categorize import _merchant_key_v1 as merchant_key      # rules then were keyed this way
     rows = conn.execute("SELECT id, account_id, description FROM transactions").fetchall()
     hits = [(i, a, m.group(1), m.group(2)) for i, a, d in rows if (m := _NAME_SUFFIX.match(d))]
     counts = Counter((a, name) for _, a, _, name in hits)
