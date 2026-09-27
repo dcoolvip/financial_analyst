@@ -63,6 +63,15 @@ def table_with(at, column) -> pd.DataFrame:
     return next(d.value for d in at.dataframe if column in d.value.columns)
 
 
+def accounts_editors(at):
+    """The Accounts tab's tables - one per group (Cash, Investments, ..., Loans)."""
+    return [d for d in at.dataframe if "new_balance" in d.value.columns]
+
+
+def accounts_table(at) -> pd.DataFrame:
+    return pd.concat([d.value for d in accounts_editors(at)], ignore_index=True)
+
+
 # --- accounts -------------------------------------------------------------------------
 
 def test_balance_update_refreshes_overview_and_accounts(env):
@@ -74,7 +83,7 @@ def test_balance_update_refreshes_overview_and_accounts(env):
     [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(5000)
     click(at, "Save balance")
     assert hero(at) == "$5,000"                                        # Overview
-    assert table_with(at, "balance")["balance"].iloc[0] == 5000        # Accounts table
+    assert accounts_table(at)["balance"].iloc[0] == 5000                 # Accounts table
 
 
 def test_new_account_appears_in_every_selector(env):
@@ -85,7 +94,7 @@ def test_new_account_appears_in_every_selector(env):
     click(at, "Add account")
     for label in ("Account", "Account to remove"):
         assert all("Savings" in opts for opts in select_options(at, label)), label
-    assert "Savings" in table_with(at, "balance")["name"].tolist()
+    assert "Savings" in accounts_table(at)["name"].tolist()
 
 
 def test_accounts_table_is_editable_inline(env):
@@ -186,7 +195,7 @@ def test_statement_pdfs_update_overview_investments_and_clear_uploader(env):
     titles = [m.value for m in at.markdown if m.value in ("**Loans**", "**Investments**")]
     assert titles == ["**Loans**", "**Investments**"]                   # one table per kind
     click(at, "Save statements")
-    names = table_with(at, "balance")["name"].tolist()
+    names = accounts_table(at)["name"].tolist()
     assert len(names) == 3                                              # two new accounts created
     assert any(m.value == "#### Investments" for m in at.markdown)      # Overview investments section
     assert any(m.label == "Unvested RSUs" for m in at.metric)
@@ -299,14 +308,14 @@ def test_cards_without_balance_are_flagged_and_signs_are_intuitive(env):
     card = db.add_account(conn, "Chase Sapphire", "Chase", "credit_card")
     at = app()
     assert any("have no balance yet" in m.value and "Chase Sapphire" in m.value for m in at.markdown)   # Overview
-    accounts = table_with(at, "shown_balance")
+    accounts = accounts_table(at)
     assert accounts.loc[accounts["name"] == "Chase Sapphire", "status"].iloc[0] == "⚠️ needs a balance"
 
     at.selectbox(key=[s.key for s in at.selectbox if s.label == "Account"][0]).set_value("Chase Sapphire")
     [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(1200.0)           # owe $1,200, as Chase shows it
     click(at, "Save balance")
     assert hero(at) == "$8,800"                                                             # 10,000 - 1,200
-    accounts = table_with(at, "shown_balance")
+    accounts = accounts_table(at)
     assert accounts.loc[accounts["name"] == "Chase Sapphire", "shown_balance"].iloc[0] == 1200    # shown as owed
     assert db.accounts(conn).set_index("name").loc["Chase Sapphire", "balance"] == 1200
     assert not any("have no balance yet" in m.value for m in at.markdown)
@@ -344,9 +353,9 @@ def test_balances_colored_and_hand_edits_recorded(env):
     [n for n in at.number_input if n.label == "Balance ($)"][0].set_value(6337.08)          # as Chase shows it
     click(at, "Save balance")
     assert db.accounts(conn).set_index("name").loc["Chase Sapphire", "balance"] == pytest.approx(6337.08)
-    accounts = next(d for d in at.dataframe if "shown_balance" in d.value.columns)
-    styles = str(accounts.proto)
+    styles = "".join(str(d.proto) for d in accounts_editors(at))
     assert "d03b3b" in styles and "006300" in styles                   # debts red, what you have green
+    accounts = accounts_editors(at)[0]
     # Streamlit only draws Styler colors on NON-editable columns - the colored Balance column must be read-only
     import json
     config = json.loads(accounts.proto.columns)
@@ -402,7 +411,7 @@ def test_valuables_in_accounts_and_future(env, monkeypatch):
     db.upsert_balance(conn, cards, "2025-07-31", 16_000)
     db.upsert_balance(conn, cards, "2026-07-31", 20_000)
     at = app()
-    accounts = table_with(at, "shown_balance")
+    accounts = accounts_table(at)
     assert accounts.set_index("name").loc["Pokemon collection", "trend"] == "+25.0%/yr"    # its own history
     assert any("Property & valuables" == g for g in accounts["Group"])
     future = table_with(at, "Growth / yr").set_index("Asset")
@@ -416,3 +425,64 @@ def test_valuables_in_accounts_and_future(env, monkeypatch):
     assert future.loc["Pokemon collection", "Growth / yr"] == pytest.approx(10.0)
     assert future.loc["Pokemon collection", "Based on"] == "your rate"
     assert any(s.label == "See an asset's history and outlook" for s in at.selectbox)
+
+
+def test_accounts_in_sections_with_plain_column_names_and_details(env, monkeypatch):
+    monkeypatch.setenv("POKEMON_DB", "/nonexistent")
+    import json
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    car = db.add_account(conn, "Civic", "Honda", "vehicle")
+    loan = db.add_account(conn, "Car loan", "Hyundai Motor Finance", "auto_loan")
+    db.update_account_terms(conn, loan, 0.06, 500.0)
+    db.update_account_details(conn, loan, last4="6365")
+    today = pd.Timestamp.today().normalize()
+    for m in range(14, -1, -1):
+        d = (today - pd.DateOffset(months=m)).date()
+        db.upsert_balance(conn, chk, d, 10_000 + 100 * (14 - m))
+        db.upsert_balance(conn, loan, d, 20_000 - 400 * (14 - m), "statement.pdf")
+        db.add_balance_if_missing(conn, car, d, 30_000 - 300 * (14 - m), "Estimated (depreciation from purchase price)")
+    db.upsert_balance(conn, car, today.date(), 25_000)                     # the value you typed today
+    at = app()
+    heads = [m.value for m in at.markdown]
+    assert any(h.startswith("### What you own") for h in heads) and any(h.startswith("### What you owe") for h in heads)
+    editors = accounts_editors(at)
+    assert len(editors) == 3                                               # Cash, Property & valuables, Loans
+    headers = {v.get("label") for e in editors for v in json.loads(e.proto.columns).values()}
+    assert "New balance ✏️" not in headers
+    assert {"Type new balance ✏️", "Type new value ✏️", "Type amount owed ✏️", "Future uses", "Paid off by",
+            "Monthly payment ✏️", "Interest % ✏️", "Past year"} <= headers
+    loans = accounts_table(at).set_index("name")
+    assert loans.loc["Car loan", "bank"] == "Hyundai Motor Finance ···6365"
+    assert loans.loc["Car loan", "year"] == pytest.approx(400 * 12, abs=400)   # paid down = + (month-end grid)
+    assert loans.loc["Car loan", "payoff"]
+
+    # details: every value on record, where it came from
+    at.selectbox(key="acct_detail").set_value("Civic").run()
+    values = next(d.value for d in at.dataframe if "how" in d.value.columns)
+    assert len(values) == 15
+    assert values.sort_values("date")["how"].iloc[-1] == "Typed in"
+    assert values["how"].str.startswith("Estimated").sum() == 14
+    assert any(m.label == "Values on record" and m.value == "15 (14 est.)" for m in at.metric)
+    assert any("Future tab:" in m.value for m in at.markdown)
+    at.selectbox(key="acct_detail").set_value("Car loan").run()
+    assert any("payments left" in m.value for m in at.markdown)
+    assert next(d.value for d in at.dataframe if "how" in d.value.columns)["how"].iloc[0] == "Imported from statement.pdf"
+
+    # Overview: what moved net worth this past year
+    assert any(m.value.startswith("#### What moved your net worth") for m in at.markdown)
+    movers = next(d.value for d in at.dataframe if "then" in d.value.columns)
+    assert set(movers["name"]) == {"Checking", "Civic", "Car loan"}
+
+
+def test_net_worth_range_and_own_owe_view(env):
+    conn, _ = env
+    a = db.add_account(conn, "Checking", "Bank of America", "checking")
+    for d in pd.date_range(end=pd.Timestamp.today(), periods=60, freq="ME"):
+        db.upsert_balance(conn, a, d.date(), 1000)
+    at = app()
+    at.segmented_control(key="nw_range").set_value("1Y").run()
+    at.segmented_control(key="nw_view").set_value("Own & owe").run()
+    assert not at.exception
+    spec = at.get("plotly_chart")[0].proto.spec
+    assert '"What you own"' in spec and '"What you owe"' in spec

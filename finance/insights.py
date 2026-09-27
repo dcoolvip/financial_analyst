@@ -130,3 +130,47 @@ def stale_accounts(accts: pd.DataFrame, days: int = 45) -> pd.DataFrame:
     as_of = pd.to_datetime(accts["as_of"])
     cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=days)
     return accts[as_of.isna() | (as_of < cutoff)]
+
+
+def source_label(source: str | None) -> str:
+    """Where a recorded value came from, in plain words."""
+    s = (source or "").strip()
+    if not s or s == "manual":
+        return "Typed in"
+    if s.lower().startswith(("estimated", "approximate")):
+        return s
+    if s == "pokemon dashboard":
+        return "Pokemon dashboard"
+    if s.startswith("Redfin"):
+        return "Redfin estimate"
+    return f"Imported from {s}"
+
+
+def is_estimate(source: str | None) -> bool:
+    return (source or "").lower().startswith(("estimated", "approximate"))
+
+
+def loan_payoff(balance, rate, payment) -> tuple[int, float] | None:
+    """(months left, interest still to pay) at this rate and monthly payment, or None if it never pays off
+    (payment doesn't cover the interest) or terms are missing."""
+    import math
+    if not balance or balance <= 0 or not payment or payment <= 0 or rate is None or pd.isna(rate):
+        return None
+    i = rate / 12
+    if i <= 0:
+        n = math.ceil(balance / payment)
+    elif payment <= balance * i:
+        return None
+    else:
+        n = math.ceil(-math.log(1 - i * balance / payment) / math.log(1 + i))
+    return n, max(0.0, n * payment - balance)
+
+
+def change_by_group(changes: pd.DataFrame, types: dict) -> dict[str, float]:
+    """Sum account changes (from db.account_changes) into the Overview groups, in GROUPS order."""
+    out = {g: 0.0 for g in ASSET_GROUPS + DEBT_GROUPS}
+    for r in changes.itertuples():
+        g = GROUPS.get(types.get(r.account_id))
+        if g:
+            out[g] += r.change
+    return {g: v for g, v in out.items() if abs(v) >= 0.5}

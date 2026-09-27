@@ -55,8 +55,17 @@ def _layout(fig: go.Figure, c: dict, height: int = 320, legend: bool = False,
     return fig
 
 
-def net_worth_history(nw: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
+def net_worth_history(nw: pd.DataFrame, mode: str, compact: bool = False, own_owe: bool = False) -> go.Figure:
+    """Net worth over time; own_owe=True instead draws what you own and what you owe as two lines."""
     c = PALETTE[mode]
+    if own_owe:
+        fig = go.Figure()
+        for col, name, color in (("assets", "What you own", c["s1"]), ("liabilities", "What you owe", c["s2"])):
+            fig.add_trace(go.Scatter(x=nw["date"], y=nw[col], mode="lines", name=name,
+                                     line=dict(color=color, width=2),
+                                     hovertemplate=f"{name} $%{{y:,.0f}}<extra></extra>"))
+        fig.update_layout(hovermode="x unified")
+        return _layout(fig, c, legend=True, compact=compact)
     added = (nw["added"].fillna("") if "added" in nw else pd.Series("", index=nw.index)).astype(str)
     note = added.map(lambda a: f"<br>Added: {a}" if a else "")
     fig = go.Figure(go.Scatter(
@@ -149,3 +158,43 @@ def cash_flow_bars(cf: pd.DataFrame, mode: str, compact: bool = False) -> go.Fig
 
 def category_bars(df: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
     return breakdown_bars(dict(zip(df["category"], df["monthly"])), mode, debt=True, compact=compact)
+
+
+def account_history(hist: pd.DataFrame, mode: str, debt: bool = False, compact: bool = False) -> go.Figure:
+    """One account's recorded values over time. hist: date, balance, how (source in words), estimate (bool).
+    Values you have on record get a dot; estimates in between are just the line."""
+    c = PALETTE[mode]
+    color = c["s2"] if debt else c["s1"]
+    word = "Owed" if debt else "Value"
+    fig = go.Figure(go.Scatter(
+        x=hist["date"], y=hist["balance"], mode="lines", name="Estimated" if hist["estimate"].any() else word,
+        line=dict(color=color, width=2), customdata=hist[["how"]].values,
+        hovertemplate=f"<b>%{{x|%b %d, %Y}}</b><br>{word} $%{{y:,.0f}}<br>%{{customdata[0]}}<extra></extra>",
+        showlegend=bool(hist["estimate"].any())))
+    real = hist[~hist["estimate"]]
+    if len(real):
+        fig.add_trace(go.Scatter(
+            x=real["date"], y=real["balance"], mode="markers", name="Recorded", hoverinfo="skip",
+            showlegend=bool(hist["estimate"].any()),
+            marker=dict(size=8, color=color, line=dict(width=2, color=c["surface"]))))
+    fig.update_layout(hovermode="x")
+    fig.update_xaxes(showspikes=True, spikemode="across", spikethickness=1, spikecolor=c["axis"], spikedash="solid")
+    return _layout(fig, c, height=280, legend=bool(hist["estimate"].any()), compact=compact)
+
+
+def change_bars(items: dict[str, float], mode: str, compact: bool = False) -> go.Figure:
+    """Signed changes as horizontal bars: gains in the asset color, losses in the debt color."""
+    c = PALETTE[mode]
+    labels, values = list(items)[::-1], list(items.values())[::-1]
+    fig = go.Figure(go.Bar(
+        y=labels, x=values, orientation="h", marker=dict(color=[c["s1"] if v >= 0 else c["s2"] for v in values]),
+        text=[("+" if v >= 0 else "") + money(v) for v in values], textposition="outside", cliponaxis=False,
+        textfont=dict(color=c["ink2"]),
+        hovertemplate="<b>%{y}</b><br>%{x:+$,.0f}<extra></extra>"))
+    fig = _layout(fig, c, height=max(160, 56 * len(labels) + 40), compact=compact)
+    fig.update_layout(margin=dict(l=8, r=8, t=4, b=4) if compact else dict(l=16, r=16, t=8, b=8))
+    lo, hi = min([0.0, *values]), max([0.0, *values])
+    pad = (hi - lo) * 0.35 or 1.0                       # room for the outside labels
+    fig.update_xaxes(visible=False, range=[lo - (pad if lo < 0 else 0), hi + (pad if hi > 0 else 0)])
+    fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]))
+    return fig

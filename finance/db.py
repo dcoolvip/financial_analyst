@@ -222,7 +222,7 @@ def upsert_balance(conn, account_id: int, on: date | str, balance: float, source
 
 def balance_history(conn) -> pd.DataFrame:
     df = pd.read_sql_query(
-        """SELECT b.account_id, a.name, a.type, b.date, b.balance
+        """SELECT b.account_id, a.name, a.type, b.date, b.balance, b.source
            FROM balances b JOIN accounts a ON a.id = b.account_id
            WHERE a.active = 1""",
         conn,
@@ -324,6 +324,24 @@ def net_worth_change(conn, months: int):
                 if c not in both and pd.notna(wide.at[now, c]) and wide.at[now, c] != 0]
     return change, base, left_out
 
+
+
+def account_changes(conn, months: int) -> pd.DataFrame:
+    """Per account: value `months` ago and now, and the change in net-worth terms (a loan paid down is a
+    gain). Only accounts that had a value both then and now - same like-for-like rule as net_worth_change."""
+    cols = ["account_id", "name", "then", "now", "change"]
+    wide, asset_cols, liab_cols, names = _net_worth_wide(conn)
+    if wide is None or len(wide) < 2:
+        return pd.DataFrame(columns=cols)
+    now = wide.index[-1]
+    earlier = wide.index[wide.index <= now - pd.DateOffset(months=months)]
+    if not len(earlier):
+        return pd.DataFrame(columns=cols)
+    then = earlier[-1]
+    rows = [(c, names.get(c, str(c)), float(wide.at[then, c]), float(wide.at[now, c]),
+             (-1 if c in liab_cols else 1) * float(wide.at[now, c] - wide.at[then, c]))
+            for c in wide.columns if pd.notna(wide.at[then, c]) and pd.notna(wide.at[now, c])]
+    return pd.DataFrame(rows, columns=cols)
 
 # --- transactions & holdings --------------------------------------------------
 

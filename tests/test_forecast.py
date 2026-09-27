@@ -134,3 +134,18 @@ def test_vehicle_history_from_price_and_todays_value():
     last_year = 1 - h["value"].iloc[-1] / h["value"].iloc[-13]
     assert first_year > last_year                                            # steepest when new
     assert trend(h.rename(columns={"value": "balance"})) == pytest.approx(-0.14, abs=0.02)
+
+
+def test_loan_payoff():
+    assert insights.loan_payoff(12_000, 0.0, 1_000) == (12, 0.0)
+    n, interest = insights.loan_payoff(15_800.50, 0.0099, 1_323.78)
+    assert n == 12 and interest == pytest.approx(12 * 1_323.78 - 15_800.50, abs=1)
+    assert insights.loan_payoff(100_000, 0.12, 500) is None                # never pays off
+    assert insights.loan_payoff(10_000, None, 500) is None
+
+
+def test_source_labels():
+    assert insights.source_label("manual") == "Typed in"
+    assert insights.source_label("eStmt_2026-09-01.pdf") == "Imported from eStmt_2026-09-01.pdf"
+    assert insights.is_estimate("Estimated (payment schedule)") and insights.is_estimate("Approximate gold price")
+    assert not insights.is_estimate("Redfin estimate history") and insights.source_label("Redfin estimate history") == "Redfin estimate"
