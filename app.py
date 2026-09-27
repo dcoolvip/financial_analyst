@@ -769,41 +769,7 @@ with tab_future:
                 plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
 
         with detail_col:
-            exp = fc.expected.iloc[-1]
-            kpi_row([("Investments", money(exp[f"investments{sfx}"])),
-                     ("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
-                     ("Debt left", money(exp[f"debt{sfx}"]))])
-
-            if len(fc.valuables):
-                st.markdown("#### Property & valuables",
-                            help="How each home, car, collectible and gold holding is expected to change - from its "
-                                 "own history, blended with the long-run rate for its kind.")
-                v = fc.valuables
-                hist_all = db.balance_history(conn)
-                shown = pd.DataFrame({
-                    "Asset": v["name"], "Today": v["value"], "Growth / yr": v["rate"] * 100,
-                    "Swings / yr": v["vol"] * 100, "Based on": v["why"],
-                    f"In {a.years} years": v["end_real"] if real else v["end"]})
-                if PHONE:
-                    phone_rows(((r["Asset"], f"{r['Growth / yr']:+.1f}%/yr", f"{money(r['Today'])} → {money(r[f'In {a.years} years'])} in {a.years} yrs · swings ±{r['Swings / yr']:.0f}% · {r['Based on']}") for _, r in shown.iterrows()))
-                else:
-                    st.dataframe(shown, hide_index=True, width="stretch", column_config={
-                        "Today": st.column_config.NumberColumn(format="$%,.0f"),
-                        "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
-                        "Swings / yr": st.column_config.NumberColumn(
-                            format="±%.0f%%", help="How much the value typically moves in a year - from its own history "
-                                                   "when there's enough, else typical for its kind. Widens the range."),
-                        f"In {a.years} years": st.column_config.NumberColumn(
-                            format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
-                st.caption("Each rate blends the asset's own history with the long-run rate for its kind - the "
-                           "longer the history, the more it counts (1 yr ≈ 17%, 5 yrs = 50%, 10 yrs ≈ 67%). "
-                           "Type your own in **Accounts → Your growth %** to override.")
-                pick = st.selectbox("See an asset's history and outlook", list(v["name"]), key="asset_outlook")
-                aid = int(v.loc[v["name"] == pick, "id"].iloc[0])
-                deflate = (1 + a.inflation) ** (np.arange(len(fc.valuable_paths)) / 12) if real else 1
-                plot(charts.asset_outlook(hist_all[hist_all["account_id"] == aid], fc.valuable_paths[pick] / deflate,
-                                          mode, compact=PHONE))
-
+            # right under the net worth chart: how money moves in and out explains the line above
             if len(fc.cash_flow):
                 cfa = fc.cash_flow
                 st.markdown("#### Money in & out ahead",
@@ -853,6 +819,41 @@ with tab_future:
                         st.caption(f"⚠️ Loan payments on record add up to {money(on_record)} a month, but your "
                                    f"transactions show {money(baseline['loans_seen'])} a month. Check each loan's "
                                    "**Monthly payment** in Accounts.")
+
+            exp = fc.expected.iloc[-1]
+            kpi_row([("Investments", money(exp[f"investments{sfx}"])),
+                     ("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
+                     ("Debt left", money(exp[f"debt{sfx}"]))])
+
+            if len(fc.valuables):
+                st.markdown("#### Property & valuables",
+                            help="How each home, car, collectible and gold holding is expected to change - from its "
+                                 "own history, blended with the long-run rate for its kind.")
+                v = fc.valuables
+                hist_all = db.balance_history(conn)
+                shown = pd.DataFrame({
+                    "Asset": v["name"], "Today": v["value"], "Growth / yr": v["rate"] * 100,
+                    "Swings / yr": v["vol"] * 100, "Based on": v["why"],
+                    f"In {a.years} years": v["end_real"] if real else v["end"]})
+                if PHONE:
+                    phone_rows(((r["Asset"], f"{r['Growth / yr']:+.1f}%/yr", f"{money(r['Today'])} → {money(r[f'In {a.years} years'])} in {a.years} yrs · swings ±{r['Swings / yr']:.0f}% · {r['Based on']}") for _, r in shown.iterrows()))
+                else:
+                    st.dataframe(shown, hide_index=True, width="stretch", column_config={
+                        "Today": st.column_config.NumberColumn(format="$%,.0f"),
+                        "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
+                        "Swings / yr": st.column_config.NumberColumn(
+                            format="±%.0f%%", help="How much the value typically moves in a year - from its own history "
+                                                   "when there's enough, else typical for its kind. Widens the range."),
+                        f"In {a.years} years": st.column_config.NumberColumn(
+                            format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
+                st.caption("Each rate blends the asset's own history with the long-run rate for its kind - the "
+                           "longer the history, the more it counts (1 yr ≈ 17%, 5 yrs = 50%, 10 yrs ≈ 67%). "
+                           "Type your own in **Accounts → Your growth %** to override.")
+                pick = st.selectbox("See an asset's history and outlook", list(v["name"]), key="asset_outlook")
+                aid = int(v.loc[v["name"] == pick, "id"].iloc[0])
+                deflate = (1 + a.inflation) ** (np.arange(len(fc.valuable_paths)) / 12) if real else 1
+                plot(charts.asset_outlook(hist_all[hist_all["account_id"] == aid], fc.valuable_paths[pick] / deflate,
+                                          mode, compact=PHONE))
 
             st.markdown("#### Milestones", help="Loans paid off and other points the most likely path reaches.")
             if fc.milestones:
