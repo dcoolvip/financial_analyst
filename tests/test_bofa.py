@@ -154,7 +154,9 @@ def test_chase_card_payment_is_a_transfer_not_spending():
     t = parse_file(read("chase_card.csv")).transactions.assign(category=None)
     t["date"] = pd.to_datetime(t["date"])
     cf = insights.monthly_cash_flow(t)
-    assert cf["money_in"].iloc[0] == pytest.approx(12.00)                        # the return, not the payment
+    assert cf["money_in"].iloc[0] == 0                                           # not the payment, not the return
+    spent = -t.loc[(t["amount"] < 0) & ~t["description"].map(insights.is_transfer), "amount"].sum()
+    assert cf["money_out"].iloc[0] == pytest.approx(spent - 12.00)               # the return reduces spending
 
 
 def test_chase_checking_card_payment_is_a_transfer():

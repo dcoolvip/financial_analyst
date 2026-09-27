@@ -194,3 +194,54 @@ def test_volatility_not_inflated_by_yearly_points():
                             "balance": 100 * 1.15 ** 5 * np.where(np.arange(9) % 2, 1.03, 0.97)})   # ±3% a month
     v = volatility(pd.concat([yearly, monthly]))
     assert 0.05 < v < 0.25, v
+
+
+def _year(today, accounts):
+    """12 complete months of steady pay and spending, split across accounts as given: {name: (from, share)}."""
+    rows = []
+    for m in range(12, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m)) + pd.Timedelta(days=1)
+        for name, (begins, share) in accounts.items():
+            if d >= pd.Timestamp(begins):
+                rows += [(d, name, "ACME DES:PAYROLL", 10_000.0 * share), (d, name, "SAFEWAY", -8_000.0 * share)]
+    return pd.DataFrame(rows, columns=["date", "account", "description", "amount"]).assign(category=None)
+
+
+def test_once_a_year_tax_counts_once_over_twelve_months():
+    today = pd.Timestamp("2026-09-26")
+    t = _year(today, {"Checking": ("2000-01-01", 1.0)})
+    t.loc[len(t)] = [pd.Timestamp("2026-04-10"), "Checking", "IRS DES:USATAXPYMT", -24_000.0, None]
+    accts = pd.DataFrame([{"id": 1, "name": "Checking", "type": "checking", "balance": 1, "rate": None,
+                           "payment": None, "as_of": "2026-09-20"}])
+    first = insights.overview(insights.enrich(t, {"IRS USATAXPYMT": ("Taxes", "ai")}), accts, {"Cash": 1}, pd.DataFrame(
+        columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
+    assert "over the last 12 months" in first["text"] and "Taxes $2.0K" in first["text"]   # 24K / 12, not / 6
+    assert "Taxes $24K (IRS, Apr 2026)" in first["text"]
+
+
+def test_new_card_taking_over_keeps_the_year_but_missing_history_shortens_it():
+    today = pd.Timestamp("2026-09-26")
+    none = pd.DataFrame(columns=["account_id", "name", "then", "now", "change"])
+    accts = pd.DataFrame([{"id": 1, "name": "x", "type": "checking", "balance": 1, "rate": None, "payment": None,
+                           "as_of": "2026-09-20"}])
+    # spending moved from the old card to a new one in January: totals steady -> the whole year counts
+    moved = _year(today, {"Old card": ("2000-01-01", 1.0)})
+    moved = moved[~((moved["account"] == "Old card") & (moved["date"] >= "2026-01-01"))]
+    moved = pd.concat([moved, _year(today, {"New card": ("2026-01-01", 1.0)})], ignore_index=True)
+    i = insights.overview(insights.enrich(moved), accts, {"Cash": 1}, none, (None, None, []), today=today)[0]
+    assert "over the last 12 months" in i["text"] and "took over from another account" in i["help"]
+    # a second account only imported from January (it existed before): totals jump -> start in January
+    partial = pd.concat([_year(today, {"Checking": ("2000-01-01", 0.5)}), _year(today, {"Card": ("2026-01-01", 0.5)})])
+    i = insights.overview(insights.enrich(partial), accts, {"Cash": 1}, none, (None, None, []), today=today)[0]
+    assert "over the last 8 months" in i["text"] and "no history before Jan 2026" in i["help"]
+
+
+def test_money_between_the_two_of_you_is_a_transfer_and_refunds_reduce_spending():
+    t = pd.DataFrame({"date": pd.to_datetime(["2026-08-02", "2026-08-03", "2026-08-04", "2026-08-05"]),
+                      "description": ["TRANSFER DEEPALI DOMBA SALIAN", "Old Navy", "CL CHASE TRAVEL", "UNITED AIRLINES"],
+                      "amount": [2_000.0, -50.0, 300.0, -1_000.0], "purchaser": [None, "Deepali Salian", None, None],
+                      "category": None})
+    e = insights.enrich(t, {"CL CHASE TRAVEL": ("Travel", "ai"), "UNITED AIRLINES": ("Travel", "ai")})
+    assert e.set_index("description").loc["TRANSFER DEEPALI DOMBA SALIAN", "category"] == "Transfer"
+    cf = insights.monthly_cash_flow(t, {"CL CHASE TRAVEL": ("Travel", "ai"), "UNITED AIRLINES": ("Travel", "ai")})
+    assert cf["money_in"].iloc[0] == 0 and cf["money_out"].iloc[0] == pytest.approx(750)   # 50 + 1000 - 300

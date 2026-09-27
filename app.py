@@ -530,12 +530,13 @@ with tab_flow:
 
         cf = insights.monthly_cash_flow(txns, rule_map)
         this_month = pd.Timestamp.today().to_period("M").to_timestamp()
-        recent = cf[cf["month"] < this_month].tail(6)
+        recent = cf[cf["month"] < this_month].tail(insights.AVERAGE_MONTHS)
         income, spend = recent["money_in"].mean(), recent["money_out"].mean()
         kpi_row([("Avg. money in", money(income)), ("Avg. money out", money(spend)),
                  ("Avg. left over", money(income - spend)),
                  ("Savings rate", f"{(income - spend) / income:.0%}" if income else "-")])
-        st.caption("Monthly averages over the last 6 complete months. Transfers between your own accounts "
+        st.caption(f"Monthly averages over the last {len(recent)} complete months, so once-a-year bills count once. "
+                   "Refunds reduce spending. Transfers between your own accounts "
                    "and card payments are left out so nothing is counted twice.")
 
         st.markdown("#### Each month", help="Money in and out per month. Transfers between your own accounts "

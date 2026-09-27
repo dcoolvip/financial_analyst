@@ -72,6 +72,21 @@ def categorize(description: str, amount: float, rules: dict | None = None) -> st
     return "Other income" if amount > 0 else "Other"
 
 
+# Categories that are money coming in. Anything else that's positive is a refund or credit: it reduces
+# that category's spending instead of counting as income.
+INCOME_CATEGORIES = {"Income", "Other income", "Payments to people"}
+AVERAGE_MONTHS = 12          # a full year, so once-a-year bills (income tax, property tax) count once
+
+
+def _household_transfer(description: str, names: list[list[str]]) -> bool:
+    """A transfer or Zelle naming someone in the household (the people on its shared cards): the household's
+    own money moving - "Transfer Deepali Domba Salian" -> Transfer, not income."""
+    d = description.upper()
+    if not re.search(r"TRANSFER|ZELLE|XFER", d):
+        return False
+    return any(all(part in d for part in (n[0], n[-1])) for n in names if len(n) >= 2)
+
+
 def enrich(txns: pd.DataFrame, rules: dict | None = None) -> pd.DataFrame:
     """Add category, merchant and is_transfer to a transactions frame."""
     if txns.empty:
@@ -80,28 +95,34 @@ def enrich(txns: pd.DataFrame, rules: dict | None = None) -> pd.DataFrame:
     out = txns.copy()
     out["merchant"] = out["description"].map(merchant_key)
     auto = [categorize(d, a, rules) for d, a in zip(out["description"], out["amount"])]
+    if "purchaser" in out and out["purchaser"].notna().any():
+        names = [n.upper().split() for n in out["purchaser"].dropna().unique()]
+        yours = {m for m, (_, src) in (rules or {}).items() if src == "user"}
+        auto = ["Transfer" if m not in yours and _household_transfer(d, names) else a
+                for d, m, a in zip(out["description"], out["merchant"], auto)]
     out["category"] = out["category"].where(out["category"].notna(), pd.Series(auto, index=out.index))
     out["is_transfer"] = out["category"] == "Transfer"
     return out
 
 
 def monthly_cash_flow(txns: pd.DataFrame, rules: dict | None = None) -> pd.DataFrame:
-    """Per month: money in, money out (positive number), and what was left over."""
+    """Per month: money in (income categories), money out (spending, net of refunds), and what was left over.
+    Transfers between your own accounts and card payments are left out."""
     t = enrich(txns, rules)
     t = t[~t["is_transfer"]]
     if t.empty:
         return pd.DataFrame(columns=["month", "money_in", "money_out", "saved"])
-    t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp())
-    g = t.groupby("month")["amount"]
+    t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp(), income=t["category"].isin(INCOME_CATEGORIES))
     out = pd.DataFrame({
-        "money_in": g.apply(lambda s: s[s > 0].sum()),
-        "money_out": g.apply(lambda s: -s[s < 0].sum()),
-    }).reset_index()
+        "money_in": t[t["income"] & (t["amount"] > 0)].groupby("month")["amount"].sum(),
+        "money_out": -t[~t["income"]].groupby("month")["amount"].sum(),       # refunds net against spending
+    }).fillna(0.0).rename_axis("month").reset_index()
     out["saved"] = out["money_in"] - out["money_out"]
     return out
 
 
-def estimate_monthly_savings(txns: pd.DataFrame, months: int = 6, rules: dict | None = None) -> float | None:
+def estimate_monthly_savings(txns: pd.DataFrame, months: int = AVERAGE_MONTHS,
+                             rules: dict | None = None) -> float | None:
     """Average leftover per month over the last N *complete* months, or None if no data."""
     cf = monthly_cash_flow(txns, rules)
     if cf.empty:
@@ -112,15 +133,15 @@ def estimate_monthly_savings(txns: pd.DataFrame, months: int = 6, rules: dict | 
 
 
 def spending_by_category(txns: pd.DataFrame, months: int = 3, rules: dict | None = None) -> pd.DataFrame:
-    """Average monthly spend per category over the last N complete months."""
+    """Average monthly spend per category over the last N complete months, net of refunds."""
     t = enrich(txns, rules)
     this_month = pd.Timestamp.today().to_period("M").to_timestamp()
     start = this_month - pd.DateOffset(months=months)
-    t = t[(~t["is_transfer"]) & (t["amount"] < 0) & (t["date"] >= start) & (t["date"] < this_month)]
+    t = t[(~t["is_transfer"]) & (~t["category"].isin(INCOME_CATEGORIES)) & (t["date"] >= start) & (t["date"] < this_month)]
     if t.empty:
         return pd.DataFrame(columns=["category", "monthly"])
-    s = (-t.groupby("category")["amount"].sum() / months).sort_values(ascending=False)
-    return s.rename("monthly").reset_index()
+    s = (-t.groupby("category")["amount"].sum() / months)
+    return s[s > 0].sort_values(ascending=False).rename("monthly").reset_index()
 
 
 def group_totals(accts: pd.DataFrame) -> dict[str, float]:
@@ -179,9 +200,55 @@ def change_by_group(changes: pd.DataFrame, types: dict) -> dict[str, float]:
     return {g: v for g, v in out.items() if abs(v) >= 0.5}
 
 
+INVESTMENT_RE = r"(?i)MSPBNA|MORGAN STANLEY|E\*?TRADE|WEALTHFRONT BROKERAGE|ROBINHOOD|MERRILL|SCHWAB|FIDELITY|VANGUARD"
+
+
+def _short_name(merchant: str) -> str:
+    """A readable name for a merchant key: "IRS USATAXPYMT" -> "IRS", "SANTA CLARA DTAC SANTACLARA" -> "Santa Clara"."""
+    words = merchant.split()
+    if words and len(words[0]) <= 4 and words[0].isalpha():
+        return words[0]
+    return " ".join(words[:2]).title()
+
+
+def _investment_name(description: str) -> str:
+    m = re.search(INVESTMENT_RE, description)
+    word = m.group(0).upper() if m else "Investments"
+    return {"MSPBNA": "Morgan Stanley", "MORGAN STANLEY": "Morgan Stanley", "WEALTHFRONT BROKERAGE": "Wealthfront",
+            "ROBINHOOD": "Robinhood", "MERRILL": "Merrill", "SCHWAB": "Schwab", "FIDELITY": "Fidelity",
+            "VANGUARD": "Vanguard"}.get(word, "E*TRADE" if "TRADE" in word else word.title())
+
+
 # How long before a value counts as out of date, by kind of account: statements come monthly; a home, car or
 # gold is fine for months.
 STALE_DAYS = {"property": 180, "vehicle": 180, "collectible": 120, "precious_metal": 120, "other_asset": 180}
+
+
+def coverage(t: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> tuple[pd.Timestamp, str]:
+    """Is every month in [start, end) complete? An account whose transactions begin inside the window either
+    replaced another one (a new card taking over from an old one, pay moving to a new bank - household totals
+    don't jump when it starts) or is missing its earlier history (totals jump). Missing history shortens the
+    window to where it's complete. Returns (start to use, explanation)."""
+    if "account" not in t:
+        return start, ""
+    t = t[(t["month"] < end)]
+    volume = t.assign(v=t["amount"].abs()).groupby("month")["v"].sum()
+    inside = t[t["month"] >= start]
+    share = inside.assign(v=inside["amount"].abs()).groupby("account")["v"].sum() / max(inside["amount"].abs().sum(), 1)
+    notes = []
+    for acct, first in t.groupby("account")["date"].min().items():
+        begins = first.to_period("M").to_timestamp() + pd.DateOffset(months=1 if first.day > 7 else 0)   # a full month
+        if begins <= start or share.get(acct, 0) < 0.10:
+            continue
+        before = volume[(volume.index >= begins - pd.DateOffset(months=3)) & (volume.index < begins)].mean()
+        after = volume[(volume.index >= begins) & (volume.index < begins + pd.DateOffset(months=3))].mean()
+        if pd.notna(before) and before >= 0.7 * after:
+            notes.append(f"{acct} starts {begins:%b %Y}, but household totals didn't jump then - it took over "
+                         "from another account, so the earlier months are complete")
+        else:
+            start = max(start, begins)
+            notes.append(f"{acct} has no history before {begins:%b %Y}, so the average starts there")
+    return start, "; ".join(notes)
 
 
 def _m(v: float) -> str:
@@ -199,28 +266,45 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
     out = []
     t = enriched[~enriched["is_transfer"]] if len(enriched) else enriched
     t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp()) if len(t) else t
-    recent = t[(t["month"] >= this_month - pd.DateOffset(months=6)) & (t["month"] < this_month)] if len(t) else t
+    start = this_month - pd.DateOffset(months=AVERAGE_MONTHS)
+    start, covered = coverage(t, start, this_month) if len(t) else (start, "")
+    recent = t[(t["month"] >= start) & (t["month"] < this_month)] if len(t) else t
     months = recent["month"].nunique() if len(recent) else 0
 
     spend = 0.0
     if months:
-        income = recent.loc[recent["amount"] > 0, "amount"].sum() / months
-        spend = -recent.loc[recent["amount"] < 0, "amount"].sum() / months
-        costs = (-recent[recent["amount"] < 0].groupby("category")["amount"].sum() / months).sort_values(ascending=False)
+        is_in = recent["category"].isin(INCOME_CATEGORIES)
+        income = recent.loc[is_in & (recent["amount"] > 0), "amount"].sum() / months
+        spending = recent[~is_in]
+        spend = -spending["amount"].sum() / months
+        costs = (-spending.groupby("category")["amount"].sum() / months).sort_values(ascending=False)
         top = ", ".join(f"{c} {_m(v)}" for c, v in costs.head(3).items())
         gap = income - spend
-        how = (f"Last {months} complete months. Money in = pay and other deposits; out = everything spent, incl. "
-               "mortgage, taxes and card purchases. Transfers between your own accounts and card bill payments are "
-               "left out, so nothing counts twice. Stock vesting and investment growth aren't cash coming in - "
-               "they show up in net worth instead.")
-        if gap >= 0:
-            out.append({"icon": "💰", "help": how,
-                        "text": f"You keep about **{_m(gap)} a month** ({gap / income:.0%} of what comes in). "
-                                f"Biggest costs: {top} a month."})
-        else:
-            out.append({"icon": "💸", "help": how,
-                        "text": f"Spending ran **{_m(-gap)} a month above what came in** ({_m(income)} in, "
-                                f"{_m(spend)} out). Biggest costs: {top} a month."})
+        big = spending[spending["amount"] <= -10_000].sort_values("amount")
+        one_offs = ", ".join(f"{r.category} {_m(-r.amount)} ({_short_name(r.merchant)}, {r.date:%b %Y})"
+                             for r in big.head(3).itertuples())
+        how = (f"Last {months} complete months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y}) - a full "
+               "year, so once-a-year bills like income and property tax count once. Money in = pay and other "
+               "income; money out = spending net of refunds, incl. mortgage, taxes and card purchases. Transfers "
+               "between your own accounts and card bill payments are left out. Stock vesting and investment "
+               "growth aren't cash coming in - they show in net worth."
+               + (f" Coverage: {covered}." if covered else " Every account has transactions for the whole period."))
+        head = (f"You keep about **{_m(gap)} a month** ({gap / income:.0%} of what comes in)" if gap >= 0 else
+                f"Spending ran **{_m(-gap)} a month above what came in** ({_m(income)} in, {_m(spend)} out)")
+        text = f"{head}, over the last {months} months. Biggest costs: {top} a month."
+        if one_offs:
+            text += f" Largest single payments: {one_offs}."
+        if gap < 0 and "account_type" in enriched:
+            cash = enriched[enriched["is_transfer"] & enriched["account_type"].isin(["checking", "savings"])]
+            cash = cash[(cash["date"] >= start) & (cash["date"] < this_month)]
+            inv = cash[cash["description"].str.contains(INVESTMENT_RE, regex=True)]
+            net = inv["amount"].sum()                           # in from brokerages, minus what went back in
+            if net > 0:
+                src = inv.groupby(inv["description"].map(_investment_name))["amount"].sum()
+                src = src[src > 0].sort_values(ascending=False)
+                text += (f" Covered by a net {_m(net)} moved in from investments over the period ("
+                         + ", ".join(f"{k} {_m(v)}" for k, v in src.head(3).items()) + ").")
+        out.append({"icon": "💰" if gap >= 0 else "💸", "help": how, "text": text})
 
         # what changed: last complete month against the months before it
         last = t[t["month"] == this_month - pd.DateOffset(months=1)]
