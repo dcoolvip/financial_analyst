@@ -259,3 +259,31 @@ def test_property_tax_named_by_home_without_repeating_itself():
     i = insights.overview(*args, today=today, property_tax_shares={"Bellgrove Home": 19_692.80, "Schott Home": 5_437.34})[0]
     assert "Property tax $50K (Bellgrove $39K, Schott $11K)" in i["text"]
     assert i["text"].count("$50K") == 1                                    # said once, not again as a big payment
+
+
+def test_living_costs_grow_with_inflation_loan_payments_stay_fixed_and_stop():
+    a = forecast.Assumptions(years=3, investment_return=0.0, investment_volatility=0.0, cash_yield=0.0,
+                             inflation=0.03, monthly_income=10_000, monthly_living=6_000, income_growth=0.0)
+    fc = forecast.run(accts([("Checking", "checking", 0, None, None),
+                             ("Car loan", "auto_loan", 12_000, 0.0, 1_000)]), a)
+    f = fc.cash_flow.set_index("year")
+    y0, y1 = f.index[0], f.index[0] + 1
+    assert f.loc[y1, "living"] / f.loc[y1, "months"] > f.loc[y0, "living"] / f.loc[y0, "months"]   # inflates
+    assert f["loans"].sum() == pytest.approx(12_000)                         # fixed payments, then they stop
+    assert f["income"].sum() == pytest.approx(10_000 * 36)                   # no raises assumed here
+    assert (f["saved"] == f["income"] - f["living"] - f["loans"]).all()
+    # 3 years: living 6,000 a month rising 3%/yr; the saved total lands in cash
+    living = sum(6_000 * 1.03 ** (m / 12) for m in range(36))
+    end = fc.expected.iloc[-1]                                                # saved -> 80% invested, rest cash
+    assert end["cash"] + end["investments"] == pytest.approx(10_000 * 36 - living - 12_000, rel=1e-6)
+
+
+def test_cash_flow_baseline_splits_loans_from_living_costs():
+    today = pd.Timestamp("2026-09-26")
+    t = _year(today, {"Checking": ("2000-01-01", 1.0)})              # 10K pay, 8K Safeway each month
+    for m in range(12, 0, -1):
+        d = today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=2)
+        t.loc[len(t)] = [d, "Checking", "DOVENMUEHLE MTG DES:MORTG PYMT", -3_000.0, None]
+    b = insights.cash_flow_baseline(insights.enrich(t), today=today)
+    assert b["months"] == 12 and b["income"] == pytest.approx(10_000)
+    assert b["living"] == pytest.approx(8_000) and b["loans_seen"] == pytest.approx(3_000)

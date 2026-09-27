@@ -6,7 +6,9 @@ Approach (the same idea ProjectionLab / Empower use, kept small):
   * Cash earns a steady yield; homes appreciate; vehicles depreciate.
   * Each loan is amortized month by month. When it's paid off, its payment is
     redirected to savings (your spending doesn't change, the bill just ends).
-  * Monthly savings rise with inflation (raises roughly keep pace).
+  * Saving each month = income - living costs - loan payments. Income grows with raises, living costs with
+    inflation; loan payments stay fixed (a mortgage payment doesn't inflate) and stop when the loan is paid off.
+    (Older saved assumptions with a single "saved per month" still work: that amount grows with raises.)
   * Everything is also reported in today's dollars, which is what people
     actually mean by "how much will I have".
 """
@@ -42,6 +44,9 @@ class Assumptions:
     monthly_savings: float = 0.0
     invest_share: float = 0.8             # share of new savings that gets invested
     savings_growth: float = 0.03
+    monthly_income: float | None = None   # when both are set, saving = income - living costs - loan payments
+    monthly_living: float | None = None   # everything spent except loan payments, today's prices
+    income_growth: float = 0.03           # raises per year
     simulations: int = 1000
     seed: int = 7
 
@@ -72,6 +77,7 @@ class Forecast:
     start_net_worth: float = 0.0
     valuables: pd.DataFrame = field(default_factory=pd.DataFrame)   # per asset: name, type, value, rate, source, end
     valuable_paths: pd.DataFrame = field(default_factory=pd.DataFrame)  # date x asset name, expected path
+    cash_flow: pd.DataFrame = field(default_factory=pd.DataFrame)       # per year: income, living, loans, saved
 
 
 def payment_for(balance: float, apr: float, years: float) -> float:
@@ -149,6 +155,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     loan_pay = np.array([l.payment for l in loans], dtype=float)
     payoff: dict[str, int] = {}
 
+    split = a.monthly_income is not None and a.monthly_living is not None
+    flow = np.zeros((months, 3))             # per month: income, living costs, loan payments (nominal)
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
     paths = np.empty((months + 1, val.shape[1]))
@@ -160,12 +168,20 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     for m in range(1, months + 1):
         # loans: accrue interest, pay, and free up the payment once cleared
         active = loan_bal > 0
-        loan_bal = np.where(active, np.maximum(loan_bal * (1 + loan_rate) - loan_pay, 0), 0)
+        owed = loan_bal * (1 + loan_rate)
+        loan_bal = np.where(active, np.maximum(owed - loan_pay, 0), 0)
+        paid = np.where(active, owed - loan_bal, 0).sum()          # the last payment is only what's left
         for i in np.flatnonzero(active & (loan_bal == 0)):
             payoff[loans[i].name] = m
         freed = loan_pay[~active].sum()          # loans already cleared before this month
 
-        save = a.monthly_savings * (1 + a.savings_growth) ** ((m - 1) // 12) + freed
+        if split:
+            income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
+            living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
+            flow[m - 1] = [income, living, paid]
+            save = income - living - paid
+        else:
+            save = a.monthly_savings * (1 + a.savings_growth) ** ((m - 1) // 12) + freed
         inv = inv * growth[:, m - 1]
         cash = cash * (1 + cash_r)
         if save >= 0:
@@ -181,7 +197,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         debt = loan_bal.sum() + revolving
         nw[:, m] = cash + inv + val.sum(axis=1) - debt
         parts[m] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
-    return nw, parts, loans, payoff, vt, paths
+    return nw, parts, loans, payoff, vt, paths, (flow if split else None)
 
 
 def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None,
@@ -191,13 +207,13 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     dates = pd.date_range(pd.Timestamp.today().normalize(), periods=a.years * 12 + 1, freq="MS")
     deflator = (1 + a.inflation) ** (np.arange(len(dates)) / 12)
 
-    nw, _, loans, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
+    nw, _, loans, _, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
     p10, p50, p90 = np.percentile(nw, [10, 50, 90], axis=0)
     bands = pd.DataFrame({"date": dates, "p10": p10, "p50": p50, "p90": p90})
     for c in ("p10", "p50", "p90"):
         bands[f"{c}_real"] = bands[c] / deflator
 
-    _, parts, _, payoff, vt, paths = _simulate(accts, a, 1, 0.0, history, trend_overrides)  # expected path
+    _, parts, _, payoff, vt, paths, flow = _simulate(accts, a, 1, 0.0, history, trend_overrides)  # expected path
     expected = pd.DataFrame(parts, columns=["cash", "investments", "property", "debt"])
     expected.insert(0, "date", dates)
     expected["net_worth"] = expected[["cash", "investments", "property"]].sum(axis=1) - expected["debt"]
@@ -217,4 +233,18 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     milestones.sort(key=lambda x: x[0])
     vt = vt.assign(end=paths[-1] if len(vt) else [], end_real=(paths[-1] / deflator[-1]) if len(vt) else [])
     valuable_paths = pd.DataFrame(paths, columns=list(vt["name"]), index=dates)
-    return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths)
+    cash_flow = pd.DataFrame()
+    if flow is not None:                                  # per year, nominal and in today's dollars
+        f = pd.DataFrame(flow, columns=["income", "living", "loans"])
+        f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
+        f["deflator"] = deflator[1:]
+        f["month"] = dates[1:]
+        cash_flow = f.groupby("period").agg(income=("income", "sum"), living=("living", "sum"),
+                                            loans=("loans", "sum"), deflator=("deflator", "mean"),
+                                            months=("income", "size"), first=("month", "min"), last=("month", "max"))
+        cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
+        cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"]
+        for c in ("income", "living", "loans", "saved"):
+            cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
+        cash_flow = cash_flow.reset_index()
+    return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)

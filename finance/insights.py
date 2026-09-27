@@ -399,3 +399,29 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
                         "text": f"**Due for an update:** {items}. Import their latest statements, or type the value "
                                 "in **Accounts**."})
     return out
+
+
+LOAN_CATEGORIES = {"Mortgage", "Loan payments"}
+
+
+def cash_flow_baseline(enriched: pd.DataFrame, today: pd.Timestamp | None = None) -> dict | None:
+    """Your average month over the last 12 complete months (same window and coverage check as the Overview):
+    income, living costs (all spending except loan payments), and the loan payments seen. The forecast grows
+    income with raises and living costs with inflation; loan payments stay fixed and stop when paid off."""
+    if enriched.empty:
+        return None
+    today = (today or pd.Timestamp.today()).normalize()
+    this_month = today.to_period("M").to_timestamp()
+    t = enriched[~enriched["is_transfer"]]
+    t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp())
+    start, _ = coverage(t, this_month - pd.DateOffset(months=AVERAGE_MONTHS), this_month)
+    t = t[(t["month"] >= start) & (t["month"] < this_month)]
+    months = t["month"].nunique()
+    if not months:
+        return None
+    is_in = t["category"].isin(INCOME_CATEGORIES)
+    loans = t["category"].isin(LOAN_CATEGORIES)
+    return {"months": months, "start": start,
+            "income": float(t.loc[is_in & (t["amount"] > 0), "amount"].sum() / months),
+            "living": float(-t.loc[~is_in & ~loans, "amount"].sum() / months),
+            "loans_seen": float(-t.loc[loans, "amount"].sum() / months)}

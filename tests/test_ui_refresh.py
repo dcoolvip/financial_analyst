@@ -519,3 +519,25 @@ def test_dollar_amounts_never_render_as_math(env):
     bad = [t for t in texts if len(_re.findall(r"(?<!\\)\$", t)) >= 2]
     assert not bad, bad[:3]
     assert any("more than came in" in t and r"\$" in t for t in texts)       # the insight is there, escaped
+
+
+def test_future_shows_spending_rising_with_inflation(env):
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    loan = db.add_account(conn, "Car loan", "Hyundai Motor Finance", "auto_loan")
+    db.update_account_terms(conn, loan, 0.01, 1_000.0)
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for m in range(13, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=3)).date()
+        db.upsert_balance(conn, chk, d, 50_000)
+        rows += [(d, "ACME DES:PAYROLL", 12_000.0, f"p{m}"), (d, "SAFEWAY", -6_000.0, f"s{m}"),
+                 (d, "HMF DES:HMFUSA.COM", -1_000.0, f"h{m}")]
+    db.upsert_balance(conn, loan, today.date(), 20_000)
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    at = app()
+    inputs = {n.label: n.value for n in at.number_input}
+    assert inputs["Income per month ($)"] == 12_000 and inputs["Living costs per month ($)"] == 6_000   # loans apart
+    assert any(m.value.startswith("#### Money in & out ahead") for m in at.markdown)
+    note = next(c.value for c in at.caption if c.value.startswith("In future dollars"))
+    assert "3.0% inflation" in note and "fixed, and they stop" in note

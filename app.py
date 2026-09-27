@@ -386,6 +386,11 @@ with tab_future:
         saved = forecast.Assumptions.from_dict(db.get_setting(conn, "assumptions"))
         if db.get_setting(conn, "assumptions") is None:
             saved.monthly_savings = round(est_savings or 0, -1)
+        baseline = insights.cash_flow_baseline(insights.enrich(txns, rule_map))
+        if baseline and saved.monthly_income is None:        # from your last 12 months, until you set your own
+            saved.monthly_income = round(baseline["income"], -2)
+            saved.monthly_living = round(baseline["living"], -2)
+        split = saved.monthly_income is not None and saved.monthly_living is not None
 
         if PHONE:  # chart first, sliders tucked under it, details below
             chart_col, ctrl_col, detail_col = st.container(), st.expander("⚙️ Adjust assumptions"), st.container()
@@ -398,23 +403,39 @@ with tab_future:
                     st.markdown("**Your assumptions**")
                 a = forecast.Assumptions(
                     years=st.slider("Years ahead", 5, 30, saved.years),
-                    monthly_savings=st.number_input(
-                        "Saved per month ($)", value=float(saved.monthly_savings), step=100.0,
-                        help=f"What's left after all bills, loan payments included. "
-                             f"Your recent average: {money(est_savings or 0)}."),
-                    inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.25, format="%.2f%%") / 100,
+                    inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.25, format="%.2f%%",
+                                        help="Living costs rise at this rate every year. Loan payments don't - a "
+                                             "mortgage payment stays the same until the loan is paid off.") / 100,
                     investment_return=st.slider("Investment return (per year)", 0.0, 12.0,
                                                 saved.investment_return * 100, 0.25, format="%.2f%%",
                                                 help="Before inflation. ~7% is a common long-run estimate for a stock-heavy mix.") / 100,
                 )
+                if split:
+                    avg = (f"Your average over the last {baseline['months']} months: " if baseline else "")
+                    a.monthly_income = st.number_input(
+                        "Income per month ($)", value=float(saved.monthly_income), step=500.0,
+                        help=avg + (money(baseline["income"]) if baseline else "") + ". Pay and other income after "
+                             "tax withholding; stock vesting isn't included.")
+                    a.monthly_living = st.number_input(
+                        "Living costs per month ($)", value=float(saved.monthly_living), step=500.0,
+                        help=avg + (money(baseline["living"]) if baseline else "") + ". Everything spent except loan "
+                             "payments (those come from each loan in Accounts), in today's prices.")
+                    a.income_growth = st.slider("Raises per year", 0.0, 8.0, saved.income_growth * 100, 0.25,
+                                                format="%.2f%%", help="How fast income grows.") / 100
+                else:
+                    a.monthly_savings = st.number_input(
+                        "Saved per month ($)", value=float(saved.monthly_savings), step=100.0,
+                        help=f"What's left after all bills, loan payments included. "
+                             f"Your recent average: {money(est_savings or 0)}.")
                 with st.expander("More assumptions"):
                     a.invest_share = st.slider("Share of savings invested", 0, 100, int(saved.invest_share * 100), 5,
                                                format="%d%%", help="The rest stays in cash.") / 100
                     a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.25, format="%.2f%%") / 100
                     a.home_appreciation = st.slider("Home value growth", -2.0, 8.0, saved.home_appreciation * 100, 0.25,
                                                     format="%.2f%%") / 100
-                    a.savings_growth = st.slider("Savings grow each year by", 0.0, 8.0, saved.savings_growth * 100, 0.25,
-                                                 format="%.2f%%", help="Raises. Matching inflation keeps savings steady in real terms.") / 100
+                    if not split:
+                        a.savings_growth = st.slider("Savings grow each year by", 0.0, 8.0, saved.savings_growth * 100,
+                                                     0.25, format="%.2f%%", help="Raises.") / 100
                     a.investment_volatility = saved.investment_volatility
                     a.vehicle_depreciation = saved.vehicle_depreciation
                 c1, c2 = st.columns(2)
@@ -470,6 +491,27 @@ with tab_future:
                 deflate = (1 + a.inflation) ** (np.arange(len(fc.valuable_paths)) / 12) if real else 1
                 plot(charts.asset_outlook(hist_all[hist_all["account_id"] == aid], fc.valuable_paths[pick] / deflate,
                                           mode, compact=PHONE))
+
+            if len(fc.cash_flow):
+                cfa = fc.cash_flow
+                st.markdown("#### Money in & out ahead",
+                            help="Each coming 12 months: living costs grow with inflation, loan payments stay fixed "
+                                 "and stop when each loan is paid off, income grows with raises. What's left is "
+                                 "saved (or, if negative, taken from cash, then investments).")
+                plot(charts.cash_flow_ahead(cfa, False, mode, compact=PHONE))   # future dollars: shows prices rising
+                first, last = cfa.iloc[0], cfa.iloc[-1]
+                st.caption(
+                    f"In future dollars, next 12 months → {last['year']}: living costs {money(first['living'])} → "
+                    f"{money(last['living'])} a year ({a.inflation:.1%} inflation); income {money(first['income'])} → "
+                    f"{money(last['income'])} ({a.income_growth:.1%} raises); loan payments {money(first['loans'])} → "
+                    f"{money(last['loans'])} (fixed, and they stop as loans are paid off). Saved: "
+                    f"{money(first['saved'])} → {money(last['saved'])} a year.")
+                if baseline and fc.loans:
+                    on_record = sum(l.payment for l in fc.loans)
+                    if abs(on_record - baseline["loans_seen"]) > 0.1 * max(on_record, 1):
+                        st.caption(f"⚠️ Loan payments on record add up to {money(on_record)} a month, but your "
+                                   f"transactions show {money(baseline['loans_seen'])} a month. Check each loan's "
+                                   "**Monthly payment** in Accounts.")
 
             st.markdown("#### Milestones", help="Loans paid off and other points the most likely path reaches.")
             if fc.milestones:

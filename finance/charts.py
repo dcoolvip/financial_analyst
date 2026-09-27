@@ -189,6 +189,26 @@ def account_history(hist: pd.DataFrame, mode: str, debt: bool = False, compact: 
     return _layout(fig, c, height=280, legend=bool(hist["estimate"].any()), compact=compact)
 
 
+def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = False) -> go.Figure:
+    """Each coming year: living costs and loan payments (stacked) against income. Living costs rise with
+    inflation, loan payments stay flat and drop away when a loan is paid off."""
+    c = PALETTE[mode]
+    sfx = "_real" if real else ""
+    span = [f"{a:%b %Y} – {b:%b %Y}" for a, b in zip(cf["first"], cf["last"])]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=cf["year"], y=cf[f"living{sfx}"], name="Living costs", marker=dict(color=c["s2"]),
+                         customdata=span, hovertemplate="Living costs $%{y:,.0f}<extra></extra>"))
+    fig.add_trace(go.Bar(x=cf["year"], y=cf[f"loans{sfx}"], name="Loan payments", marker=dict(color=c["muted"]),
+                         hovertemplate="Loan payments $%{y:,.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=cf["year"], y=cf[f"income{sfx}"], name="Income", mode="lines+markers",
+                             line=dict(color=c["s1"], width=2), marker=dict(size=8),
+                             customdata=span,
+                             hovertemplate="<b>%{customdata}</b><br>Income $%{y:,.0f}<extra></extra>"))
+    fig.update_layout(barmode="stack", hovermode="x unified", bargap=0.3)
+    fig.update_xaxes(dtick=1, tickformat="d")
+    return _layout(fig, c, height=320, legend=True, compact=compact)
+
+
 def change_bars(items: dict[str, float], mode: str, compact: bool = False) -> go.Figure:
     """Signed changes as horizontal bars: gains in the asset color, losses in the debt color."""
     c = PALETTE[mode]
