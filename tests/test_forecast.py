@@ -216,7 +216,7 @@ def test_once_a_year_tax_counts_once_over_twelve_months():
     first = insights.overview(insights.enrich(t, {"IRS USATAXPYMT": ("Income tax", "ai")}), accts, {"Cash": 1}, pd.DataFrame(
         columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
     assert "Over the last 12 months" in first["text"] and "Income tax $24K" in first["text"]   # counted once
-    assert "IRS $24K (Income tax, Apr 2026)" in first["text"]
+    assert "Income tax $24K (mostly one IRS payment of $24K, Apr 2026)" in first["text"]
 
 
 def test_new_card_taking_over_keeps_the_year_but_missing_history_shortens_it():
@@ -247,13 +247,15 @@ def test_money_between_the_two_of_you_is_a_transfer_and_refunds_reduce_spending(
     assert cf["money_in"].iloc[0] == 0 and cf["money_out"].iloc[0] == pytest.approx(750)   # 50 + 1000 - 300
 
 
-def test_repeated_big_payments_are_grouped():
+def test_property_tax_named_by_home_without_repeating_itself():
     today = pd.Timestamp("2026-09-26")
     t = _year(today, {"Savings": ("2000-01-01", 1.0)})
     for d in ("2025-11-10", "2026-03-10"):
         t.loc[len(t)] = [pd.Timestamp(d), "Savings", "SANTA CLARA DTAC SANTACLARA", -25_000.0, None]
     accts = pd.DataFrame([{"id": 1, "name": "x", "type": "savings", "balance": 1, "rate": None, "payment": None,
                            "as_of": "2026-09-20"}])
-    i = insights.overview(insights.enrich(t, {"SANTA CLARA DTAC SANTACLARA": ("Housing", "ai")}), accts, {"Cash": 1},
-                          pd.DataFrame(columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
-    assert "Santa Clara $50K (Housing, 2 payments)" in i["text"]
+    args = (insights.enrich(t), accts, {"Cash": 1}, pd.DataFrame(columns=["account_id", "name", "then", "now", "change"]),
+            (None, None, []))
+    i = insights.overview(*args, today=today, property_tax_shares={"Bellgrove Home": 19_692.80, "Schott Home": 5_437.34})[0]
+    assert "Property tax $50K (Bellgrove $39K, Schott $11K)" in i["text"]
+    assert i["text"].count("$50K") == 1                                    # said once, not again as a big payment

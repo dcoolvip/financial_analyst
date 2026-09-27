@@ -288,7 +288,8 @@ with tab_overview:
         # plain-language takeaways, worked out from everything imported so far (ⓘ: how each is calculated)
         with st.container(border=True):
             for n in insights.overview(insights.enrich(txns, rule_map), accts, totals, db.account_changes(conn, 12),
-                                       db.net_worth_change(conn, 12)):
+                                       db.net_worth_change(conn, 12),
+                                       property_tax_shares=db.get_setting(conn, "property_tax_shares")):
                 st.markdown(f"{n['icon']} {n['text']}", help=n["help"])
 
         head, pick_range, pick_view = st.columns([2, 1.3, 1.3]) if not PHONE else (st, st, st)

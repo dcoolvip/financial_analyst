@@ -206,6 +206,20 @@ def change_by_group(changes: pd.DataFrame, types: dict) -> dict[str, float]:
 INVESTMENT_RE = r"(?i)MSPBNA|MORGAN STANLEY|E\*?TRADE|WEALTHFRONT BROKERAGE|ROBINHOOD|MERRILL|SCHWAB|FIDELITY|VANGUARD"
 
 
+def _cost_detail(category: str, total: float, spending: pd.DataFrame, shares: dict | None) -> str:
+    """What's behind a big cost, in a few words: which homes a property tax covers, or the one payment that
+    makes up most of it."""
+    if category == "Property tax" and shares:
+        whole = sum(shares.values())
+        return " (" + ", ".join(f"{k.replace(' Home', '')} {_m(total * v / whole)}" for k, v in
+                                sorted(shares.items(), key=lambda kv: -kv[1])) + ")"
+    rows = spending[spending["category"] == category].sort_values("amount")
+    if len(rows) and -rows["amount"].iloc[0] >= 10_000 and -rows["amount"].iloc[0] >= 0.5 * total:
+        r = rows.iloc[0]
+        return f" (mostly one {_short_name(r['merchant'])} payment of {_m(-r['amount'])}, {r['date']:%b %Y})"
+    return ""
+
+
 def _short_name(merchant: str) -> str:
     """A readable name for a merchant key: "IRS USATAXPYMT" -> "IRS", "SANTA CLARA DTAC SANTACLARA" -> "Santa Clara"."""
     words = merchant.split()
@@ -260,10 +274,12 @@ def _m(v: float) -> str:
 
 
 def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: pd.DataFrame,
-             year_change: tuple, today: pd.Timestamp | None = None) -> list[dict]:
+             year_change: tuple, today: pd.Timestamp | None = None,
+             property_tax_shares: dict | None = None) -> list[dict]:
     """Plain-language takeaways, worked out from everything imported so far. Each: icon, text, help (how it's
     calculated - shown on the ⓘ). enriched = enrich(transactions); moves = db.account_changes(conn, 12);
-    year_change = db.net_worth_change(conn, 12)."""
+    year_change = db.net_worth_change(conn, 12). property_tax_shares = {home name: its share of each property tax
+    payment}, when one payment covers several homes."""
     today = (today or pd.Timestamp.today()).normalize()
     this_month = today.to_period("M").to_timestamp()
     out = []
@@ -284,7 +300,8 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
         period = (f"the last 12 months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y})" if months == 12
                   else f"the last {months} months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y})")
         costs = (-spending.groupby("category")["amount"].sum()).sort_values(ascending=False)
-        top = ", ".join(f"{c} {_m(v)}" for c, v in costs.head(3).items())
+        top3 = list(costs.head(3).index)
+        top = ", ".join(f"{c} {_m(costs[c])}{_cost_detail(c, costs[c], spending, property_tax_shares)}" for c in top3)
         gap = came_in - went_out
         if gap >= 0:
             text = (f"Over {period}, **{_m(came_in)} came in and {_m(went_out)} went out: you kept {_m(gap)}** "
@@ -293,16 +310,10 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
             text = (f"Over {period}, **{_m(went_out)} went out and {_m(came_in)} came in: {_m(-gap)} more than came "
                     "in.**")
         text += f" Biggest costs: {top}."
-        big = spending[spending["amount"] <= -10_000]
-        if len(big):
-            groups = (big.assign(who=big["merchant"].map(_short_name))
-                      .groupby(["category", "who"])["amount"].agg(total="sum", n="size", last="idxmin")
-                      .sort_values("total"))
-            parts = []
-            for (cat, who), g in groups.head(3).iterrows():
-                when = f"{int(g['n'])} payments" if g["n"] > 1 else f"{big.loc[int(g['last']), 'date']:%b %Y}"
-                parts.append(f"{who} {_m(-g['total'])} ({cat}, {when})")
-            text += " Largest payments: " + ", ".join(parts) + "."
+        others = spending[(spending["amount"] <= -10_000) & ~spending["category"].isin(top3)].sort_values("amount")
+        if len(others):                                 # big payments the costs above don't already explain
+            text += " Also: " + ", ".join(f"{_short_name(r.merchant)} {_m(-r.amount)} ({r.category}, {r.date:%b %Y})"
+                                          for r in others.head(2).itertuples()) + "."
         if gap < 0 and "account_type" in enriched:
             cash = enriched[enriched["is_transfer"] & enriched["account_type"].isin(["checking", "savings"])]
             cash = cash[(cash["date"] >= start) & (cash["date"] < this_month)]
