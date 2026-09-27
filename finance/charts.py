@@ -98,7 +98,8 @@ def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False, compa
     fig = _layout(fig, c, height=max(160, 56 * len(labels) + 40), compact=compact)
     fig.update_layout(margin=dict(l=8, r=8, t=4, b=4) if compact else dict(l=16, r=16, t=8, b=8))
     fig.update_xaxes(visible=False, range=[0, max(values or [1]) * 1.25])
-    fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]))
+    fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]),
+                     tickmode="array", tickvals=labels, ticktext=labels, nticks=0)   # a label on every bar
     return fig
 
 
@@ -189,6 +190,26 @@ def account_history(hist: pd.DataFrame, mode: str, debt: bool = False, compact: 
     return _layout(fig, c, height=280, legend=bool(hist["estimate"].any()), compact=compact)
 
 
+def forecast_own_owe(history: pd.DataFrame, expected: pd.DataFrame, real: bool, mode: str,
+                     compact: bool = False) -> go.Figure:
+    """What you own and what you owe: recorded so far (solid) and the most likely path ahead (dashed)."""
+    c = PALETTE[mode]
+    sfx = "_real" if real else ""
+    own = expected[f"cash{sfx}"] + expected[f"investments{sfx}"] + expected[f"property{sfx}"]
+    fig = go.Figure()
+    for name, past, ahead, color in (("What you own", "assets", own, c["s1"]),
+                                     ("What you owe", "liabilities", expected[f"debt{sfx}"], c["s2"])):
+        if len(history):
+            fig.add_trace(go.Scatter(x=history["date"], y=history[past], mode="lines", name=name,
+                                     line=dict(color=color, width=2), legendgroup=name,
+                                     hovertemplate=f"{name} $%{{y:,.0f}}<extra></extra>"))
+        fig.add_trace(go.Scatter(x=expected["date"], y=ahead, mode="lines", name=f"{name} (ahead)",
+                                 line=dict(color=color, width=2, dash="dash"), legendgroup=name, showlegend=False,
+                                 hovertemplate=f"{name}, most likely $%{{y:,.0f}}<extra></extra>"))
+    fig.update_layout(hovermode="x unified")
+    return _layout(fig, c, height=380, legend=True, compact=compact)
+
+
 def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = False) -> go.Figure:
     """Each coming year: living costs and loan payments (stacked) against income. Living costs rise with
     inflation, loan payments stay flat and drop away when a loan is paid off."""
@@ -223,5 +244,6 @@ def change_bars(items: dict[str, float], mode: str, compact: bool = False) -> go
     lo, hi = min([0.0, *values]), max([0.0, *values])
     pad = (hi - lo) * 0.35 or 1.0                       # room for the outside labels
     fig.update_xaxes(visible=False, range=[lo - (pad if lo < 0 else 0), hi + (pad if hi > 0 else 0)])
-    fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]))
+    fig.update_yaxes(showgrid=False, tickprefix="", tickfont=dict(color=c["ink2"]),
+                     tickmode="array", tickvals=labels, ticktext=labels, nticks=0)
     return fig

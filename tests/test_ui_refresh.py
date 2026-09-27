@@ -546,3 +546,43 @@ def test_future_shows_spending_rising_with_inflation(env):
     sliders = {x.label: x.value for x in at.slider}
     assert sliders["Investment return (per year)"] == pytest.approx(history.summary(30)["stocks"] * 100, abs=0.01)
     assert any(e.label == "📜 Where these come from" for e in at.expander)
+
+
+def test_phone_gets_lists_not_wide_tables_and_every_category_label(env, monkeypatch):
+    """Regression (iPhone): category names were skipped on the bar chart (the phone's 5-tick limit), and wide
+    tables needed sideways scrolling."""
+    import json
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    rows = []
+    today = pd.Timestamp.today().normalize()
+    cats = ["SAFEWAY", "SHELL OIL", "NETFLIX", "KAISER", "UNITED AIRLINES", "AMAZON", "CHIPOTLE", "PG&E"]
+    for m in range(4, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=3)).date()
+        db.upsert_balance(conn, chk, d, 20_000)
+        rows += [(d, name, -100.0 * (i + 1), f"{m}-{i}") for i, name in enumerate(cats)]
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.query_params["view"] = "phone"
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    bars = next(json.loads(c.proto.spec) for c in at.get("plotly_chart") if "a month" in c.proto.spec)
+    labels = bars["data"][0]["y"]
+    assert bars["layout"]["yaxis"]["tickvals"] == labels and len(labels) >= 6        # a name on every bar
+    read_only = [d for d in at.dataframe if d.proto.editing_mode == 0]
+    assert not read_only, [list(d.value.columns)[:4] for d in read_only]            # lists instead
+    assert any('class="plist"' in m.value for m in at.markdown)
+    for d in at.dataframe:                                                            # editors: 3 columns max
+        assert len(d.proto.column_order) <= 3, list(d.proto.column_order)
+
+
+def test_future_own_and_owe_view(env):
+    conn, _ = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 50_000)
+    mtg = db.add_account(conn, "Mortgage", "Golden 1", "mortgage")
+    db.update_account_terms(conn, mtg, 0.06, 3_000.0)
+    db.upsert_balance(conn, mtg, "2026-09-01", 400_000)
+    at = app()
+    at.segmented_control(key="future_view").set_value("Own & owe").run()
+    assert not at.exception
+    assert any(c.value.startswith("Most likely path: you own") for c in at.caption)

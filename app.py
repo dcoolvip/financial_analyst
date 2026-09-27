@@ -98,6 +98,13 @@ PHONE_CSS = """
       width: calc(50% - .5rem) !important; max-width: calc(50% - .25rem) !important;
     }
     [class*="st-key-kpis"] [data-testid="stVerticalBlockBorderWrapper"] { padding: .5rem .65rem !important; }
+    /* list rows instead of wide tables */
+    .plist { border-top: 1px solid rgba(128,128,128,.25); margin: .25rem 0 .75rem; }
+    .prow { padding: .5rem .1rem; border-bottom: 1px solid rgba(128,128,128,.25); }
+    .ptop { display: flex; justify-content: space-between; gap: .75rem; align-items: baseline; }
+    .pt { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pv { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+    .pd { font-size: .8rem; opacity: .65; margin-top: .1rem; }
     /* tabs: tighter, swipeable */
     [data-baseweb="tab-list"] { gap: .25rem; overflow-x: auto; }
     [data-baseweb="tab"] { padding: .4rem .55rem; font-size: .9rem; }
@@ -205,6 +212,22 @@ def plot(fig):
 
 def signed(v) -> str:
     return "-" if v is None or pd.isna(v) else ("+" if v >= 0 else "") + money(v)
+
+
+def phone_rows(rows, limit: int | None = None) -> None:
+    """A phone-friendly list instead of a wide table: name on the left, the number on the right, details on a
+    small second line - nothing to scroll sideways. rows: (title, value, detail)."""
+    import html
+    rows = list(rows)
+    more = len(rows) - limit if limit and len(rows) > limit else 0
+    rows = rows[:limit] if limit else rows
+    items = "".join(
+        f'<div class="prow"><div class="ptop"><span class="pt">{html.escape(str(t))}</span>'
+        f'<span class="pv">{html.escape(str(v))}</span></div>'
+        + (f'<div class="pd">{html.escape(str(d))}</div>' if d else "") + "</div>" for t, v, d in rows)
+    st.markdown(f'<div class="plist">{items}</div>', unsafe_allow_html=True)
+    if more:
+        st.caption(f"…and {more:,} more (all of them on a bigger screen).")
 
 
 def kpi_row(items: list[tuple[str, str]]) -> None:
@@ -338,14 +361,17 @@ with tab_overview:
             with right:
                 st.caption("Biggest movers")
                 top = moves.reindex(moves["change"].abs().sort_values(ascending=False).index).head(6)
-                st.dataframe(top.assign(pct=np.where(top["then"].abs() > 0, top["change"] / top["then"].abs(), np.nan)),
-                             hide_index=True, width="stretch", column_order=["name", "then", "now", "change", "pct"],
-                             column_config={
-                                 "name": "Account",
-                                 "then": st.column_config.NumberColumn("A year ago", format="$%,.0f"),
-                                 "now": st.column_config.NumberColumn("Now", format="$%,.0f"),
-                                 "change": st.column_config.NumberColumn("Net worth effect", format="$%+,.0f"),
-                                 "pct": st.column_config.NumberColumn("Change", format="percent")})
+                if PHONE:
+                    phone_rows(((r.name, signed(r.change), f"{money(r.then)} → {money(r.now)}") for r in top.itertuples()))
+                else:
+                    st.dataframe(top.assign(pct=np.where(top["then"].abs() > 0, top["change"] / top["then"].abs(), np.nan)),
+                                 hide_index=True, width="stretch", column_order=["name", "then", "now", "change", "pct"],
+                                 column_config={
+                                     "name": "Account",
+                                     "then": st.column_config.NumberColumn("A year ago", format="$%,.0f"),
+                                     "now": st.column_config.NumberColumn("Now", format="$%,.0f"),
+                                     "change": st.column_config.NumberColumn("Net worth effect", format="$%+,.0f"),
+                                     "pct": st.column_config.NumberColumn("Change", format="percent")})
             if left_out := [n for n in accts.loc[accts["balance"].notna(), "name"] if n not in set(moves["name"])]:
                 st.caption("Not counted (no value a year ago yet): " + ", ".join(left_out) + ".")
 
@@ -374,13 +400,16 @@ with tab_overview:
             with top_col:
                 st.caption("Top holdings")
                 top = pf["top"].assign(label=lambda d: d["symbol"] + " · " + d["description"].fillna("").str[:28])
-                st.dataframe(top[["label", "value", "share"] if PHONE else ["label", "accounts", "value", "gain", "share"]],
-                             hide_index=True, width="stretch", column_config={
-                                 "label": "Holding", "accounts": "Account",
-                                 "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
-                                 "gain": st.column_config.NumberColumn("Unrealized gain", format="$%,.0f"),
-                                 "share": st.column_config.ProgressColumn("Share", format="percent",
-                                                                          min_value=0, max_value=1)})
+                if PHONE:
+                    phone_rows(((r.label, money(r.value), f"{r.share:.0%} of investments" + (f" · {r.accounts}" if isinstance(r.accounts, str) else "")) for r in top.itertuples()))
+                else:
+                    st.dataframe(top[["label", "value", "share"] if PHONE else ["label", "accounts", "value", "gain", "share"]],
+                                 hide_index=True, width="stretch", column_config={
+                                     "label": "Holding", "accounts": "Account",
+                                     "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
+                                     "gain": st.column_config.NumberColumn("Unrealized gain", format="$%,.0f"),
+                                     "share": st.column_config.ProgressColumn("Share", format="percent",
+                                                                              min_value=0, max_value=1)})
 
 
 # --- future -------------------------------------------------------------------
@@ -519,11 +548,14 @@ with tab_future:
                                  help="Removes inflation so future numbers feel like today's money.")
                 with st.expander("📜 Where these come from"):
                     t = history.table()
-                    st.dataframe(t, hide_index=True, width="stretch", column_config={
-                        "measure": "", "last_year": st.column_config.NumberColumn("Last year", format="percent"),
-                        "y10": st.column_config.NumberColumn("10 yrs", format="percent"),
-                        "y20": st.column_config.NumberColumn("20 yrs", format="percent"),
-                        "y30": st.column_config.NumberColumn("30 yrs", format="percent")})
+                    if PHONE:
+                        phone_rows(((r.measure, f"{r.y30:.1%} (30 yrs)", f"last year {r.last_year:.1%} · 10 yrs {r.y10:.1%} · 20 yrs {r.y20:.1%}") for r in t.itertuples()))
+                    else:
+                        st.dataframe(t, hide_index=True, width="stretch", column_config={
+                            "measure": "", "last_year": st.column_config.NumberColumn("Last year", format="percent"),
+                            "y10": st.column_config.NumberColumn("10 yrs", format="percent"),
+                            "y20": st.column_config.NumberColumn("20 yrs", format="percent"),
+                            "y30": st.column_config.NumberColumn("30 yrs", format="percent")})
                     yours = [f"Your cash earned **{pct(your_cash['yield'])}** over the last 12 months" if your_cash else "",
                              f"**{pct(from_history['invest_share'])}** of your cash + investments is invested",
                              (f"Income **{money(baseline['income'])}** and living costs **{money(baseline['living'])}** a "
@@ -539,7 +571,18 @@ with tab_future:
             st.markdown(f'<p class="hero">{money(end[f"p50{sfx}"])}</p>'
                         f'<p class="hero-sub">Most likely outcome. 8 in 10 simulations land between '
                         f'{money(end[f"p10{sfx}"])} and {money(end[f"p90{sfx}"])}.</p>', unsafe_allow_html=True)
-            plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
+            future_view = st.segmented_control("Future view", ["Net worth", "Own & owe"], default="Net worth",
+                                               key="future_view", label_visibility="collapsed") or "Net worth"
+            if future_view == "Own & owe":
+                plot(charts.forecast_own_owe(nw.tail(24), fc.expected, real, mode, compact=PHONE))
+                e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]
+                own0 = e0[f"cash{sfx}"] + e0[f"investments{sfx}"] + e0[f"property{sfx}"]
+                own1 = e1[f"cash{sfx}"] + e1[f"investments{sfx}"] + e1[f"property{sfx}"]
+                st.caption(f"Most likely path: you own {money(own0)} → {money(own1)} and owe {money(e0[f'debt{sfx}'])} "
+                           f"→ {money(e1[f'debt{sfx}'])} by {e1['date']:%Y}" + (" (today's dollars)." if real else ".")
+                           + " Solid: recorded so far. Dashed: ahead.")
+            else:
+                plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
 
         with detail_col:
             exp = fc.expected.iloc[-1]
@@ -557,14 +600,17 @@ with tab_future:
                     "Asset": v["name"], "Today": v["value"], "Growth / yr": v["rate"] * 100,
                     "Swings / yr": v["vol"] * 100, "Based on": v["why"],
                     f"In {a.years} years": v["end_real"] if real else v["end"]})
-                st.dataframe(shown, hide_index=True, width="stretch", column_config={
-                    "Today": st.column_config.NumberColumn(format="$%,.0f"),
-                    "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
-                    "Swings / yr": st.column_config.NumberColumn(
-                        format="±%.0f%%", help="How much the value typically moves in a year - from its own history "
-                                               "when there's enough, else typical for its kind. Widens the range."),
-                    f"In {a.years} years": st.column_config.NumberColumn(
-                        format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
+                if PHONE:
+                    phone_rows(((r["Asset"], f"{r['Growth / yr']:+.1f}%/yr", f"{money(r['Today'])} → {money(r[f'In {a.years} years'])} in {a.years} yrs · swings ±{r['Swings / yr']:.0f}% · {r['Based on']}") for _, r in shown.iterrows()))
+                else:
+                    st.dataframe(shown, hide_index=True, width="stretch", column_config={
+                        "Today": st.column_config.NumberColumn(format="$%,.0f"),
+                        "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
+                        "Swings / yr": st.column_config.NumberColumn(
+                            format="±%.0f%%", help="How much the value typically moves in a year - from its own history "
+                                                   "when there's enough, else typical for its kind. Widens the range."),
+                        f"In {a.years} years": st.column_config.NumberColumn(
+                            format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
                 st.caption("Each rate blends the asset's own history with the long-run rate for its kind - the "
                            "longer the history, the more it counts (1 yr ≈ 17%, 5 yrs = 50%, 10 yrs ≈ 67%). "
                            "Type your own in **Accounts → Your growth %** to override.")
@@ -605,12 +651,15 @@ with tab_future:
             if fc.loans:
                 st.markdown("#### Loans", help="The rate and monthly payment the forecast pays each loan down with.")
                 est = [l.name for l in fc.loans if l.estimated]
-                st.dataframe(pd.DataFrame([{"Loan": l.name, "Balance": l.balance, "Rate": l.apr * 100,
-                                            "Monthly payment": l.payment} for l in fc.loans]),
-                             hide_index=True, width="stretch", column_config={
-                                 "Balance": st.column_config.NumberColumn(format="$%,.0f"),
-                                 "Rate": st.column_config.NumberColumn(format="%.2f%%"),
-                                 "Monthly payment": st.column_config.NumberColumn(format="$%,.0f")})
+                if PHONE:
+                    phone_rows(((l.name, money(l.balance), f"{l.apr:.2%} · {money(l.payment)} a month") for l in fc.loans))
+                else:
+                    st.dataframe(pd.DataFrame([{"Loan": l.name, "Balance": l.balance, "Rate": l.apr * 100,
+                                                "Monthly payment": l.payment} for l in fc.loans]),
+                                 hide_index=True, width="stretch", column_config={
+                                     "Balance": st.column_config.NumberColumn(format="$%,.0f"),
+                                     "Rate": st.column_config.NumberColumn(format="%.2f%%"),
+                                     "Monthly payment": st.column_config.NumberColumn(format="$%,.0f")})
                 if est:
                     st.caption(f"⚠️ Rate/payment guessed for {', '.join(est)}. Set the real ones in **Accounts** "
                                "for a better forecast.")
@@ -707,6 +756,7 @@ with tab_flow:
         has_who = bool(view["purchaser"].notna().any()) if "purchaser" in view else False
         view = view[["id", "date", "account", "description", "merchant", "category", "amount"]
                     + (["purchaser"] if has_who else [])].reset_index(drop=True)
+        view["what"] = view["date"].dt.strftime("%b %-d") + " · " + view["merchant"].str.title().str[:30]
 
         spent, got = -view.loc[view["amount"] < 0, "amount"].sum(), view.loc[view["amount"] > 0, "amount"].sum()
         st.caption(f"**{len(view)}** transactions · in {money(got)} · out {money(spent)}  —  "
@@ -719,13 +769,14 @@ with tab_flow:
         editor_key = f"txn_editor_{hash((q, tuple(pick_cats), tuple(pick), period))}"
         edited = st.data_editor(
             view, hide_index=True, width="stretch", height=420 if PHONE else 460, key=editor_key,
-            disabled=["id", "date", "account", "description", "merchant", "amount", "purchaser"],
-            column_order=(["date", "description", "category", "amount"] if PHONE else
+            disabled=["id", "date", "account", "description", "merchant", "amount", "purchaser", "what"],
+            column_order=(["what", "category", "amount"] if PHONE else
                           ["date", "account", "description", "category", "amount"] + (["purchaser"] if has_who else [])),
             column_config={
                 "date": st.column_config.DateColumn("Date", format="MMM D" if PHONE else "MMM D, YYYY"),
                 "account": "Account", "description": "Description",
                 "purchaser": st.column_config.TextColumn("Who", help="Who made the purchase, on a shared card"),
+                "what": st.column_config.TextColumn("Transaction", width="medium"),
                 "category": st.column_config.SelectboxColumn(
                     "Category ✏️", options=cat_options, required=True,
                     help="Hover a bar in Where it goes to see what each category covers"),
@@ -836,7 +887,7 @@ with tab_accounts:
                     continue
                 st.markdown(f"**{g}** · {money(totals[g])}", help=GROUP_HELP.get(g))
                 shown_word, new_word = balance_word.get(g, ("Balance", "Type new balance ✏️"))
-                cols = (["name", "shown_balance", "new_balance", "Updated"] if PHONE else
+                cols = (["name", "shown_balance", "new_balance"] if PHONE else
                         ["name", "bank", "Type", "shown_balance", "new_balance", "year"]
                         + [c for c in extras.get(g, []) if c not in ("trend", "future", "payoff") or rows[c].astype(bool).any()]
                         + ["Updated"] + (["status"] if rows["status"].any() else []))
@@ -855,7 +906,7 @@ with tab_accounts:
                             shown_word, format="$%,.0f" if PHONE else "$%,.2f",
                             help="Green: money you have. Red: what you owe on cards and loans."),
                         "new_balance": st.column_config.NumberColumn(
-                            new_word, format="$%,.2f",
+                            "Update ✏️" if PHONE else new_word, format="$%,.2f",
                             help="Type today's number as the bank shows it (cards and loans: what you owe; a card in "
                                  "credit: negative) and press Enter. Saved as of today."),
                         "year": st.column_config.NumberColumn(
@@ -931,40 +982,52 @@ with tab_accounts:
         held = held[held["account"] == pick]
         if len(held):
             st.markdown(f"**Holdings** · {len(held)} positions as of {pd.Timestamp(held['as_of'].iloc[0]):%b %-d, %Y}")
-            st.dataframe(held.assign(gain=held["value"] - held["cost_basis"]), hide_index=True, width="stretch",
-                         column_order=["symbol", "description", "quantity", "price", "value", "gain"],
-                         column_config={"symbol": "Symbol", "description": "Name",
-                                        "quantity": st.column_config.NumberColumn("Shares", format="%,.3f"),
-                                        "price": st.column_config.NumberColumn("Price", format="$%,.2f"),
-                                        "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
-                                        "gain": st.column_config.NumberColumn("Unrealized gain", format="$%+,.0f")})
+            if PHONE:
+                phone_rows(((f"{r.symbol} · {str(r.description or '')[:24]}", money(r.value), f"{r.quantity:,.0f} shares" + (f" · gain {signed(r.value - r.cost_basis)}" if pd.notna(r.cost_basis) else "")) for r in held.itertuples()))
+            else:
+                st.dataframe(held.assign(gain=held["value"] - held["cost_basis"]), hide_index=True, width="stretch",
+                             column_order=["symbol", "description", "quantity", "price", "value", "gain"],
+                             column_config={"symbol": "Symbol", "description": "Name",
+                                            "quantity": st.column_config.NumberColumn("Shares", format="%,.3f"),
+                                            "price": st.column_config.NumberColumn("Price", format="$%,.2f"),
+                                            "value": st.column_config.NumberColumn("Value", format="$%,.0f"),
+                                            "gain": st.column_config.NumberColumn("Unrealized gain", format="$%+,.0f")})
         grants = db.latest_grants(conn)
         if len(grants := grants[grants["account"] == pick]):
             st.markdown(f"**Unvested grants** · {money(grants['value'].sum())} (not counted in net worth until they vest)")
-            st.dataframe(grants, hide_index=True, width="stretch",
-                         column_order=["grant_date", "type", "symbol", "quantity", "value"],
-                         column_config={"grant_date": "Granted", "type": "Type", "symbol": "Symbol",
-                                        "quantity": st.column_config.NumberColumn("Shares", format="%,.0f"),
-                                        "value": st.column_config.NumberColumn("Value", format="$%,.0f")})
+            if PHONE:
+                phone_rows(((f"{r.symbol} {r.type or 'grant'}", money(r.value), f"granted {r.grant_date} · {r.quantity:,.0f} shares") for r in grants.itertuples()))
+            else:
+                st.dataframe(grants, hide_index=True, width="stretch",
+                             column_order=["grant_date", "type", "symbol", "quantity", "value"],
+                             column_config={"grant_date": "Granted", "type": "Type", "symbol": "Symbol",
+                                            "quantity": st.column_config.NumberColumn("Shares", format="%,.0f"),
+                                            "value": st.column_config.NumberColumn("Value", format="$%,.0f")})
         acct_txns = insights.enrich(txns[txns["account"] == pick], rule_map)   # same categories as Money in & out
         if len(acct_txns):
             with st.expander(f"This account's {len(acct_txns):,} transactions ({acct_txns['date'].min():%b %Y} – "
                              f"{acct_txns['date'].max():%b %Y})"):
                 st.caption("The same transactions as on **Money in & out**, just this account's. Change categories "
                            "there.")
-                st.dataframe(acct_txns, hide_index=True, width="stretch",
-                             column_order=["date", "description", "amount", "category"],
-                             column_config={"date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
-                                            "description": "Description", "category": "Category",
-                                            "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
+                if PHONE:
+                    phone_rows(((r.merchant.title()[:34], f"{r.amount:+,.2f}", f"{r.date:%b %-d, %Y} · {r.category}") for r in acct_txns.sort_values("date", ascending=False).itertuples()), limit=60)
+                else:
+                    st.dataframe(acct_txns, hide_index=True, width="stretch",
+                                 column_order=["date", "description", "amount", "category"],
+                                 column_config={"date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
+                                                "description": "Description", "category": "Category",
+                                                "amount": st.column_config.NumberColumn("Amount", format="$%,.2f")})
         if len(h):
             with st.expander(f"All {len(h):,} values on record"):
-                st.dataframe(h.sort_values("date", ascending=False), hide_index=True, width="stretch",
-                             column_order=["date", "balance", "how"],
-                             column_config={"date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
-                                            "balance": st.column_config.NumberColumn("Owed" if debt else "Value",
-                                                                                     format="$%,.2f"),
-                                            "how": "Where it came from"})
+                if PHONE:
+                    phone_rows(((f"{r.date:%b %-d, %Y}", money(r.balance), r.how) for r in h.sort_values("date", ascending=False).itertuples()), limit=60)
+                else:
+                    st.dataframe(h.sort_values("date", ascending=False), hide_index=True, width="stretch",
+                                 column_order=["date", "balance", "how"],
+                                 column_config={"date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
+                                                "balance": st.column_config.NumberColumn("Owed" if debt else "Value",
+                                                                                         format="$%,.2f"),
+                                                "how": "Where it came from"})
 
     if pokemon.available():
         with st.expander("🃏 Pokemon collection (from your Pokemon dashboard)"):
@@ -1029,10 +1092,13 @@ with tab_accounts:
     changes = db.recent_edits(conn)
     if len(changes):
         with st.expander("🕘 Recent changes"):
-            st.dataframe(changes.assign(at=pd.to_datetime(changes["at"])), hide_index=True, width="stretch",
-                         column_config={"at": st.column_config.DatetimeColumn("When", format="MMM D, h:mm a"),
-                                        "account": "Account", "what": "Changed", "old": "From", "new": "To",
-                                        "device": "Device"})
+            if PHONE:
+                phone_rows(((f"{r.account}: {r.what}", str(r.new)[:18], f"{pd.to_datetime(r.at):%b %-d, %-I:%M %p} · was {str(r.old)[:24]} · {r.device}") for r in changes.itertuples()))
+            else:
+                st.dataframe(changes.assign(at=pd.to_datetime(changes["at"])), hide_index=True, width="stretch",
+                             column_config={"at": st.column_config.DatetimeColumn("When", format="MMM D, h:mm a"),
+                                            "account": "Account", "what": "Changed", "old": "From", "new": "To",
+                                            "device": "Device"})
 
 
 # --- add data -----------------------------------------------------------------
