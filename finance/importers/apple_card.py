@@ -5,7 +5,8 @@
 * Signs are the reverse of banks': Purchase/Debit are positive, Payment/Credit negative - all flipped here.
 * The clean Merchant name ("Hulu") is used as the description; for payments the Description
   ("ACH DEPOSIT INTERNET TRANSFER FROM ACCOUNT ENDING IN ...") is kept, which reads as a transfer.
-* Several people can share an Apple Card (Apple Card Family): one account; the purchaser is noted.
+* Several people can share an Apple Card (Apple Card Family): one account; the purchaser is kept separately
+  (never part of the merchant name, so it isn't sent for categorizing).
 * No balance and no reference numbers in the file: identical same-day rows are real repeat charges and
   are kept apart by their order.
 """
@@ -37,15 +38,14 @@ def parse(content: bytes | str, filename: str = "") -> ParsedFile:
             continue
         kind = r["Type"].strip()
         desc = " ".join((r["Description"] if kind == "Payment" or not r["Merchant"].strip() else r["Merchant"]).split())
-        if len(people) > 1 and kind != "Payment" and r.get("Purchased By"):
-            desc += f" ({r['Purchased By'].strip()})"
+        who = (r.get("Purchased By") or "").strip() if len(people) > 1 and kind != "Payment" else ""
         out.append({"date": datetime.strptime(r["Transaction Date"].strip(), "%m/%d/%Y").date(),
-                    "description": desc, "amount": -amount,
+                    "description": desc, "amount": -amount, "purchaser": who or None,
                     "key": f"{r['Transaction Date']}|{r['Clearing Date']}|{r['Description'].strip()}|{kind}|{amount:.2f}"})
-    df = pd.DataFrame(out, columns=["date", "description", "amount", "key"])
+    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "key"])
     df["fingerprint"] = df["key"] + "|" + df.groupby("key").cumcount().astype(str)
     return ParsedFile(kind="credit_card", institution=INSTITUTION,
-                      transactions=df[["date", "description", "amount", "fingerprint"]],
+                      transactions=df[["date", "description", "amount", "purchaser", "fingerprint"]],
                       as_of=df["date"].max() if len(df) else None,
                       note="" if len(people) < 2 else
-                      f"Shared card ({', '.join(sorted(people))}) - imported as one account; each purchase notes who made it.")
+                      f"Shared card ({', '.join(sorted(people))}) - imported as one account; each purchase records who made it.")

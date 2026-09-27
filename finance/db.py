@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
@@ -115,7 +116,43 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     if "cost_basis" not in {r[1] for r in conn.execute("PRAGMA table_info(holdings)")}:
         conn.execute("ALTER TABLE holdings ADD COLUMN cost_basis REAL")
         conn.commit()
+    if "purchaser" not in {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}:
+        conn.execute("ALTER TABLE transactions ADD COLUMN purchaser TEXT")   # who made it, on shared cards
+        _split_purchasers(conn)
+        conn.commit()
     return conn
+
+
+_NAME_SUFFIX = re.compile(r"^(.*\S) \(([A-Za-z][A-Za-z .'-]*)\)$")
+
+
+def _split_purchasers(conn) -> None:
+    """Older imports of shared cards appended the purchaser to the description ("Old Navy (Jane Doe)"),
+    which made every merchant+person pair its own merchant for categorizing. Move the name into
+    `purchaser`, and carry each merchant rule over to the name-free merchant so no category is lost.
+    A suffix counts as a person when it's 2+ words and repeats on 5+ of an account's transactions."""
+    from collections import Counter
+    from .categorize import merchant_key
+    rows = conn.execute("SELECT id, account_id, description FROM transactions").fetchall()
+    hits = [(i, a, m.group(1), m.group(2)) for i, a, d in rows if (m := _NAME_SUFFIX.match(d))]
+    counts = Counter((a, name) for _, a, _, name in hits)
+    people = {k for k, n in counts.items() if n >= 5 and len(k[1].split()) >= 2}
+    moved = {}
+    for i, a, base, name in hits:
+        if (a, name) in people:
+            conn.execute("UPDATE transactions SET description = ?, purchaser = ? WHERE id = ?", (base, name, i))
+            moved[merchant_key(f"{base} ({name})")] = merchant_key(base)
+    if not moved or not conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'merchant_rules'").fetchone():
+        return
+    rules = {m: (c, src) for m, c, src in conn.execute("SELECT merchant, category, source FROM merchant_rules")}
+    for old, new in moved.items():
+        if old not in rules or old == new:
+            continue
+        cat, src = rules.pop(old)
+        conn.execute("DELETE FROM merchant_rules WHERE merchant = ?", (old,))
+        if new not in rules or (src == "user" and rules[new][1] != "user"):   # your own choice wins
+            conn.execute("INSERT OR REPLACE INTO merchant_rules VALUES (?, ?, ?)", (new, cat, src))
+            rules[new] = (cat, src)
 
 
 def _iso(d: date | datetime | str) -> str:
@@ -349,10 +386,11 @@ def insert_transactions(conn, account_id: int, txns: pd.DataFrame, source: str) 
     """Insert rows with columns date, description, amount, fingerprint. Returns count added."""
     before = conn.total_changes
     conn.executemany(
-        """INSERT OR IGNORE INTO transactions (account_id, date, description, amount, fingerprint, source)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+        """INSERT OR IGNORE INTO transactions (account_id, date, description, amount, fingerprint, source, purchaser)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
         [
-            (account_id, _iso(r.date), r.description, float(r.amount), f"{account_id}|{r.fingerprint}", source)
+            (account_id, _iso(r.date), r.description, float(r.amount), f"{account_id}|{r.fingerprint}", source,
+             getattr(r, "purchaser", None) or None)
             for r in txns.itertuples()
         ],
     )
@@ -375,7 +413,7 @@ def transaction_overlap(conn, account_ids: list[int], fingerprints: list[str]) -
 
 
 def transactions(conn, account_ids: list[int] | None = None) -> pd.DataFrame:
-    q = """SELECT t.id, t.date, a.name AS account, t.description, t.amount, t.category
+    q = """SELECT t.id, t.date, a.name AS account, t.description, t.amount, t.category, t.purchaser
            FROM transactions t JOIN accounts a ON a.id = t.account_id"""
     params: list = []
     if account_ids:

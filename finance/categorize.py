@@ -175,17 +175,24 @@ def uncategorized_merchants(conn, txns: pd.DataFrame, is_transfer) -> pd.DataFra
 
 
 def auto_categorize(conn, txns: pd.DataFrame, is_transfer, progress=None) -> int:
-    """Classify every merchant that has no rule yet. Returns number of merchants categorized."""
+    """Classify every merchant that has no rule yet. Returns number of merchants categorized.
+    Merchants the model leaves out of its answer are asked about once more on their own."""
     todo = uncategorized_merchants(conn, txns, is_transfer)
     done = 0
     for start in range(0, len(todo), BATCH):
         chunk = todo.iloc[start:start + BATCH].reset_index(drop=True)
-        items = [{"id": i, "merchant": r.merchant, "direction": "in" if r.amount > 0 else "out",
-                  "typical_amount": round(abs(r.amount))} for i, r in chunk.iterrows()]
-        for i, cat in _call_model(items).items():
-            if 0 <= i < len(chunk):
+        pending = list(range(len(chunk)))
+        for _attempt in range(2):
+            items = [{"id": i, "merchant": chunk.at[i, "merchant"],
+                      "direction": "in" if chunk.at[i, "amount"] > 0 else "out",
+                      "typical_amount": round(abs(chunk.at[i, "amount"]))} for i in pending]
+            answered = {i: c for i, c in _call_model(items).items() if i in pending and c in CATEGORIES}
+            for i, cat in answered.items():
                 set_rule(conn, chunk.at[i, "merchant"], cat, source="ai")
-                done += 1
+            done += len(answered)
+            pending = [i for i in pending if i not in answered]
+            if not pending:
+                break
         if progress:
             progress(min(start + BATCH, len(todo)) / len(todo))
     return done

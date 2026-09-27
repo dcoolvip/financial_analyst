@@ -289,7 +289,8 @@ def test_apple_card_csv():
     t = p.transactions
     assert len(t) == 6 and t["fingerprint"].is_unique                          # the two $227 charges both kept
     assert t["amount"].tolist() == [-227.0, -227.0, -2.99, 400.0, 12.0, -0.12]   # signs flipped to bank style
-    assert t["description"].iloc[2] == "Hulu (John Sample)"                     # clean merchant + who
+    assert t["description"].iloc[2] == "Hulu" and t["purchaser"].iloc[2] == "John Sample"   # who: kept apart
+    assert pd.isna(t["purchaser"].iloc[3])                                      # payments aren't anyone's purchase
     assert insights.categorize(t["description"].iloc[3], 400.0) == "Transfer"   # the payment
     assert insights.categorize("APPLECARD GSBANK DES:PAYMENT ID:999", -400.0) == "Transfer"   # bank side
     assert "Shared card" in p.note
@@ -300,6 +301,38 @@ def test_apple_card_reimport_is_idempotent(conn):
     parsed = parse_file(read("apple_card.csv"))
     assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 6
     assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 0
+    stored = db.transactions(conn).set_index("description")
+    assert stored.loc["Hulu", "purchaser"] == "John Sample"
+
+
+def test_names_moved_out_of_older_shared_card_descriptions(tmp_path):
+    """Older imports put the purchaser in the description ("Old Navy (Jane Sample)"), so every merchant+person
+    pair was its own merchant for the AI - and the name was sent with it. The upgrade moves names out and keeps
+    each merchant's category."""
+    import sqlite3
+    from finance import categorize
+    path = tmp_path / "old.db"
+    conn = db.connect(path)
+    card = db.add_account(conn, "Apple Card", "Apple Card", "credit_card")
+    rows = [(card, "2025-01-%02d" % (i + 1), f"Store {i} (Jane Sample)", -10.0, f"f{i}", "a.csv") for i in range(6)]
+    rows += [(card, "2025-02-01", "Old Navy (Jane Sample)", -5.0, "g1", "a.csv"),
+             (card, "2025-02-02", "Old Navy (John Sample)", -5.0, "g2", "a.csv"),
+             (card, "2025-02-03", "Hui Lau Shan (Cupertino)", -9.0, "g3", "a.csv")]    # a place, not a person
+    rows += [(card, "2025-03-%02d" % (i + 1), f"Cafe {i} (John Sample)", -3.0, f"h{i}", "a.csv") for i in range(4)]
+    conn.executemany("INSERT INTO transactions (account_id, date, description, amount, fingerprint, source) "
+                     "VALUES (?, ?, ?, ?, ?, ?)", rows)
+    conn.commit()
+    categorize.set_rule(conn, "OLD NAVY (JANE SAMPLE)", "Shopping", "ai")
+    categorize.set_rule(conn, "OLD NAVY (JOHN SAMPLE)", "Gifts & donations", "user")          # your choice wins
+    conn.execute("ALTER TABLE transactions DROP COLUMN purchaser")                          # as an older version had it
+    conn.commit()
+    conn.close()
+    conn = db.connect(path)                                                                 # upgrade runs here
+    t = {f: (d, who) for f, d, who in conn.execute("SELECT fingerprint, description, purchaser FROM transactions")}
+    assert t["g1"] == ("Old Navy", "Jane Sample") and t["h0"] == ("Cafe 0", "John Sample")
+    assert t["g3"] == ("Hui Lau Shan (Cupertino)", None)                                    # places left alone
+    r = categorize.rules(conn)
+    assert r["OLD NAVY"] == ("Gifts & donations", "user") and not any("SAMPLE" in m for m in r)
 
 
 def test_mortgage_not_extended_back_before_the_home(conn):

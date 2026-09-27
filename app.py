@@ -207,18 +207,23 @@ def trend_overrides() -> dict:
 
 
 def run_ai_categorize() -> None:
+    """Runs the AI and leaves the outcome in session state: the page reruns right after, which would
+    wipe anything drawn here (an error must stay visible until it's read)."""
     bar = st.progress(0.0, text="Categorizing merchants…")
     try:
-        n = categorize.auto_categorize(conn, txns, insights.is_transfer,
+        n = categorize.auto_categorize(conn, db.transactions(conn), insights.is_transfer,
                                        progress=lambda f: bar.progress(f, text="Categorizing merchants…"))
-        st.toast(f"Categorized {n} merchants")
+        left = len(categorize.uncategorized_merchants(conn, db.transactions(conn), insights.is_transfer))
+        st.session_state["ai_flash"] = (f"Categorized {n} merchants" if not left else
+                                        f"Couldn't categorize {left} merchant(s) - the AI skipped them. Try again.")
     except Exception as e:  # noqa: BLE001 - surface any auth/network problem plainly
-        st.error(f"AI categorization didn't run: {e}")
+        st.session_state["ai_error"] = f"AI categorization didn't run: {e}"
     finally:
         bar.empty()
 
-if msg := st.session_state.pop("flash", None):   # confirmation from the previous action, on any tab
-    st.toast(msg, icon="⚠️" if msg.startswith("Couldn't") else "✅")
+for key in ("flash", "ai_flash"):                 # confirmation from the previous action, on any tab
+    if msg := st.session_state.pop(key, None):
+        st.toast(msg, icon="⚠️" if msg.startswith("Couldn't") else "✅")
 
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
     ["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
@@ -491,6 +496,8 @@ with tab_flow:
     if txns.empty:
         st.info("Import a checking or credit card CSV in **Add data** to see where money goes.")
     else:
+        if err := st.session_state.pop("ai_error", None):
+            st.error(err, icon="⚠️")
         todo = categorize.uncategorized_merchants(conn, txns, insights.is_transfer)
         if len(todo):
             with st.container(border=True):
@@ -550,7 +557,9 @@ with tab_flow:
         if (months := periods[period]) is not None:
             start = pd.Timestamp.today().to_period("M").to_timestamp() - pd.DateOffset(months=months)
             view = view[view["date"] >= start]
-        view = view[["date", "account", "description", "merchant", "category", "amount"]].reset_index(drop=True)
+        has_who = bool(view["purchaser"].notna().any()) if "purchaser" in view else False
+        view = view[["date", "account", "description", "merchant", "category", "amount"]
+                    + (["purchaser"] if has_who else [])].reset_index(drop=True)
 
         spent, got = -view.loc[view["amount"] < 0, "amount"].sum(), view.loc[view["amount"] > 0, "amount"].sum()
         st.caption(f"**{len(view)}** transactions · in {money(got)} · out {money(spent)}  —  "
@@ -562,12 +571,13 @@ with tab_flow:
         editor_key = f"txn_editor_{hash((q, tuple(pick_cats), tuple(pick), period))}"
         edited = st.data_editor(
             view, hide_index=True, width="stretch", height=420 if PHONE else 460, key=editor_key,
-            disabled=["date", "account", "description", "merchant", "amount"],
+            disabled=["date", "account", "description", "merchant", "amount", "purchaser"],
             column_order=(["date", "description", "category", "amount"] if PHONE else
-                          ["date", "account", "description", "category", "amount"]),
+                          ["date", "account", "description", "category", "amount"] + (["purchaser"] if has_who else [])),
             column_config={
                 "date": st.column_config.DateColumn("Date", format="MMM D" if PHONE else "MMM D, YYYY"),
                 "account": "Account", "description": "Description",
+                "purchaser": st.column_config.TextColumn("Who", help="Who made the purchase, on a shared card"),
                 "category": st.column_config.SelectboxColumn("Category ✏️", options=cat_options, required=True),
                 "amount": st.column_config.NumberColumn("Amount", format="$%,.0f" if PHONE else "$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
@@ -1108,8 +1118,7 @@ with tab_add:
                 r = apply(conn, parsed, acct_id, f.name)
                 db.update_account_details(conn, acct_id, last4=last4_from_filename(f.name) or parsed.account_hint or None)
                 if r["transactions_added"] and categorize.available():
-                    txns = db.transactions(conn)   # include what was just imported
-                    run_ai_categorize()
+                    run_ai_categorize()                 # reads the transactions just imported
                 done = st.session_state.setdefault("imported_files", set())
                 done.add(f.file_id)
                 st.session_state["flash"] = (

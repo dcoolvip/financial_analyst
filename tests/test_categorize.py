@@ -47,3 +47,18 @@ def test_auto_categorize_batches_by_merchant(conn, monkeypatch):
     assert len(calls) == 1 and {i["merchant"] for i in calls[0]} == {"VENMO PAYMENT", "ACME PAYROLL"}
     assert "INDN" not in str(calls) and "X" not in {i["merchant"] for i in calls[0]}
     assert categorize.auto_categorize(conn, t, insights.is_transfer) == 0   # nothing left to do
+
+
+def test_merchants_the_model_skips_are_asked_again(tmp_path, monkeypatch):
+    from finance import categorize, db, insights
+    conn = db.connect(tmp_path / "t.db")
+    txns = pd.DataFrame({"description": ["NETFLIX", "SAFEWAY", "SHELL OIL"], "amount": [-15.0, -80.0, -40.0]})
+    calls = []
+
+    def fake(items):
+        calls.append([i["merchant"] for i in items])
+        return {i["id"]: "Other" for i in items[:1]} if len(calls) == 1 else {i["id"]: "Groceries" for i in items}
+    monkeypatch.setattr(categorize, "_call_model", fake)
+    assert categorize.auto_categorize(conn, txns, insights.is_transfer) == 3
+    assert len(calls) == 2 and len(calls[1]) == 2                     # only the skipped two, asked once more
+    assert categorize.uncategorized_merchants(conn, txns, insights.is_transfer).empty
