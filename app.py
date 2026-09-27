@@ -803,8 +803,10 @@ with tab_accounts:
                                         "value": st.column_config.NumberColumn("Value", format="$%,.0f")})
         acct_txns = txns[txns["account"] == pick]
         if len(acct_txns):
-            with st.expander(f"Transactions ({len(acct_txns):,}, {acct_txns['date'].min():%b %Y} – "
+            with st.expander(f"This account's {len(acct_txns):,} transactions ({acct_txns['date'].min():%b %Y} – "
                              f"{acct_txns['date'].max():%b %Y})"):
+                st.caption("The same transactions as on **Money in & out**, just this account's. Change categories "
+                           "there.")
                 st.dataframe(acct_txns, hide_index=True, width="stretch",
                              column_order=["date", "description", "amount", "category"],
                              column_config={"date": st.column_config.DateColumn("Date", format="MMM D, YYYY"),
