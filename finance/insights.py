@@ -274,36 +274,48 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
     spend = 0.0
     if months:
         is_in = recent["category"].isin(INCOME_CATEGORIES)
-        income = recent.loc[is_in & (recent["amount"] > 0), "amount"].sum() / months
+        came_in = recent.loc[is_in & (recent["amount"] > 0), "amount"].sum()
         spending = recent[~is_in]
-        spend = -spending["amount"].sum() / months
-        costs = (-spending.groupby("category")["amount"].sum() / months).sort_values(ascending=False)
+        went_out = -spending["amount"].sum()
+        income, spend = came_in / months, went_out / months            # monthly, for the cash cushion below
+        period = (f"the last 12 months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y})" if months == 12
+                  else f"the last {months} months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y})")
+        costs = (-spending.groupby("category")["amount"].sum()).sort_values(ascending=False)
         top = ", ".join(f"{c} {_m(v)}" for c, v in costs.head(3).items())
-        gap = income - spend
-        big = spending[spending["amount"] <= -10_000].sort_values("amount")
-        one_offs = ", ".join(f"{r.category} {_m(-r.amount)} ({_short_name(r.merchant)}, {r.date:%b %Y})"
-                             for r in big.head(3).itertuples())
-        how = (f"Last {months} complete months ({start:%b %Y} – {this_month - pd.DateOffset(days=1):%b %Y}) - a full "
-               "year, so once-a-year bills like income and property tax count once. Money in = pay and other "
-               "income; money out = spending net of refunds, incl. mortgage, taxes and card purchases. Transfers "
-               "between your own accounts and card bill payments are left out. Stock vesting and investment "
-               "growth aren't cash coming in - they show in net worth."
-               + (f" Coverage: {covered}." if covered else " Every account has transactions for the whole period."))
-        head = (f"You keep about **{_m(gap)} a month** ({gap / income:.0%} of what comes in)" if gap >= 0 else
-                f"Spending ran **{_m(-gap)} a month above what came in** ({_m(income)} in, {_m(spend)} out)")
-        text = f"{head}, over the last {months} months. Biggest costs: {top} a month."
-        if one_offs:
-            text += f" Largest single payments: {one_offs}."
+        gap = came_in - went_out
+        if gap >= 0:
+            text = (f"Over {period}, **{_m(came_in)} came in and {_m(went_out)} went out: you kept {_m(gap)}** "
+                    f"({gap / came_in:.0%}).")
+        else:
+            text = (f"Over {period}, **{_m(went_out)} went out and {_m(came_in)} came in: {_m(-gap)} more than came "
+                    "in.**")
+        text += f" Biggest costs: {top}."
+        big = spending[spending["amount"] <= -10_000]
+        if len(big):
+            groups = (big.assign(who=big["merchant"].map(_short_name))
+                      .groupby(["category", "who"])["amount"].agg(total="sum", n="size", last="idxmin")
+                      .sort_values("total"))
+            parts = []
+            for (cat, who), g in groups.head(3).iterrows():
+                when = f"{int(g['n'])} payments" if g["n"] > 1 else f"{big.loc[int(g['last']), 'date']:%b %Y}"
+                parts.append(f"{who} {_m(-g['total'])} ({cat}, {when})")
+            text += " Largest payments: " + ", ".join(parts) + "."
         if gap < 0 and "account_type" in enriched:
             cash = enriched[enriched["is_transfer"] & enriched["account_type"].isin(["checking", "savings"])]
             cash = cash[(cash["date"] >= start) & (cash["date"] < this_month)]
             inv = cash[cash["description"].str.contains(INVESTMENT_RE, regex=True)]
             net = inv["amount"].sum()                           # in from brokerages, minus what went back in
             if net > 0:
-                src = inv.groupby(inv["description"].map(_investment_name))["amount"].sum()
-                src = src[src > 0].sort_values(ascending=False)
-                text += (f" Covered by a net {_m(net)} moved in from investments over the period ("
-                         + ", ".join(f"{k} {_m(v)}" for k, v in src.head(3).items()) + ").")
+                flows = inv.groupby(inv["description"].map(_investment_name))["amount"].sum().sort_values(ascending=False)
+                ins = [f"{_m(v)} from {k}" for k, v in flows.items() if v >= 500]
+                outs = [f"{_m(-v)} put into {k}" for k, v in flows.items() if v <= -500]
+                text += (f" The difference came from investments: net {_m(net)} ("
+                         + " and ".join(ins[:3]) + (", less " + " and ".join(outs[:2]) if outs else "") + ").")
+        how = (f"Totals over {period} - a full year, so once-a-year bills like income and property tax count "
+               "once. Came in = pay and other income; went out = spending net of refunds, incl. mortgage, taxes and "
+               "card purchases. Transfers between your own accounts and card bill payments are left out. Stock "
+               "vesting and investment growth aren't cash coming in - they show in net worth."
+               + (f" Coverage: {covered}." if covered else " Every account has transactions for the whole period."))
         out.append({"icon": "💰" if gap >= 0 else "💸", "help": how, "text": text})
 
         # what changed: last complete month against the months before it

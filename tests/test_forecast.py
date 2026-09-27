@@ -170,12 +170,12 @@ def test_overview_insights_are_worked_out_from_the_data():
     moves = pd.DataFrame({"account_id": [1], "name": ["Checking"], "then": [10_000.0], "now": [30_000.0], "change": [20_000.0]})
     out = {i["icon"]: i for i in insights.overview(e, accts, totals, moves, (20_000.0, 50_000.0, ["Gold"]), today=today)}
     cash_flow = out["💰"]["text"]                                     # 10K in; 8K + 1K + ~0.8K travel out
-    assert "You keep about **$167 a month**" in cash_flow             # transfers to savings aren't spending
-    assert cash_flow.split("Biggest costs: ")[1].startswith("Mortgage $8.0K")
+    assert "**$60K came in and $59K went out: you kept $1.0K**" in cash_flow    # transfers to savings aren't spending
+    assert cash_flow.split("Biggest costs: ")[1].startswith("Mortgage $48K")
     e2 = insights.enrich(t.assign(amount=t["amount"].where(t["description"] != "ACME DES:PAYROLL", 5_000.0)),
                          {"UNITED AIRLINES": ("Travel", "ai")})
     short = {i["icon"]: i for i in insights.overview(e2, accts, totals, moves, (None, None, []), today=today)}
-    assert "above what came in" in short["💸"]["text"]                # spending more than pay: said plainly
+    assert "more than came in" in short["💸"]["text"]                 # spending more than pay: said plainly
     assert "Travel" in out["🔎"]["text"] and "August" in out["🔎"]["text"]
     assert "mostly Checking (+$20K)" in out["📈"]["text"] and "1 newer account not included" in out["📈"]["text"]
     assert "Gold" in out["📈"]["help"]                                # which ones: on the ⓘ, not in the sentence
@@ -215,8 +215,8 @@ def test_once_a_year_tax_counts_once_over_twelve_months():
                            "payment": None, "as_of": "2026-09-20"}])
     first = insights.overview(insights.enrich(t, {"IRS USATAXPYMT": ("Taxes", "ai")}), accts, {"Cash": 1}, pd.DataFrame(
         columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
-    assert "over the last 12 months" in first["text"] and "Taxes $2.0K" in first["text"]   # 24K / 12, not / 6
-    assert "Taxes $24K (IRS, Apr 2026)" in first["text"]
+    assert "Over the last 12 months" in first["text"] and "Taxes $24K" in first["text"]   # counted once
+    assert "IRS $24K (Taxes, Apr 2026)" in first["text"]
 
 
 def test_new_card_taking_over_keeps_the_year_but_missing_history_shortens_it():
@@ -229,11 +229,11 @@ def test_new_card_taking_over_keeps_the_year_but_missing_history_shortens_it():
     moved = moved[~((moved["account"] == "Old card") & (moved["date"] >= "2026-01-01"))]
     moved = pd.concat([moved, _year(today, {"New card": ("2026-01-01", 1.0)})], ignore_index=True)
     i = insights.overview(insights.enrich(moved), accts, {"Cash": 1}, none, (None, None, []), today=today)[0]
-    assert "over the last 12 months" in i["text"] and "took over from another account" in i["help"]
+    assert "Over the last 12 months" in i["text"] and "took over from another account" in i["help"]
     # a second account only imported from January (it existed before): totals jump -> start in January
     partial = pd.concat([_year(today, {"Checking": ("2000-01-01", 0.5)}), _year(today, {"Card": ("2026-01-01", 0.5)})])
     i = insights.overview(insights.enrich(partial), accts, {"Cash": 1}, none, (None, None, []), today=today)[0]
-    assert "over the last 8 months" in i["text"] and "no history before Jan 2026" in i["help"]
+    assert "Over the last 8 months" in i["text"] and "no history before Jan 2026" in i["help"]
 
 
 def test_money_between_the_two_of_you_is_a_transfer_and_refunds_reduce_spending():
@@ -245,3 +245,15 @@ def test_money_between_the_two_of_you_is_a_transfer_and_refunds_reduce_spending(
     assert e.set_index("description").loc["TRANSFER DEEPALI DOMBA SALIAN", "category"] == "Transfer"
     cf = insights.monthly_cash_flow(t, {"CL CHASE TRAVEL": ("Travel", "ai"), "UNITED AIRLINES": ("Travel", "ai")})
     assert cf["money_in"].iloc[0] == 0 and cf["money_out"].iloc[0] == pytest.approx(750)   # 50 + 1000 - 300
+
+
+def test_repeated_big_payments_are_grouped():
+    today = pd.Timestamp("2026-09-26")
+    t = _year(today, {"Savings": ("2000-01-01", 1.0)})
+    for d in ("2025-11-10", "2026-03-10"):
+        t.loc[len(t)] = [pd.Timestamp(d), "Savings", "SANTA CLARA DTAC SANTACLARA", -25_000.0, None]
+    accts = pd.DataFrame([{"id": 1, "name": "x", "type": "savings", "balance": 1, "rate": None, "payment": None,
+                           "as_of": "2026-09-20"}])
+    i = insights.overview(insights.enrich(t, {"SANTA CLARA DTAC SANTACLARA": ("Housing", "ai")}), accts, {"Cash": 1},
+                          pd.DataFrame(columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
+    assert "Santa Clara $50K (Housing, 2 payments)" in i["text"]

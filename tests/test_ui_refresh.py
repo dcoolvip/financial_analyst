@@ -518,4 +518,4 @@ def test_dollar_amounts_never_render_as_math(env):
     texts += [e.proto.help for e in list(at.markdown) if e.proto.help]
     bad = [t for t in texts if len(_re.findall(r"(?<!\\)\$", t)) >= 2]
     assert not bad, bad[:3]
-    assert any("above what came in" in t and r"\$" in t for t in texts)      # the insight is there, escaped
+    assert any("more than came in" in t and r"\$" in t for t in texts)       # the insight is there, escaped
