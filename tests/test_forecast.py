@@ -213,10 +213,10 @@ def test_once_a_year_tax_counts_once_over_twelve_months():
     t.loc[len(t)] = [pd.Timestamp("2026-04-10"), "Checking", "IRS DES:USATAXPYMT", -24_000.0, None]
     accts = pd.DataFrame([{"id": 1, "name": "Checking", "type": "checking", "balance": 1, "rate": None,
                            "payment": None, "as_of": "2026-09-20"}])
-    first = insights.overview(insights.enrich(t, {"IRS USATAXPYMT": ("Taxes", "ai")}), accts, {"Cash": 1}, pd.DataFrame(
+    first = insights.overview(insights.enrich(t, {"IRS USATAXPYMT": ("Income tax", "ai")}), accts, {"Cash": 1}, pd.DataFrame(
         columns=["account_id", "name", "then", "now", "change"]), (None, None, []), today=today)[0]
-    assert "Over the last 12 months" in first["text"] and "Taxes $24K" in first["text"]   # counted once
-    assert "IRS $24K (Taxes, Apr 2026)" in first["text"]
+    assert "Over the last 12 months" in first["text"] and "Income tax $24K" in first["text"]   # counted once
+    assert "IRS $24K (Income tax, Apr 2026)" in first["text"]
 
 
 def test_new_card_taking_over_keeps_the_year_but_missing_history_shortens_it():

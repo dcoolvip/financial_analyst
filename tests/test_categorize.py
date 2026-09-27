@@ -210,3 +210,15 @@ def test_ai_other_does_not_block_keywords_and_names_survive():
 def test_property_tax_is_its_own_category():
     assert insights.categorize("Santa Clara DTAC DES:SantaClara ID:3910396148 INDN:X", -25130.14) == "Property tax"
     assert "Property tax" in categorize.CATEGORIES and "property tax" not in categorize.CATEGORY_HELP["Housing"]
+
+
+def test_taxes_renamed_to_income_tax_and_the_rest_moved(conn):
+    for m in ("IRS USATAXPYMT", "INTUIT TURBOTAX", "RSM - SILICON VALLEY", "MDE COURT EPAY", "WWW.ZENBUSINESS.COM"):
+        conn.execute("INSERT INTO merchant_rules VALUES (?, 'Taxes', ?)", (m, "user" if "RSM" in m else "ai"))
+    conn.commit()
+    assert categorize.rename_taxes_category(conn) == 5
+    r = categorize.rules(conn)
+    assert r["IRS USATAXPYMT"] == ("Income tax", "ai") and r["RSM - SILICON VALLEY"] == ("Income tax", "user")
+    assert r["MDE COURT EPAY"][0] == r["WWW.ZENBUSINESS.COM"][0] == "Government & legal"
+    assert "Taxes" not in categorize.CATEGORIES
+    assert insights.categorize("IRS DES:USATAXPYMT ID:1", -100) == "Income tax"

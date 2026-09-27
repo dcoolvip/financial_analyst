@@ -123,6 +123,10 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     if "bank_category" not in {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}:
         conn.execute("ALTER TABLE transactions ADD COLUMN bank_category TEXT")   # the bank's own label, a hint
         conn.commit()
+    if not get_setting(conn, "taxes_renamed", False):
+        from .categorize import rename_taxes_category
+        rename_taxes_category(conn)
+        set_setting(conn, "taxes_renamed", True)
     if get_setting(conn, "merchant_key_version", 1) < 2:
         # merchant names now keep short numbers ("99 RANCH", not "RANCH"): carry saved categories over
         from .categorize import upgrade_rule_keys

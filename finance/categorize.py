@@ -52,7 +52,9 @@ CATEGORY_HELP = {
     "Personal care": "Hair, nails, spa, gym and fitness memberships, laundry and dry cleaning.",
     "Gifts & donations": "Gifts, charities, fundraisers, religious donations.",
     "Fees & interest": "Bank and card fees, card interest charges, late fees, wire fees, cash-back reversals.",
-    "Taxes": "Income tax payments, government fines and court fees, business filings and licences.",
+    "Income tax": "Federal and state income tax payments, and tax preparation (TurboTax, accountants).",
+    "Government & legal": "Court fees and fines, business filings, licences and other government services - "
+                          "not taxes.",
     "Payments to people": "Zelle, Venmo, PayPal or Apple Cash to or from individuals or small businesses, when "
                           "the purpose is unknown.",
     "Cash & ATM": "ATM withdrawals and cash back - spent on something the statement can't show.",
@@ -109,6 +111,22 @@ _ONE_OFF = re.compile(r"^(CHECK|DEPOSIT|COUNTER CREDIT|TELLER DEPOSIT|ATM WITHDR
 
 def is_one_off(merchant: str) -> bool:
     return bool(_ONE_OFF.match(merchant or ""))
+
+
+_INCOME_TAX = re.compile(r"IRS|TAX|RSM|CPA|ACCOUNTING|H ?& ?R BLOCK")
+
+
+def rename_taxes_category(conn) -> int:
+    """'Taxes' became 'Income tax'; what wasn't income tax (courts, filings, licences) became
+    'Government & legal'. Keeps each rule's source, so your own choices stay yours. Returns rules changed."""
+    _ensure(conn)
+    old = conn.execute("SELECT merchant FROM merchant_rules WHERE category = 'Taxes'").fetchall()
+    for (m,) in old:
+        new = "Income tax" if _INCOME_TAX.search(m) else "Government & legal"
+        conn.execute("UPDATE merchant_rules SET category = ? WHERE merchant = ?", (new, m))
+    conn.execute("UPDATE transactions SET category = 'Income tax' WHERE category = 'Taxes'")
+    conn.commit()
+    return len(old)
 
 
 def upgrade_rule_keys(conn, descriptions) -> int:
