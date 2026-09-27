@@ -74,7 +74,10 @@ def test_401k_withdrawals_count_as_money_in_and_their_tax_as_money_out():
     assert late["out_401k"] == pytest.approx(late["tax_401k"] / 0.30, rel=0.02)          # gross vs its tax
     fig = charts.cash_flow_ahead(f, False, "light", events=[(2040, "A retires"), (2040, "A Medicare")])
     money_in = next(d for d in fig.data if d.name == "Money in")
-    assert list(money_in.y) == pytest.approx(list(f["income"] + f["out_401k"]))
+    costs = f["living"] + f["loans"] + f["health"] + f["college"] + f["tax_401k"] + f["cg_tax"]
+    used = (costs - f["income"]).clip(lower=0).clip(upper=f["out_401k"])
+    assert list(money_in.y) == pytest.approx(list(f["income"] + used))      # only what pays for spending + taxes
+    assert all(money_in.y[i] <= costs[i] + f["income"][i] + 1 for i in range(len(f)))
     labels = [a.text for a in fig.layout.annotations]
     assert labels == ["A retires · A Medicare"]                                            # one label per year
     assert fig.layout.legend.y < 0                                                         # legend below the chart
@@ -96,3 +99,12 @@ def test_college_is_paid_and_kids_costs_end():
     assert f.loc[8, "college"] == pytest.approx(2 * 80_000)                  # both in college (no inflation here)
     assert f.loc[12, "college"] == 0                                         # graduated
     assert f.loc[7, "living"] - f.loc[9, "living"] == pytest.approx(12 * 2_000)   # their day-to-day costs ended
+
+
+def test_reinvested_401k_money_has_no_gain_to_tax():
+    """Regression: capital-gains tax kept being charged after required 401(k) withdrawals began, though the
+    reinvested withdrawal money had no gain in it - every sale was taxed as 70% gain."""
+    fc = _run(years=40, pretax_balance=900_000, capital_gains_rate=0.33, gain_share=0.7)
+    f = fc.cash_flow.set_index("period")
+    rmd = f[f["out_401k"] > 0]
+    assert len(rmd) > 5 and rmd["cg_tax"].iloc[-1] < 0.7 * rmd["cg_tax"].iloc[0]   # new money dilutes the gain

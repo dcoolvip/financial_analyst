@@ -73,7 +73,8 @@ class Assumptions:
     college_start_age: int = 18
     college_extra_growth: float = 0.02        # college costs grow this much faster than inflation
     capital_gains_rate: float = 0.33          # on the gain when shares are sold: ~20% federal + 3.8% NIIT + CA
-    gain_share: float = 0.70                  # how much of a sale is gain (RSU / ESPP / old shares: low basis)
+    gain_share: float = 0.70                  # how much of TODAY's holdings is gain (RSU / ESPP / old shares);
+                                              # money added later comes in at its cost, so only its growth is gain
     simulations: int = 1000
     seed: int = 7
 
@@ -221,6 +222,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     cash = np.full(sims, cash0, dtype=float)
     stk = np.full(sims, share * inv0, dtype=float)            # the one company's shares
     inv = np.full(sims, inv0 - share * inv0, dtype=float)     # everything else invested
+    # what the taxable holdings cost (for capital-gains tax); set once the 401(k) part is split off below
     loan_bal = np.array([l.balance for l in loans], dtype=float)
     loan_rate = np.array([l.apr / 12 for l in loans], dtype=float)
     loan_pay = np.array([l.payment for l in loans], dtype=float)
@@ -236,6 +238,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         inv = inv - pre                        # taxable investments; pre-tax 401(k) kept apart
     else:
         pre = np.zeros(sims)
+    inv_basis = inv * (1 - a.gain_share)
+    stk_basis = stk * (1 - a.gain_share)
     # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
     # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending),
     # capital-gains tax on shares sold to cover spending, college
@@ -294,17 +298,22 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             save = income - living - paid - health - college
             # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
             pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
-            inv += sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
+            roth_in = sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
+            inv += roth_in
+            inv_basis += roth_in
             new_stock = sum(p.get("stock_yearly", 0) for p, w in zip(people, working) if w) / 12   # RSU/ESPP shares
-            if share:
+            if share:                           # at the vest / purchase price: no gain yet
                 stk += new_stock
+                stk_basis += new_stock
             else:
                 inv += new_stock
+                inv_basis += new_stock
             oldest = max(ages)
             if (m - 1) % 12 == 0 and oldest >= a.rmd_age and (d := ret.rmd_divisor(oldest)):
                 out = pre / d                      # required yearly withdrawal, taxed, rest reinvested
                 pre -= out
                 inv += out * (1 - a.pretax_tax_rate)
+                inv_basis += out * (1 - a.pretax_tax_rate)             # reinvested at cost: no gain yet
                 tax_401k += float((out * a.pretax_tax_rate).mean())
                 out_401k += float(out.mean())
             flow[m - 1, :7] = [income, living, paid, health, pay, ss, other]
@@ -322,15 +331,18 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         cash = cash * (1 + cash_r)
         if save >= 0:
             inv += save * a.invest_share
+            inv_basis += save * a.invest_share
             cash += save * (1 - a.invest_share)
         else:
             cash += save
             need = np.maximum(-cash, 0)          # cash first; then sell shares, paying capital-gains tax:
             cash = np.maximum(cash, 0)
-            keep = 1 - a.capital_gains_rate * a.gain_share      # of each $1 sold, what's left after the tax
-            for bucket in ("inv", "stk"):        # other investments, then the one company's shares
-                held = inv if bucket == "inv" else stk
+            for held, basis in ((inv, inv_basis), (stk, stk_basis)):   # other investments, then the one company
+                safe = np.maximum(held, 1e-9)
+                gain = np.clip(1 - basis / safe, 0, 1)                # share of this holding that is gain
+                keep = 1 - a.capital_gains_rate * gain                 # of each $1 sold, what's left after tax
                 sell = np.minimum(np.maximum(held, 0), need / keep)
+                basis -= basis * np.where(held > 0, sell / safe, 0)    # the cost of what was sold leaves too
                 held -= sell
                 need = need - sell * keep
                 cg_tax += float((sell * (1 - keep)).mean())

@@ -274,8 +274,13 @@ def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = Fal
         if values.abs().sum() > 0:
             fig.add_trace(go.Bar(x=cf["year"], y=values, name=label, marker=dict(color=color),
                                  hovertemplate=f"{label} $%{{y:,.0f}}<extra></extra>"))
-    money_in = col("income") + col("out_401k")
-    parts = pd.concat([pd.Series(span, index=cf.index), col("pay"), col("ss"), col("other"), col("out_401k")], axis=1).values
+    # a required 401(k) withdrawal is money in only as far as it pays for spending and taxes; the rest just moves
+    # into regular investments ("reinvested") - counting all of it made income look like it skyrocketed
+    costs = col("living") + col("loans") + col("health") + col("college") + taxes
+    used = (costs - col("income")).clip(lower=0).clip(upper=col("out_401k"))
+    money_in = col("income") + used
+    parts = pd.concat([pd.Series(span, index=cf.index), col("pay"), col("ss"), col("other"), used,
+                       col("out_401k") - used], axis=1).values
     has_parts = col("pay").abs().sum() + col("ss").abs().sum() > 0
     fig.add_trace(go.Scatter(x=cf["year"], y=money_in, name="Money in", mode="lines+markers",
                              line=dict(color=c["s1"], width=2), marker=dict(size=6 if len(cf) > 20 else 8),
@@ -283,7 +288,8 @@ def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = Fal
                              hovertemplate="<b>%{customdata[0]}</b><br>Money in $%{y:,.0f}"
                                            + ("<br>  pay $%{customdata[1]:,.0f} · Social Security $%{customdata[2]:,.0f}"
                                               "<br>  rent & dividends $%{customdata[3]:,.0f} · 401(k) withdrawals "
-                                              "$%{customdata[4]:,.0f}" if has_parts else "")
+                                              "used $%{customdata[4]:,.0f}<br>  (401(k) withdrawals reinvested: "
+                                              "$%{customdata[5]:,.0f})" if has_parts else "")
                                            + "<extra></extra>"))
     by_year: dict = {}
     for year, label in events or []:
