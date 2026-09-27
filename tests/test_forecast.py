@@ -46,3 +46,28 @@ def test_transfers_are_not_spending():
     })
     cf = insights.monthly_cash_flow(t)
     assert cf["money_in"].iloc[0] == 5000 and cf["money_out"].iloc[0] == 200
+
+
+def test_each_valuable_grows_at_its_own_rate():
+    accts = pd.DataFrame([
+        {"id": 1, "name": "House", "type": "property", "balance": 1_000_000, "rate": None, "payment": None},
+        {"id": 2, "name": "Car", "type": "vehicle", "balance": 40_000, "rate": None, "payment": None},
+        {"id": 3, "name": "Gold", "type": "precious_metal", "balance": 10_000, "rate": None, "payment": None},
+        {"id": 4, "name": "Pokemon cards", "type": "collectible", "balance": 40_000, "rate": 0.10, "payment": None},
+    ])
+    a = forecast.Assumptions(years=1, investment_volatility=0.0, home_appreciation=0.035, vehicle_depreciation=0.15)
+    fc = forecast.run(accts, a)
+    v = fc.valuables.set_index("name")
+    assert v.loc["House", "end"] == pytest.approx(1_035_000, rel=1e-3)          # Home slider
+    assert v.loc["Car", "end"] == pytest.approx(34_000, rel=1e-3)               # -15%/yr
+    assert v.loc["Gold", "end"] == pytest.approx(10_400, rel=1e-3)             # precious-metal default +4%
+    assert v.loc["Pokemon cards", "end"] == pytest.approx(44_000, rel=1e-3)    # your own +10% wins
+    assert v.loc["Pokemon cards", "source"] == "yours" and v.loc["Gold", "source"] == "default"
+    assert fc.expected["property"].iloc[-1] == pytest.approx(v["end"].sum())
+
+
+def test_asset_trend_from_its_own_history():
+    from finance.assets import trend
+    h = pd.DataFrame({"date": pd.to_datetime(["2025-07-04", "2026-07-04"]), "balance": [16_000.0, 20_000.0]})
+    assert trend(h) == pytest.approx(0.25, rel=1e-2)
+    assert trend(h.iloc[:1]) is None                                             # one point isn't a trend

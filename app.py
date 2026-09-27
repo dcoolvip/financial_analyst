@@ -6,6 +6,7 @@ import os
 import re
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -17,7 +18,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import categorize, charts, checkpoints, db, demo, editing, forecast, importers, insights, paths, portfolio
+from finance import assets, categorize, charts, checkpoints, db, demo, editing, pokemon, forecast, importers, insights, paths, portfolio
 
 
 @st.cache_resource
@@ -32,7 +33,7 @@ def _reload_changed_modules() -> None:
     order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.apple_card, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio, editing, checkpoints]
+             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -384,6 +385,30 @@ with tab_future:
                      ("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
                      ("Debt left", money(exp[f"debt{sfx}"]))])
 
+            if len(fc.valuables):
+                st.markdown("#### Property & valuables")
+                v = fc.valuables
+                hist_all = db.balance_history(conn)
+                trend_of = {r.id: assets.trend(hist_all[hist_all["account_id"] == r.id]) for r in v.itertuples()}
+                shown = pd.DataFrame({
+                    "Asset": v["name"], "Today": v["value"], "Growth / yr": v["rate"] * 100,
+                    "Based on": ["your rate" if s_ == "yours" else f"default for {TYPE_LABELS[t].lower()}"
+                                 for s_, t in zip(v["source"], v["type"])],
+                    "Past trend": [f"{trend_of[i]:+.1%}/yr" if trend_of[i] is not None else "" for i in v["id"]],
+                    f"In {a.years} years": v["end_real"] if real else v["end"]})
+                st.dataframe(shown, hide_index=True, width="stretch", column_config={
+                    "Today": st.column_config.NumberColumn(format="$%,.0f"),
+                    "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
+                    f"In {a.years} years": st.column_config.NumberColumn(
+                        format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
+                st.caption("Change an asset's growth in **Accounts → Rate / growth %**. Past trend is shown for "
+                           "reference - a hot year for one asset rarely repeats for a decade.")
+                pick = st.selectbox("See an asset's history and outlook", list(v["name"]), key="asset_outlook")
+                aid = int(v.loc[v["name"] == pick, "id"].iloc[0])
+                deflate = (1 + a.inflation) ** (np.arange(len(fc.valuable_paths)) / 12) if real else 1
+                plot(charts.asset_outlook(hist_all[hist_all["account_id"] == aid], fc.valuable_paths[pick] / deflate,
+                                          mode, compact=PHONE))
+
             st.markdown("#### Milestones")
             if fc.milestones:
                 for when, what in fc.milestones:
@@ -524,9 +549,17 @@ with tab_accounts:
             new_balance=None,
         ).sort_values(["is_liability", "Group", "name"]).reset_index(drop=True)
         has_debt = bool(table["is_liability"].any())
+        is_valuable = table["type"].isin(db.VALUABLE_TYPES)
+        history = db.balance_history(conn)
+        table["trend"] = [
+            (f"{t:+.1%}/yr" if (t := assets.trend(history[history["account_id"] == i])) is not None else "")
+            if v else "" for i, v in zip(table["id"], is_valuable)]
+        has_terms = has_debt or bool(is_valuable.any())
         table["new_balance"] = table["new_balance"].astype("float64")
         cols = (["name", "shown_balance", "new_balance", "Updated"] if PHONE else
-                ["name", "Group", "Type", "shown_balance", "new_balance"] + (["rate_pct", "payment"] if has_debt else [])
+                ["name", "Group", "Type", "shown_balance", "new_balance"]
+                + (["rate_pct"] if has_terms else []) + (["payment"] if has_debt else [])
+                + (["trend"] if table["trend"].astype(bool).any() else [])
                 + ["Updated"] + (["status"] if table["status"].any() else []))
         ver = st.session_state.get("acct_table_ver", 0)
         good, bad = ("#0ca30c", "#e66767") if mode == "dark" else ("#006300", "#d03b3b")
@@ -549,8 +582,12 @@ with tab_accounts:
                     help="Type today's balance as your bank shows it (cards and loans: what you owe; "
                          "a card in credit: negative). Saved as of today."),
                 "status": st.column_config.TextColumn(""),
-                "rate_pct": st.column_config.NumberColumn("Rate % ✏️", format="%.3f", min_value=0, max_value=40,
-                                                          help="Interest rate, for loans and cards"),
+                "rate_pct": st.column_config.NumberColumn(
+                    "Rate / growth % ✏️", format="%.2f", min_value=-100, max_value=100,
+                    help="Loans and cards: interest rate. Homes, cars, collectibles, gold: expected yearly change "
+                         "(+ appreciates, − depreciates). Blank = a sensible default for the type."),
+                "trend": st.column_config.TextColumn("Past trend", help="How this asset's own value changed per "
+                                                                         "year, from its history"),
                 "payment": st.column_config.NumberColumn("Payment ✏️", format="$%,.2f", min_value=0,
                                                          help="Monthly principal + interest, for loans"),
                 "Updated": st.column_config.DateColumn(format="MMM D" if PHONE else "MMM D, YYYY")})
@@ -559,6 +596,11 @@ with tab_accounts:
                    + ("" if PHONE else " Rate and payment apply to loans and cards."))
 
         edits = editing.account_edits(table, edited, LABEL_TO_TYPE, terms="rate_pct" in cols)
+        for aid in list(edits):                            # payment only means something for debts
+            if "payment" in edits[aid] and not table.loc[table["id"] == aid, "is_liability"].iloc[0]:
+                edits[aid].pop("payment")
+                if not edits[aid]:
+                    edits.pop(aid)
         new_balances = editing.balance_edits(table, edited)
         by_id = table.set_index("id")
         for aid, value in new_balances.items():
@@ -582,6 +624,26 @@ with tab_accounts:
                 st.session_state["flash"] = f"Couldn't save: {e}"
             st.session_state["acct_table_ver"] = ver + 1      # fresh editor showing the saved values
             st.rerun()
+
+    if pokemon.available():
+        with st.expander("🃏 Pokemon collection (from your Pokemon dashboard)"):
+            st.caption("Values your owned cards at their latest raw prices, with month-end history from the "
+                       "dashboard's price snapshots. Your Pokemon database is only read, never changed.")
+            if (g := db.get_setting(conn, "pokemon_price_growth")) is not None:
+                st.caption(f"Cards you've held since the first snapshot changed **{g:+.0%}/yr** in price. "
+                           "That's the past, not a forecast - the Future tab uses the rate in the table "
+                           f"(default {assets.DEFAULT_GROWTH['collectible']:+.0%}/yr for collectibles).")
+            if st.button("Refresh from Pokemon dashboard"):
+                with st.spinner("Reading your Pokemon dashboard (about 30 seconds)…"):
+                    try:
+                        r = pokemon.sync(conn)
+                        db.set_setting(conn, "pokemon_price_growth", r["growth"])
+                        st.session_state["flash"] = (f"Pokemon collection: {money(r['value'])} "
+                                                     f"({r['cards']:,} cards, {r['points']} month-end values)")
+                        st.session_state["acct_table_ver"] = st.session_state.get("acct_table_ver", 0) + 1
+                    except Exception as e:  # noqa: BLE001
+                        st.session_state["flash"] = f"Couldn't read the Pokemon dashboard: {e}"
+                st.rerun()
 
     names = dict(zip(accts["name"], accts["id"]))
     c1, c2 = st.columns(2, gap="large")

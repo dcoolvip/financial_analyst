@@ -92,6 +92,21 @@ def breakdown_bars(items: dict[str, float], mode: str, debt: bool = False, compa
     return fig
 
 
+def asset_outlook(history: pd.DataFrame, projection: pd.Series, mode: str, compact: bool = False) -> go.Figure:
+    """One asset: its recorded values (solid) and where its growth rate takes it (dashed)."""
+    c = PALETTE[mode]
+    fig = go.Figure()
+    if len(history):
+        fig.add_trace(go.Scatter(x=history["date"], y=history["balance"], mode="lines+markers", name="Recorded",
+                                 line=dict(color=c["ink2"], width=2), marker=dict(size=5),
+                                 hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>"))
+    fig.add_trace(go.Scatter(x=projection.index, y=projection.values, mode="lines", name="Outlook",
+                             line=dict(color=c["s1"], width=2, dash="dash"),
+                             hovertemplate="<b>%{x|%b %Y}</b><br>$%{y:,.0f}<extra></extra>"))
+    fig.update_layout(hovermode="x")
+    return _layout(fig, c, height=300, legend=True, compact=compact)
+
+
 def forecast_fan(history: pd.DataFrame, bands: pd.DataFrame, real: bool, mode: str,
                  compact: bool = False) -> go.Figure:
     c = PALETTE[mode]

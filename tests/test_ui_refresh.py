@@ -388,3 +388,29 @@ def test_csv_from_a_new_bank_defaults_to_new_account(env):
     uploads["files"] = [Upload("activity.csv", (FIXTURES / "amex_activity.csv").read_bytes())]
     at.run()
     assert [s for s in at.selectbox if s.label == "Import into"][0].value == "➕ New account…"
+
+
+def test_valuables_in_accounts_and_future(env, monkeypatch):
+    monkeypatch.setenv("POKEMON_DB", "/nonexistent")                       # tests never read the real dashboard
+    conn, _ = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 10_000)
+    house = db.add_account(conn, "House", "Manual", "property")
+    gold = db.add_account(conn, "Gold coins", "Manual", "precious_metal")
+    cards = db.add_account(conn, "Pokemon collection", "Pokemon dashboard", "collectible")
+    db.upsert_balance(conn, house, "2026-09-01", 1_000_000)
+    db.upsert_balance(conn, gold, "2026-09-01", 10_000)
+    db.upsert_balance(conn, cards, "2025-07-31", 16_000)
+    db.upsert_balance(conn, cards, "2026-07-31", 20_000)
+    at = app()
+    accounts = table_with(at, "shown_balance")
+    assert accounts.set_index("name").loc["Pokemon collection", "trend"] == "+25.0%/yr"    # its own history
+    assert any("Property & valuables" == g for g in accounts["Group"])
+    future = table_with(at, "Growth / yr").set_index("Asset")
+    assert future.loc["Gold coins", "Growth / yr"] == pytest.approx(4.0)                    # default for gold
+    assert future.loc["Pokemon collection", "Based on"].startswith("default")
+    db.apply_account_edits(conn, {cards: {"rate": 0.10}})                                  # set your own rate
+    at.run()
+    future = table_with(at, "Growth / yr").set_index("Asset")
+    assert future.loc["Pokemon collection", "Growth / yr"] == pytest.approx(10.0)
+    assert future.loc["Pokemon collection", "Based on"] == "your rate"
+    assert any(s.label == "See an asset's history and outlook" for s in at.selectbox)

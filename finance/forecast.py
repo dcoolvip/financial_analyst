@@ -70,6 +70,8 @@ class Forecast:
     loans: list[Loan]
     milestones: list[tuple[pd.Timestamp, str]] = field(default_factory=list)
     start_net_worth: float = 0.0
+    valuables: pd.DataFrame = field(default_factory=pd.DataFrame)   # per asset: name, type, value, rate, source, end
+    valuable_paths: pd.DataFrame = field(default_factory=pd.DataFrame)  # date x asset name, expected path
 
 
 def payment_for(balance: float, apr: float, years: float) -> float:
@@ -101,22 +103,38 @@ def build_loans(accts: pd.DataFrame) -> tuple[list[Loan], float]:
     return loans, revolving
 
 
+def valuables_table(accts: pd.DataFrame, a: Assumptions) -> pd.DataFrame:
+    """Each home, car, collectible, gold... with the yearly growth rate the forecast uses for it.
+    Your own rate (Accounts table) wins; otherwise the Home/Car sliders or the type's default."""
+    from .assets import DEFAULT_GROWTH, growth_rate
+    from .db import VALUABLE_TYPES
+    rows = []
+    for r in accts[accts["type"].isin(VALUABLE_TYPES)].itertuples():
+        rate, source = growth_rate(r.type, r.rate)
+        if source == "default" and r.type == "property":
+            rate = a.home_appreciation
+        elif source == "default" and r.type == "vehicle":
+            rate = -a.vehicle_depreciation
+        rows.append({"id": r.id, "name": r.name, "type": r.type, "value": float(r.balance or 0.0),
+                     "rate": rate, "source": source})
+    return pd.DataFrame(rows, columns=["id", "name", "type", "value", "rate", "source"])
+
+
 def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
     months = a.years * 12
     bal = accts.assign(balance=accts["balance"].fillna(0.0))
     by_type = bal.groupby("type")["balance"].sum()
     cash0 = by_type.reindex(["checking", "savings"]).fillna(0).sum()
     inv0 = by_type.reindex(["brokerage", "retirement"]).fillna(0).sum()
-    home0 = by_type.reindex(["property", "other_asset"]).fillna(0).sum()
-    car0 = by_type.reindex(["vehicle"]).fillna(0).sum()
+    vt = valuables_table(bal, a)                 # every valuable grows at its own rate
+    val = vt["value"].to_numpy(dtype=float)
+    val_r = ((1 + vt["rate"].to_numpy(dtype=float)) ** (1 / 12) - 1) if len(vt) else np.zeros(0)
     loans, revolving = build_loans(bal)
 
     rng = np.random.default_rng(a.seed)
     mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
     growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
     cash_r = (1 + a.cash_yield) ** (1 / 12) - 1
-    home_r = (1 + a.home_appreciation) ** (1 / 12) - 1
-    car_r = (1 - a.vehicle_depreciation) ** (1 / 12) - 1
 
     cash = np.full(sims, cash0, dtype=float)
     inv = np.full(sims, inv0, dtype=float)
@@ -126,11 +144,12 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
     payoff: dict[str, int] = {}
 
     nw = np.empty((sims, months + 1))
-    parts = np.empty((months + 1, 4))  # cash, investments, property, debt (sim 0 / mean)
-    home, car = home0, car0
+    parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
+    paths = np.empty((months + 1, len(val)))
+    paths[0] = val
     debt = loan_bal.sum() + revolving
-    nw[:, 0] = cash + inv + home + car - debt
-    parts[0] = [cash.mean(), inv.mean(), home + car, debt]
+    nw[:, 0] = cash + inv + val.sum() - debt
+    parts[0] = [cash.mean(), inv.mean(), val.sum(), debt]
 
     for m in range(1, months + 1):
         # loans: accrue interest, pay, and free up the payment once cleared
@@ -151,25 +170,25 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
             short = np.minimum(cash, 0)          # overdraw cash first, then investments
             cash -= short
             inv += short
-        home *= 1 + home_r
-        car *= 1 + car_r
+        val = val * (1 + val_r)
+        paths[m] = val
         debt = loan_bal.sum() + revolving
-        nw[:, m] = cash + inv + home + car - debt
-        parts[m] = [cash.mean(), inv.mean(), home + car, debt]
-    return nw, parts, loans, payoff
+        nw[:, m] = cash + inv + val.sum() - debt
+        parts[m] = [cash.mean(), inv.mean(), val.sum(), debt]
+    return nw, parts, loans, payoff, vt, paths
 
 
 def run(accts: pd.DataFrame, a: Assumptions) -> Forecast:
     dates = pd.date_range(pd.Timestamp.today().normalize(), periods=a.years * 12 + 1, freq="MS")
     deflator = (1 + a.inflation) ** (np.arange(len(dates)) / 12)
 
-    nw, _, loans, _ = _simulate(accts, a, a.simulations, a.investment_volatility)
+    nw, _, loans, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility)
     p10, p50, p90 = np.percentile(nw, [10, 50, 90], axis=0)
     bands = pd.DataFrame({"date": dates, "p10": p10, "p50": p50, "p90": p90})
     for c in ("p10", "p50", "p90"):
         bands[f"{c}_real"] = bands[c] / deflator
 
-    _, parts, _, payoff = _simulate(accts, a, 1, 0.0)   # expected-return path for the breakdown
+    _, parts, _, payoff, vt, paths = _simulate(accts, a, 1, 0.0)   # expected-return path for the breakdown
     expected = pd.DataFrame(parts, columns=["cash", "investments", "property", "debt"])
     expected.insert(0, "date", dates)
     expected["net_worth"] = expected[["cash", "investments", "property"]].sum(axis=1) - expected["debt"]
@@ -187,4 +206,6 @@ def run(accts: pd.DataFrame, a: Assumptions) -> Forecast:
                 milestones.append((dates[hit[0]], f"Net worth reaches ${target / 1e6:g}M in today's dollars"
                                    if target >= 1e6 else f"Net worth reaches ${target / 1e3:g}K in today's dollars"))
     milestones.sort(key=lambda x: x[0])
-    return Forecast(bands, expected, loans, milestones, start)
+    vt = vt.assign(end=paths[-1] if len(vt) else [], end_real=(paths[-1] / deflator[-1]) if len(vt) else [])
+    valuable_paths = pd.DataFrame(paths, columns=list(vt["name"]), index=dates)
+    return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths)
