@@ -51,6 +51,17 @@ class Assumptions:
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
+    # Retirement (see retirement.py). people: [{name, born 'YYYY-MM', retire_age, pay (monthly take-home),
+    # ss_monthly (today's $, at 67), ss_claim_age, k401_yearly (pre-tax in), roth_yearly, stock_yearly (RSU/ESPP
+    # net)}]. With people, income = each person's pay until they retire + other_income + Social Security.
+    people: list = field(default_factory=list)
+    other_income: float | None = None     # monthly: rent, interest, dividends - continues after retiring
+    pretax_balance: float = 0.0           # part of investments that is pre-tax 401(k)/IRA money
+    private_health_yearly: float = 15_000.0   # per person, retired before 65 with nobody working (today's $)
+    medicare_yearly: float = 12_000.0         # per person from 65: Parts B + D, supplement, IRMAA (today's $)
+    health_extra_growth: float = 0.02         # healthcare costs grow this much faster than inflation
+    pretax_tax_rate: float = 0.30             # tax on pre-tax 401(k) money when it comes out
+    rmd_age: int = 75                         # required withdrawals start (born 1960 or later)
     simulations: int = 1000
     seed: int = 7
 
@@ -169,14 +180,25 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     payoff: dict[str, int] = {}
 
     split = a.monthly_income is not None and a.monthly_living is not None
-    flow = np.zeros((months, 3))             # per month: income, living costs, loan payments (nominal)
+    people = [p for p in (a.people or []) if p.get("born")] if split else []
+    if people:
+        from . import retirement as ret
+        now = pd.Timestamp.today().normalize()
+        ages0 = [ret.age_on(p["born"], now) for p in people]
+        pre = np.full(sims, min(float(a.pretax_balance or 0), inv0), dtype=float)
+        inv = inv - pre                        # taxable investments; pre-tax 401(k) kept apart
+    else:
+        pre = np.zeros(sims)
+    # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
+    # tax on 401(k) withdrawals
+    flow = np.zeros((months, 8))
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
     paths = np.empty((months + 1, val.shape[1]))
     paths[0] = val.mean(axis=0)
     debt = loan_bal.sum() + revolving
-    nw[:, 0] = cash + inv + val.sum(axis=1) - debt
-    parts[0] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
+    nw[:, 0] = cash + inv + pre + val.sum(axis=1) - debt
+    parts[0] = [cash.mean(), (inv + pre).mean(), val.sum(axis=1).mean(), debt]
 
     changes = {}
     names = [l.name for l in loans]
@@ -199,28 +221,65 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             payoff[loans[i].name] = m
         freed = loan_pay[~active].sum()          # loans already cleared before this month
 
-        if split:
+        tax_401k = 0.0
+        if people:
+            years = (m - 1) / 12
+            price = (1 + a.inflation) ** years
+            ages = [a0 + years for a0 in ages0]
+            working = [age < p.get("retire_age", 65) for age, p in zip(ages, people)]
+            raise_ = (1 + a.income_growth) ** ((m - 1) // 12)
+            pay = sum(p.get("pay", 0) for p, w in zip(people, working) if w) * raise_
+            other = (a.other_income or 0) * price
+            ss = sum(ret.social_security(p) * price for p, age in zip(people, ages) if age >= p.get("ss_claim_age", 67))
+            hprice = (1 + a.inflation + a.health_extra_growth) ** years
+            health = sum(ret.health_cost(age, w, any(w2 for j, w2 in enumerate(working) if j != i),
+                                         a.private_health_yearly, a.medicare_yearly)
+                         for i, (age, w) in enumerate(zip(ages, working))) / 12 * hprice
+            living = a.monthly_living * price
+            income = pay + other + ss
+            save = income - living - paid - health
+            # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
+            pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
+            inv += sum(p.get("roth_yearly", 0) + p.get("stock_yearly", 0) for p, w in zip(people, working) if w) / 12
+            oldest = max(ages)
+            if (m - 1) % 12 == 0 and oldest >= a.rmd_age and (d := ret.rmd_divisor(oldest)):
+                out = pre / d                      # required yearly withdrawal, taxed, rest reinvested
+                pre -= out
+                inv += out * (1 - a.pretax_tax_rate)
+                tax_401k += float((out * a.pretax_tax_rate).mean())
+            flow[m - 1] = [income, living, paid, health, pay, ss, other, 0.0]
+        elif split:
             income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
             living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
-            flow[m - 1] = [income, living, paid]
+            flow[m - 1, :3] = [income, living, paid]
             save = income - living - paid
         else:
             save = a.monthly_savings * (1 + a.savings_growth) ** ((m - 1) // 12) + freed
         inv = inv * growth[:, m - 1]
+        pre = pre * growth[:, m - 1]
         cash = cash * (1 + cash_r)
         if save >= 0:
             inv += save * a.invest_share
             cash += save * (1 - a.invest_share)
         else:
             cash += save
-            short = np.minimum(cash, 0)          # overdraw cash first, then investments
+            short = np.minimum(cash, 0)          # overdraw cash first, then taxable investments,
             cash -= short
             inv += short
+            if people:                           # then pre-tax 401(k): taxed (and +10% before 59.5)
+                need = np.maximum(-inv, 0)
+                inv = np.maximum(inv, 0)
+                rate = a.pretax_tax_rate + (0.10 if max(ages) < ret.PENALTY_FREE_AGE else 0)
+                gross = need / (1 - rate)
+                pre -= gross
+                tax_401k += float((gross - need).mean())
+        if people:
+            flow[m - 1, 7] = tax_401k
         val = val * v_growth[:, m - 1, :]
         paths[m] = val.mean(axis=0)
         debt = loan_bal.sum() + revolving
-        nw[:, m] = cash + inv + val.sum(axis=1) - debt
-        parts[m] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
+        nw[:, m] = cash + inv + pre + val.sum(axis=1) - debt
+        parts[m] = [cash.mean(), (inv + pre).mean(), val.sum(axis=1).mean(), debt]
     return nw, parts, loans, payoff, vt, paths, (flow if split else None)
 
 
@@ -259,16 +318,18 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     valuable_paths = pd.DataFrame(paths, columns=list(vt["name"]), index=dates)
     cash_flow = pd.DataFrame()
     if flow is not None:                                  # per year, nominal and in today's dollars
-        f = pd.DataFrame(flow, columns=["income", "living", "loans"])
+        f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k"])
         f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
         f["deflator"] = deflator[1:]
         f["month"] = dates[1:]
         cash_flow = f.groupby("period").agg(income=("income", "sum"), living=("living", "sum"),
-                                            loans=("loans", "sum"), deflator=("deflator", "mean"),
+                                            loans=("loans", "sum"), health=("health", "sum"), pay=("pay", "sum"),
+                                            ss=("ss", "sum"), other=("other", "sum"), tax_401k=("tax_401k", "sum"),
+                                            deflator=("deflator", "mean"),
                                             months=("income", "size"), first=("month", "min"), last=("month", "max"))
         cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
-        cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"]
-        for c in ("income", "living", "loans", "saved"):
+        cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
+        for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
     return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)

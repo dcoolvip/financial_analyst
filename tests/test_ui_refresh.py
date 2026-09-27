@@ -604,3 +604,35 @@ def test_401k_statement_imports_as_a_retirement_account(env):
     acct = int(new["id"].iloc[0])
     assert db.get_setting(conn, f"tax_sources:{acct}")["roth"] == 5_000
     assert len(db.latest_holdings(conn)) == 2
+
+
+def test_future_retirement_controls_from_household_settings(env):
+    """With a household saved in the database: a retirement and Social Security slider per person, pay per
+    person from their paychecks, and the retirement events on the chart. (Made-up people.)"""
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for m in range(13, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=3)).date()
+        db.upsert_balance(conn, chk, d, 200_000)
+        rows += [(d, "ACME DES:PAYROLL ID:111 INDN:A", 8_000.0, f"a{m}"), (d, "ACME DES:PAYROLL ID:222 INDN:B", 6_000.0, f"b{m}"),
+                 (d, "SAFEWAY", -5_000.0, f"s{m}")]
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    db.set_setting(conn, "household_people", [
+        {"name": "Alex", "born": f"{today.year - 50}-01", "retire_age": 65, "pay": [{"pattern": r"ACME.*ID:111"}],
+         "ss_monthly": 3_000, "ss_claim_age": 67},
+        {"name": "Blair", "born": f"{today.year - 45}-01", "retire_age": 65, "pay": [{"pattern": r"ACME.*ID:222"}],
+         "ss_table": {62: 1_400, 67: 2_000, 70: 2_480}, "ss_claim_age": 67}])
+    at = app()
+    assert not at.exception, [e.value for e in at.exception]
+    pays = {n.key: n.value for n in at.number_input if n.key and n.key.startswith("pay_")}
+    assert pays == {"pay_Alex": 8_000, "pay_Blair": 6_000}
+    assert {x.key for x in at.slider if x.key} >= {"retire_Alex", "retire_Blair", "claim_Alex", "claim_Blair"}
+    from finance import retirement
+    oldest = retirement.age_on(f"{today.year - 50}-01", today)
+    assert next(x.value for x in at.slider if x.label == "Years ahead") == round(90 - oldest)   # until the oldest is 90
+    assert any("SSA estimate" in c.value for c in at.caption)                             # Blair has SSA figures
+    at.slider(key="retire_Alex").set_value(55).run()
+    assert not at.exception
+    assert any("**Alex** retires" in c.value and "(at 55)" in c.value for c in at.caption)

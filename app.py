@@ -18,7 +18,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, portfolio
+from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, portfolio, retirement
 
 
 @st.cache_resource
@@ -449,6 +449,19 @@ with tab_future:
             saved.monthly_income = round(baseline["income"], -2)
             saved.monthly_living = round(baseline["living"], -2)
         split = saved.monthly_income is not None and saved.monthly_living is not None
+        # The household (names, birth months, whose paycheck is whose) lives in the database, never in the code
+        household = db.get_setting(conn, "household_people") or []
+        now_ts = pd.Timestamp.today().normalize()
+        pays, other_default = {}, 0.0
+        if household and baseline:
+            pays = retirement.pay_by_person(enriched_all, household, baseline["start"], now_ts.to_period("M").to_timestamp())
+            other_default = max(0.0, baseline["income"] - sum(pays.values()))
+        pretax_total = sum((db.get_setting(conn, f"tax_sources:{int(i)}") or {}).get(k, 0.0)
+                           for i in accts.loc[accts["type"] == "retirement", "id"]
+                           for k in ("pre_tax", "employer_match", "after_tax"))
+        if household and db.get_setting(conn, "assumptions") is None:     # through the oldest turning 90
+            saved.years = int(min(50, round(90 - max(retirement.age_on(p["born"], now_ts) for p in household))))
+        saved_people = {q.get("name"): q for q in (saved.people or [])}
 
         if PHONE:  # chart first, sliders tucked under it, details below
             chart_col, ctrl_col, detail_col = st.container(), st.expander("⚙️ Adjust assumptions"), st.container()
@@ -460,7 +473,7 @@ with tab_future:
                 if not PHONE:
                     st.markdown("**Your assumptions**")
                 a = forecast.Assumptions(
-                    years=st.slider("Years ahead", 5, 30, saved.years),
+                    years=st.slider("Years ahead", 5, 50, min(50, saved.years)),
                     inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.05, format="%.2f%%",
                                         help="Living costs rise at this rate every year; loan payments don't. "
                                              "Starts at the 30-year average of US consumer prices. "
@@ -475,7 +488,63 @@ with tab_future:
                                                      "real market years. "
                                                      + hist_line("stocks")) / 100,
                 )
-                if split:
+                if split and household:
+                    a.monthly_income = saved.monthly_income             # set from the people below
+                    avg = (f"Your average over the last {baseline['months']} months: " if baseline else "")
+                    a.monthly_living = st.number_input(
+                        "Living costs per month ($)", value=float(saved.monthly_living), step=500.0,
+                        help=avg + (money(baseline["living"]) if baseline else "") + ". Everything spent except loan "
+                             "payments (those come from each loan in Accounts) and healthcare after retiring, in "
+                             "today's prices.")
+                    a.income_growth = st.slider("Raises per year", 0.0, 8.0, saved.income_growth * 100, 0.25,
+                                                format="%.2f%%", help="0% keeps pay at today's level.") / 100
+                    with st.expander("👪 Retirement", expanded=not PHONE):
+                        people_now = []
+                        for person in household:
+                            sp = saved_people.get(person["name"], {})
+                            born = pd.Timestamp(f"{person['born']}-01")
+                            age_now = retirement.age_on(person["born"], now_ts)
+                            st.markdown(f"**{person['name']}** · {age_now:.0f} now")
+                            r1, r2 = st.columns(2) if not PHONE else (st.container(), st.container())
+                            ra = r1.slider("Retires at", 50, 75, int(sp.get("retire_age", person.get("retire_age", 65))),
+                                           key=f"retire_{person['name']}", help="Pay, 401(k) contributions and stock "
+                                           "vesting stop. Before 65 with nobody working: private insurance.")
+                            ca = r2.slider("Social Security at", 62, 70, int(sp.get("ss_claim_age", person.get("ss_claim_age", 67))),
+                                           key=f"claim_{person['name']}", help="Claiming later pays more each month: "
+                                           "about 70% of the full amount at 62, 100% at 67, 124% at 70.")
+                            pay = st.number_input("Take-home pay per month ($)", step=250.0, key=f"pay_{person['name']}",
+                                                  value=float(sp.get("pay", round(pays.get(person["name"], 0.0), -2))),
+                                                  help=f"{avg}{money(pays.get(person['name'], 0.0))}, from this "
+                                                       "person's paychecks (bonus included, averaged).")
+                            benefit = retirement.social_security(person, ca)
+                            st.caption(f"Social Security {money(benefit)}/month from {born.year + ca} (today's dollars, "
+                                       + ("SSA estimate" if person.get("ss_table") else "estimate - add the SSA statement")
+                                       + f"). While working: {money(person.get('k401_yearly', 0))}/yr into the 401(k), "
+                                       f"{money(person.get('stock_yearly', 0) + person.get('roth_yearly', 0))}/yr of stock "
+                                       "and Roth into investments.")
+                            people_now.append({**person, "retire_age": ra, "ss_claim_age": ca, "pay": pay})
+                        a.people = people_now
+                        a.other_income = st.number_input(
+                            "Rent, interest & dividends per month ($)", step=250.0,
+                            value=float(saved.other_income if saved.other_income is not None else round(other_default, -2)),
+                            help="Continues after retiring and grows with inflation.")
+                        a.monthly_income = sum(q["pay"] for q in people_now) + a.other_income
+                        a.pretax_balance = pretax_total
+                        a.private_health_yearly = st.number_input(
+                            "Private insurance before 65, per person per year ($)", step=500.0,
+                            value=float(saved.private_health_yearly), help="Only while retired before 65 with nobody "
+                            "working. Includes typical out-of-pocket costs.")
+                        a.medicare_yearly = st.number_input(
+                            "Medicare from 65, per person per year ($)", step=500.0, value=float(saved.medicare_yearly),
+                            help="Parts B and D, a supplement, and the high-income surcharge (IRMAA).")
+                        a.health_extra_growth = st.slider("Healthcare grows faster than inflation by", 0.0, 5.0,
+                                                          saved.health_extra_growth * 100, 0.25, format="%.2f%%",
+                                                          help="Historically about 2 points a year.") / 100
+                        a.pretax_tax_rate = st.slider("Tax on 401(k) withdrawals", 10, 50, int(saved.pretax_tax_rate * 100),
+                                                      1, format="%d%%", help=f"Pre-tax 401(k) money "
+                                                      f"({money(pretax_total)} today) is taxed when it comes out; "
+                                                      "required withdrawals start at 75.") / 100
+                elif split:
                     avg = (f"Your average over the last {baseline['months']} months: " if baseline else "")
                     a.monthly_income = st.number_input(
                         "Income per month ($)", value=float(saved.monthly_income), step=500.0,
@@ -626,14 +695,37 @@ with tab_future:
                             help="Each coming 12 months: living costs grow with inflation, loan payments stay fixed "
                                  "and stop when each loan is paid off, income grows with raises. What's left is "
                                  "saved (or, if negative, taken from cash, then investments).")
-                plot(charts.cash_flow_ahead(cfa, False, mode, compact=PHONE))   # future dollars: shows prices rising
+                events = []
+                for person in a.people or []:
+                    born = pd.Timestamp(f"{person['born']}-01")
+                    first = person["name"][0]
+                    events += [(born.year + person.get("retire_age", 65), f"{first} retires"),
+                               (born.year + person.get("ss_claim_age", 67), f"{first} Social Security"),
+                               (born.year + retirement.MEDICARE_AGE, f"{first} Medicare")]
+                events = [(y, l) for y, l in sorted(events) if cfa["year"].min() <= y <= cfa["year"].max()]
+                plot(charts.cash_flow_ahead(cfa, False, mode, compact=PHONE, events=events))   # future dollars
                 first, last = cfa.iloc[0], cfa.iloc[-1]
-                st.caption(
-                    f"In future dollars, next 12 months → {last['year']}: living costs {money(first['living'])} → "
-                    f"{money(last['living'])} a year ({a.inflation:.1%} inflation); income {money(first['income'])} → "
-                    f"{money(last['income'])} ({a.income_growth:.1%} raises); loan payments {money(first['loans'])} → "
-                    f"{money(last['loans'])} (fixed, and they stop as loans are paid off). Saved: "
-                    f"{money(first['saved'])} → {money(last['saved'])} a year.")
+                if a.people:
+                    order = sorted(a.people, key=lambda q: q["born"])
+                    st.caption(" · ".join(f"**{q['name']}** retires {pd.Timestamp(q['born'] + '-01').year + q['retire_age']} "
+                                          f"(at {q['retire_age']}), Social Security from "
+                                          f"{pd.Timestamp(q['born'] + '-01').year + q['ss_claim_age']}" for q in order)
+                               + f". Future dollars. Living costs grow with inflation ({a.inflation:.1%}), healthcare "
+                                 f"{a.inflation + a.health_extra_growth:.1%} a year; loan payments stay fixed.")
+                    retired = cfa[cfa["pay"] == 0]
+                    note = f"Next 12 months: {money(first['income'])} in, {money(first['living'] + first['loans'] + first['health'])} out."
+                    if len(retired):
+                        cover = (retired["income"] / retired[["living", "loans", "health", "tax_401k"]].sum(axis=1)).mean()
+                        note += (f" Once both of you are retired, money in (Social Security, rent, dividends) covers "
+                                 f"about {cover:.0%} of money out; the rest comes from savings and investments.")
+                    st.caption(note)
+                else:
+                    st.caption(
+                        f"In future dollars, next 12 months → {last['year']}: living costs {money(first['living'])} → "
+                        f"{money(last['living'])} a year ({a.inflation:.1%} inflation); income {money(first['income'])} → "
+                        f"{money(last['income'])} ({a.income_growth:.1%} raises); loan payments {money(first['loans'])} → "
+                        f"{money(last['loans'])} (fixed, and they stop as loans are paid off). Saved: "
+                        f"{money(first['saved'])} → {money(last['saved'])} a year.")
                 if baseline and fc.loans:
                     on_record = sum(l.payment for l in fc.loans)
                     if abs(on_record - baseline["loans_seen"]) > 0.1 * max(on_record, 1):

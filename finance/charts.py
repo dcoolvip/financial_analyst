@@ -218,24 +218,40 @@ def forecast_own_owe(history: pd.DataFrame, expected: pd.DataFrame, real: bool, 
     return _layout(fig, c, height=380, legend=True, compact=compact)
 
 
-def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = False) -> go.Figure:
-    """Each coming year: living costs and loan payments (stacked) against income. Living costs rise with
-    inflation, loan payments stay flat and drop away when a loan is paid off."""
+def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = False,
+                    events: list | None = None) -> go.Figure:
+    """Each coming year: living costs, loan payments, healthcare and tax on 401(k) withdrawals (stacked)
+    against income (pay + Social Security + rent/dividends). events: [(year, label)] marked on the chart -
+    retirements, Social Security, Medicare."""
     c = PALETTE[mode]
     sfx = "_real" if real else ""
     span = [f"{a:%b %Y} – {b:%b %Y}" for a, b in zip(cf["first"], cf["last"])]
+    col = lambda name: cf[f"{name}{sfx}"] if f"{name}{sfx}" in cf else pd.Series(0.0, index=cf.index)   # noqa: E731
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=cf["year"], y=cf[f"living{sfx}"], name="Living costs", marker=dict(color=c["s2"]),
-                         customdata=span, hovertemplate="Living costs $%{y:,.0f}<extra></extra>"))
-    fig.add_trace(go.Bar(x=cf["year"], y=cf[f"loans{sfx}"], name="Loan payments", marker=dict(color=c["muted"]),
-                         hovertemplate="Loan payments $%{y:,.0f}<extra></extra>"))
-    fig.add_trace(go.Scatter(x=cf["year"], y=cf[f"income{sfx}"], name="Income", mode="lines+markers",
-                             line=dict(color=c["s1"], width=2), marker=dict(size=8),
-                             customdata=span,
-                             hovertemplate="<b>%{customdata}</b><br>Income $%{y:,.0f}<extra></extra>"))
+    for name, label, color in (("living", "Living costs", c["s2"]), ("loans", "Loan payments", c["muted"]),
+                               ("health", "Healthcare", c["ink2"]), ("tax_401k", "Tax on 401(k) withdrawals", c["axis"])):
+        if col(name).abs().sum() > 0:
+            fig.add_trace(go.Bar(x=cf["year"], y=col(name), name=label, marker=dict(color=color),
+                                 hovertemplate=f"{label} $%{{y:,.0f}}<extra></extra>"))
+    parts = pd.concat([pd.Series(span, index=cf.index), col("pay"), col("ss"), col("other")], axis=1).values
+    has_parts = col("pay").abs().sum() + col("ss").abs().sum() > 0
+    fig.add_trace(go.Scatter(x=cf["year"], y=col("income"), name="Income", mode="lines+markers",
+                             line=dict(color=c["s1"], width=2), marker=dict(size=6 if len(cf) > 20 else 8),
+                             customdata=parts,
+                             hovertemplate="<b>%{customdata[0]}</b><br>Income $%{y:,.0f}"
+                                           + ("<br>  pay $%{customdata[1]:,.0f} · Social Security $%{customdata[2]:,.0f}"
+                                              " · rent & dividends $%{customdata[3]:,.0f}" if has_parts else "")
+                                           + "<extra></extra>"))
+    for i, (year, label) in enumerate(events or []):
+        fig.add_vline(x=year, line=dict(color=c["axis"], width=1, dash="dot"))
+        fig.add_annotation(x=year, y=1, yref="paper", yanchor="bottom", text=label, showarrow=False,
+                           font=dict(size=10, color=c["ink2"]), yshift=12 * (i % 3))
     fig.update_layout(barmode="stack", hovermode="x unified", bargap=0.3)
-    fig.update_xaxes(dtick=1, tickformat="d")
-    return _layout(fig, c, height=320, legend=True, compact=compact)
+    fig.update_xaxes(dtick=5 if len(cf) > 20 else 1, tickformat="d")
+    fig = _layout(fig, c, height=360, legend=True, compact=compact)
+    if events:
+        fig.update_layout(margin=dict(t=60 if not compact else 50))
+    return fig
 
 
 def change_bars(items: dict[str, float], mode: str, compact: bool = False) -> go.Figure:
