@@ -635,3 +635,27 @@ def test_future_retirement_controls_from_household_settings(env):
     at.slider(key="retire_Alex").set_value(55).run()
     assert not at.exception
     assert any("**Alex** retires" in c.value and "(at 55)" in c.value for c in at.caption)
+
+
+def test_future_summarizes_the_plan_under_money_in_and_out(env):
+    """The plan's key assumptions (planning age, kids' support, retirement, strategy) spelled out under the chart."""
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for m in range(13, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=3)).date()
+        db.upsert_balance(conn, chk, d, 500_000)
+        rows += [(d, "ACME DES:PAYROLL ID:111 INDN:A", 9_000.0, f"a{m}"), (d, "SAFEWAY", -5_000.0, f"s{m}")]
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    db.set_setting(conn, "household_people", [
+        {"name": "Alex", "born": f"{today.year - 50}-01", "retire_age": 65, "pay": [{"pattern": r"ACME.*ID:111"}],
+         "ss_monthly": 3_000, "ss_claim_age": 67},
+        {"name": "Blair", "born": f"{today.year - 45}-01", "retire_age": 65, "pay": [], "ss_monthly": 2_000, "ss_claim_age": 67}])
+    db.set_setting(conn, "household_kids", [{"name": "Kim", "born": f"{today.year - 8}-01"}])
+    at = app()
+    assert not at.exception, [e.value for e in at.exception]
+    summary = next(m.value for m in at.markdown if m.value.startswith("**What this plan assumes**"))
+    assert f"until Blair (the younger of you) is 95, in {today.year - 45 + 95}" in summary
+    assert "Kim:" in summary and "for the rest of the plan (worst case: no jobs)" in summary
+    assert "Alex:** retires at 65" in summary and "24% bracket" in summary

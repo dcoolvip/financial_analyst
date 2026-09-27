@@ -806,6 +806,40 @@ with tab_future:
                         note += (f" Once both of you are retired, money in (Social Security, rent, dividends) covers "
                                  f"about {cover:.0%} of money out; the rest comes from savings and investments.")
                     st.caption(note)
+                    order = sorted(a.people, key=lambda q: q["born"])
+                    young = order[-1]
+                    end_year = pd.Timestamp(f"{young['born']}-01").year + a.planning_age
+                    kids_line = ""
+                    if a.kids:
+                        names = " and ".join(k["name"] for k in a.kids)
+                        support = ("no support after college" if not a.kid_support_yearly else
+                                   f"then supported at {money(a.kid_support_yearly)} a year each "
+                                   + ("for the rest of the plan (worst case: no jobs)" if a.kid_support_until_age >= 100
+                                      else f"until age {a.kid_support_until_age}"))
+                        kids_line = (f"- **{names}:** college at {money(a.college_yearly)} a year each from 18 "
+                                     f"({a.college_years} years), {support}.\n")
+                    strategy = {"fill22": "converted to Roth up to the 22% bracket each retired year",
+                                "fill24": "converted to Roth up to the 24% bracket each retired year",
+                                "fill32": "converted to Roth up to the 32% bracket each retired year",
+                                "required": "only the required withdrawals, from 75"}.get(a.withdrawal_strategy, "")
+                    with st.container(border=True):
+                        st.markdown(
+                            "**What this plan assumes**\n"
+                            f"- **Lifespan:** planned until {young['name']} (the younger of you) is {a.planning_age}, in "
+                            f"{end_year}.\n"
+                            + "".join(f"- **{q['name']}:** retires at {q['retire_age']}, Social Security from "
+                                      f"{q['ss_claim_age']} ({money(retirement.social_security(q, q['ss_claim_age']))}/month "
+                                      "today's dollars).\n" for q in order)
+                            + kids_line
+                            + f"- **Healthcare:** employer plans while working, private until 65 if retired earlier, then "
+                              f"Medicare; grows {a.health_extra_growth:.0%} faster than inflation.\n"
+                            + f"- **401(k):** {strategy}; retired years taxed with real federal + California brackets.\n"
+                            + (f"- **Apple ({a.single_stock_share:.0%} of investments, kept as is):** "
+                               f"{history.SINGLE_STOCK_PATHS.get(a.single_stock_scenario, a.single_stock_scenario)}.\n"
+                               if a.single_stock_share else "")
+                            + f"- **Spending:** today's living costs ({money(a.monthly_living)}/month) rising with inflation "
+                              f"({a.inflation:.1%}); shortfalls come from cash, then investments (with capital-gains tax), "
+                              "then the 401(k), then Roth.")
                 else:
                     st.caption(
                         f"In future dollars, next 12 months → {last['year']}: living costs {money(first['living'])} → "
