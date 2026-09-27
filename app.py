@@ -121,7 +121,8 @@ def _dollars_as_text(fn, method: bool = False):
     def call(*args, **kwargs):
         args = list(args)
         i = 1 if method else 0                      # container.markdown(self, body, ...) vs st.markdown(body, ...)
-        if len(args) > i and isinstance(args[i], str):
+        raw_html = kwargs.get("unsafe_allow_html") and len(args) > i and str(args[i]).lstrip().startswith("<")
+        if len(args) > i and isinstance(args[i], str) and not raw_html:   # HTML blocks aren't read as math
             args[i] = _DOLLAR.sub(r"\\$", args[i])
         if isinstance(kwargs.get("body"), str):
             kwargs["body"] = _DOLLAR.sub(r"\\$", kwargs["body"])

@@ -513,7 +513,8 @@ def test_dollar_amounts_never_render_as_math(env):
     db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
     at = app()
     at.selectbox(key="acct_detail").set_value("Car loan").run()
-    texts = [e.value for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.warning)]
+    texts = [e.value for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.warning)
+             if not e.value.lstrip().startswith("<")]          # raw HTML blocks aren't parsed for math
     texts += [e.proto.help for e in list(at.markdown) if e.proto.help]
     bad = [t for t in texts if len(_re.findall(r"(?<!\\)\$", t)) >= 2]
     assert not bad, bad[:3]
