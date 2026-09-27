@@ -411,6 +411,12 @@ def insert_transactions(conn, account_id: int, txns: pd.DataFrame, source: str) 
     return added
 
 
+def set_transaction_category(conn, txn_id: int, category: str | None) -> None:
+    """A category for this one transaction only (e.g. a check) - it beats every rule."""
+    conn.execute("UPDATE transactions SET category = ? WHERE id = ?", (category, int(txn_id)))
+    conn.commit()
+
+
 def transaction_overlap(conn, account_ids: list[int], fingerprints: list[str]) -> dict[int, int]:
     """For each account, how many of these (file-level) fingerprints it already holds."""
     out = {}

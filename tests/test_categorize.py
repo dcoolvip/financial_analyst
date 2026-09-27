@@ -172,3 +172,22 @@ def test_bank_category_filled_in_by_reimport_without_duplicates(conn):
     assert db.transactions(conn)["bank_category"].isna().all()
     assert apply(conn, parsed, card, "activity.csv")["transactions_added"] == 0     # nothing doubled
     assert db.transactions(conn)["bank_category"].notna().any()                     # hints filled in
+
+
+def test_a_check_is_categorized_on_its_own(conn):
+    """Regression: one $2,730 check made 'Other' ~$900/month; categorizing it must not recategorize every check."""
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    db.insert_transactions(conn, chk, pd.DataFrame(
+        [("2026-08-04", "Check 220", -2730.0, "a"), ("2026-09-18", "Check 210", -50.0, "b")],
+        columns=["date", "description", "amount", "fingerprint"]), "x")
+    assert categorize.is_one_off(merchant_key("Check 220")) and not categorize.is_one_off("SAFEWAY")
+    t = db.transactions(conn)
+    db.set_transaction_category(conn, int(t.loc[t["description"] == "Check 220", "id"].iloc[0]), "Housing")
+    e = insights.enrich(db.transactions(conn), categorize.rules(conn)).set_index("description")
+    assert e.loc["Check 220", "category"] == "Housing" and e.loc["Check 210", "category"] == "Other"
+
+
+def test_store_name_glued_to_its_number_is_kept():
+    assert merchant_key("BP#9563966TTA# 39") == "BP 39"
+    assert merchant_key("Arco#82967senter Stqps") == "ARCO STQPS"
+    assert merchant_key("99 RANCH #1779") == "99 RANCH"

@@ -84,12 +84,28 @@ def _is_code(token: str) -> bool:
             or (len(token) >= 4 and digits >= 2))            # HS01, IL04: a store or building code
 
 
+def _name_part(token: str) -> str:
+    """"BP#9563966TTA#" -> "BP", "ARCO#82967" -> "ARCO": the store name glued to its number."""
+    head = token.split("#", 1)[0]
+    return head if "#" in token and len(head) >= 2 and head.isalpha() else token
+
+
 def merchant_key(description: str) -> str:
     s = _CUT.sub("", f" {description}").upper()
     s = s.replace("DES:", " ").replace("*", " ")
-    s = " ".join(t for t in s.split() if not _is_code(t))
+    s = " ".join(t for t in map(_name_part, s.split()) if not _is_code(t))
     s = _NOISE.sub(" ", s)
     return re.sub(r"\s+", " ", s).strip()[:60] or description.upper()[:60]
+
+
+# Merchants that say nothing about what the money was for - a category is set per transaction, not as a
+# rule for every check / deposit / ATM withdrawal ever.
+_ONE_OFF = re.compile(r"^(CHECK|DEPOSIT|COUNTER CREDIT|TELLER DEPOSIT|ATM WITHDRAWAL|ATM DEPOSIT|WITHDRAWAL|"
+                      r"CASH WITHDRAWAL|MOBILE DEPOSIT)$")
+
+
+def is_one_off(merchant: str) -> bool:
+    return bool(_ONE_OFF.match(merchant or ""))
 
 
 def upgrade_rule_keys(conn, descriptions) -> int:

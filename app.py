@@ -570,20 +570,21 @@ with tab_flow:
             start = pd.Timestamp.today().to_period("M").to_timestamp() - pd.DateOffset(months=months)
             view = view[view["date"] >= start]
         has_who = bool(view["purchaser"].notna().any()) if "purchaser" in view else False
-        view = view[["date", "account", "description", "merchant", "category", "amount"]
+        view = view[["id", "date", "account", "description", "merchant", "category", "amount"]
                     + (["purchaser"] if has_who else [])].reset_index(drop=True)
 
         spent, got = -view.loc[view["amount"] < 0, "amount"].sum(), view.loc[view["amount"] > 0, "amount"].sum()
         st.caption(f"**{len(view)}** transactions · in {money(got)} · out {money(spent)}  —  "
                    + ("✏️ **Tap a category twice to change it.** " if PHONE else
                       "✏️ **Double-click a category to change it.** ")
-                   + "Every transaction from that merchant follows, including future imports.")
+                   + "Every transaction from that merchant follows, including future imports "
+                     "(checks, deposits and ATM withdrawals: just that one).")
 
         # Keyed by the filters so pending edits never get applied to a differently-filtered table
         editor_key = f"txn_editor_{hash((q, tuple(pick_cats), tuple(pick), period))}"
         edited = st.data_editor(
             view, hide_index=True, width="stretch", height=420 if PHONE else 460, key=editor_key,
-            disabled=["date", "account", "description", "merchant", "amount", "purchaser"],
+            disabled=["id", "date", "account", "description", "merchant", "amount", "purchaser"],
             column_order=(["date", "description", "category", "amount"] if PHONE else
                           ["date", "account", "description", "category", "amount"] + (["purchaser"] if has_who else [])),
             column_config={
@@ -596,10 +597,14 @@ with tab_flow:
                 "amount": st.column_config.NumberColumn("Amount", format="$%,.0f" if PHONE else "$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
         if len(changed):
-            for r in changed.drop_duplicates("merchant", keep="last").itertuples():
+            one_off = changed["merchant"].map(categorize.is_one_off)
+            for r in changed[one_off].itertuples():                   # a check: just this one
+                db.set_transaction_category(conn, r.id, r.category)
+            rules_changed = changed[~one_off]
+            for r in rules_changed.drop_duplicates("merchant", keep="last").itertuples():
                 categorize.set_rule(conn, r.merchant, r.category, source="user")
-            n = int(view["merchant"].isin(changed["merchant"]).sum())
-            st.session_state["flash"] = f"Updated {n} transaction(s) from {', '.join(changed['merchant'].unique())}"
+            n = int(view["merchant"].isin(rules_changed["merchant"]).sum()) + int(one_off.sum())
+            st.session_state["flash"] = f"Updated {n} transaction(s): {', '.join(changed['description'].str[:30].unique()[:5])}"
             del st.session_state[editor_key]
             st.rerun()
 
