@@ -267,10 +267,10 @@ def cash_flow_ahead(cf: pd.DataFrame, real: bool, mode: str, compact: bool = Fal
     span = [f"{a:%b %Y} – {b:%b %Y}" for a, b in zip(cf["first"], cf["last"])]
     col = lambda name: cf[f"{name}{sfx}"] if f"{name}{sfx}" in cf else pd.Series(0.0, index=cf.index)   # noqa: E731
     fig = go.Figure()
-    taxes = col("tax_401k") + col("cg_tax")               # 401(k) withdrawals + capital gains on shares sold
+    taxes = col("tax_401k") + col("cg_tax") + col("income_tax")   # flat-rate years + real brackets once retired
     for label, values, color in (("Living costs", col("living"), c["s2"]), ("Loan payments", col("loans"), c["muted"]),
                                  ("Healthcare", col("health"), c["ink2"]), ("College", col("college"), c["ink"]),
-                                 ("Taxes on selling & 401(k) withdrawals", taxes, c["axis"])):
+                                 ("Taxes (selling, 401(k), retired years)", taxes, c["axis"])):
         if values.abs().sum() > 0:
             fig.add_trace(go.Bar(x=cf["year"], y=values, name=label, marker=dict(color=color),
                                  hovertemplate=f"{label} $%{{y:,.0f}}<extra></extra>"))

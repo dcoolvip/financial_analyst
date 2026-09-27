@@ -458,6 +458,14 @@ with tab_future:
         if household and baseline:
             pays = retirement.pay_by_person(enriched_all, household, baseline["start"], now_ts.to_period("M").to_timestamp())
             other_default = max(0.0, baseline["income"] - sum(pays.values()))
+        roth_total = sum((db.get_setting(conn, f"tax_sources:{int(i)}") or {}).get("roth", 0.0)
+                         for i in accts.loc[accts["type"] == "retirement", "id"])
+        income_tax_now = 0.0
+        if baseline:                           # income tax paid today (IRS, state) - replaced by the real
+            it = enriched_all[(~enriched_all["is_transfer"]) & (enriched_all["date"] >= baseline["start"])   # calc
+                              & (enriched_all["date"] < now_ts.to_period("M").to_timestamp())            # when retired
+                              & (enriched_all["category"] == "Income tax")]
+            income_tax_now = float(-it["amount"].sum() / baseline["months"])
         pretax_total = sum((db.get_setting(conn, f"tax_sources:{int(i)}") or {}).get(k, 0.0)
                            for i in accts.loc[accts["type"] == "retirement", "id"]
                            for k in ("pre_tax", "employer_match", "after_tax"))
@@ -556,6 +564,20 @@ with tab_future:
                             st.caption(f"{ages} now. Today's kids' costs ({money(kid_costs)}/month: school, activities, "
                                        "care) leave the budget when each starts college.")
                         a.pretax_balance = pretax_total
+                        a.roth_balance = roth_total
+                        a.dividends_monthly = yearly_div / 12
+                        a.income_tax_monthly = income_tax_now
+                        strategies = {"fill24": "Convert to Roth up to the 24% bracket each year (recommended)",
+                                      "fill22": "Convert to Roth up to the 22% bracket each year",
+                                      "fill32": "Convert to Roth up to the 32% bracket each year",
+                                      "required": "Only the required withdrawals (from 75)"}
+                        a.withdrawal_strategy = st.selectbox(
+                            "401(k) once you're both retired", list(strategies), format_func=strategies.get,
+                            index=list(strategies).index(saved.withdrawal_strategy) if saved.withdrawal_strategy in strategies else 0,
+                            help="Each retired year, move just enough pre-tax 401(k) money to a Roth to reach the top of "
+                                 "that federal bracket, paying the tax now instead of at higher rates on big required "
+                                 "withdrawals later. Roth money then grows tax-free and has no required withdrawals. "
+                                 "Retired years use real federal + California brackets (2025 law, indexed).")
                         a.private_health_yearly = st.number_input(
                             "Private insurance before 65, per person per year ($)", step=500.0,
                             value=float(saved.private_health_yearly), help="Only while retired before 65 with nobody "

@@ -33,9 +33,10 @@ def _run(retire_a=65, claim=67, years=40, **kw):
                "ss_monthly": 3_000, "ss_claim_age": claim, "k401_yearly": 0},
               {"name": "B", "born": f"{now.year - 56}-{now.month:02d}", "retire_age": 65, "pay": 5_000,
                "ss_monthly": 2_000, "ss_claim_age": claim}]
-    a = forecast.Assumptions(years=years, investment_return=0.0, investment_volatility=0.0, cash_yield=0.0,
-                             inflation=0.0, health_extra_growth=0.0, monthly_income=15_000, monthly_living=6_000,
-                             income_growth=0.0, people=people, other_income=1_000, **kw)
+    base = dict(years=years, investment_return=0.0, investment_volatility=0.0, cash_yield=0.0, inflation=0.0,
+                health_extra_growth=0.0, monthly_income=15_000, monthly_living=6_000, income_growth=0.0,
+                people=people, other_income=1_000)
+    a = forecast.Assumptions(**{**base, **kw})
     accts = pd.DataFrame([("Brokerage", "brokerage", 1_000_000, None, None)], columns=["name", "type", "balance", "rate", "payment"])
     return forecast.run(accts, a)
 
@@ -58,9 +59,9 @@ def test_early_retirement_pays_private_insurance_until_65():
 
 
 def test_pretax_401k_is_taxed_when_it_has_to_be_used():
-    fc = _run(years=45, pretax_balance=400_000, pretax_tax_rate=0.30)
+    fc = _run(use_tax_brackets=False, years=45, pretax_balance=400_000, pretax_tax_rate=0.30)
     assert fc.cash_flow["tax_401k"].sum() > 0                       # required withdrawals / spending, taxed
-    plain = _run(years=45, pretax_balance=0)
+    plain = _run(use_tax_brackets=False, years=45, pretax_balance=0)
     assert fc.expected["net_worth"].iloc[-1] < plain.expected["net_worth"].iloc[-1]   # tax makes pre-tax worth less
 
 
@@ -68,13 +69,13 @@ def test_401k_withdrawals_count_as_money_in_and_their_tax_as_money_out():
     """Regression: required 401(k) withdrawals showed only their tax (as money out), so the chart looked like a
     huge shortfall - the withdrawal itself (mostly reinvested) was missing from money in."""
     from finance import charts
-    fc = _run(years=45, pretax_balance=2_000_000, pretax_tax_rate=0.30)
+    fc = _run(use_tax_brackets=False, years=45, pretax_balance=2_000_000, pretax_tax_rate=0.30)
     f = fc.cash_flow
     late = f[f["tax_401k"] > 0].iloc[-1]
     assert late["out_401k"] == pytest.approx(late["tax_401k"] / 0.30, rel=0.02)          # gross vs its tax
     fig = charts.cash_flow_ahead(f, False, "light", events=[(2040, "A retires"), (2040, "A Medicare")])
     money_in = next(d for d in fig.data if d.name == "Money in")
-    costs = f["living"] + f["loans"] + f["health"] + f["college"] + f["tax_401k"] + f["cg_tax"]
+    costs = f["living"] + f["loans"] + f["health"] + f["college"] + f["tax_401k"] + f["cg_tax"] + f["income_tax"]
     used = (costs - f["income"]).clip(lower=0).clip(upper=f["out_401k"])
     assert list(money_in.y) == pytest.approx(list(f["income"] + used))      # only what pays for spending + taxes
     assert all(money_in.y[i] <= costs[i] + f["income"][i] + 1 for i in range(len(f)))
@@ -84,8 +85,8 @@ def test_401k_withdrawals_count_as_money_in_and_their_tax_as_money_out():
 
 
 def test_selling_shares_to_cover_spending_pays_capital_gains_tax():
-    taxed = _run(years=30, capital_gains_rate=0.33, gain_share=0.7)
-    untaxed = _run(years=30, capital_gains_rate=0.0)
+    taxed = _run(use_tax_brackets=False, years=30, capital_gains_rate=0.33, gain_share=0.7)
+    untaxed = _run(use_tax_brackets=False, years=30, capital_gains_rate=0.0)
     assert taxed.cash_flow["cg_tax"].sum() > 0 and untaxed.cash_flow["cg_tax"].sum() == 0
     assert taxed.expected["net_worth"].iloc[-1] < untaxed.expected["net_worth"].iloc[-1]
 
@@ -104,7 +105,21 @@ def test_college_is_paid_and_kids_costs_end():
 def test_reinvested_401k_money_has_no_gain_to_tax():
     """Regression: capital-gains tax kept being charged after required 401(k) withdrawals began, though the
     reinvested withdrawal money had no gain in it - every sale was taxed as 70% gain."""
-    fc = _run(years=40, pretax_balance=900_000, capital_gains_rate=0.33, gain_share=0.7)
+    fc = _run(use_tax_brackets=False, years=40, pretax_balance=900_000, capital_gains_rate=0.33, gain_share=0.7)
     f = fc.cash_flow.set_index("period")
     rmd = f[f["out_401k"] > 0]
     assert len(rmd) > 5 and rmd["cg_tax"].iloc[-1] < 0.7 * rmd["cg_tax"].iloc[0]   # new money dilutes the gain
+
+
+def test_retired_years_use_real_brackets_and_fill_the_24_percent_bracket_with_roth_conversions():
+    kw = dict(years=40, pretax_balance=3_000_000, dividends_monthly=500, investment_return=0.06)
+    fill, req = _run(withdrawal_strategy="fill24", **kw), _run(withdrawal_strategy="required", **kw)
+    f, r = fill.cash_flow.set_index("period"), req.cash_flow.set_index("period")
+    retired = f.index[f["pay"] == 0]
+    assert f.loc[retired, "roth_conv"].sum() > 0 and r["roth_conv"].sum() == 0      # conversions only with fill
+    assert f.loc[retired, "income_tax"].sum() > 0                                   # real tax, every retired year
+    assert f.loc[retired[0], "tax_401k"] == 0                                       # not the flat rate any more
+    late = f.index[-1]
+    assert f.loc[late, "out_401k"] < r.loc[late, "out_401k"]                        # smaller required withdrawals
+    after_tax = lambda fc: fc.expected["net_worth"].iloc[-1] - 0.45 * fc.expected["pretax"].iloc[-1]   # noqa: E731
+    assert after_tax(fill) > after_tax(req)                    # counting the tax still owed on the 401(k)
