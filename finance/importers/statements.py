@@ -43,6 +43,7 @@ class Statement:
     grants: list[dict] = field(default_factory=list)     # unvested RSUs: grant_date, grant_id, symbol, quantity, value
     importable: bool = True          # False for documents with nothing to save (e.g. trade confirmations)
     name_hint: str = ""              # e.g. the property address on a mortgage, to name a new account
+    tax_sources: dict = field(default_factory=dict)   # retirement plans: balance by tax type (pre-tax, Roth, ...)
 
     @property
     def extras(self) -> str:
@@ -390,7 +391,50 @@ def _etrade_extras(s: Statement, t: str) -> None:
                          "symbol": m["sym"], "quantity": _num(m["qty"]), "value": _num(m["value"])})
 
 
+def _fidelity_401k(t: str) -> Statement:
+    """Fidelity NetBenefits workplace plan statement (e.g. "Apple 401(k) Plan Retirement Savings Statement"):
+    ending balance, funds with their stock/bond mix, the balance at the start of the period, and the balance
+    by tax type (pre-tax, after-tax, employer match, Roth) - which matters for taxes when the money comes out."""
+    s = Statement(kind="investment", institution="Fidelity", account_type="retirement", text=t)
+    plan = re.search(r"([A-Z][\w&.' -]*?\b(?:401\(k\)|403\(b\)|457)[\w ]*?) Plan", t)
+    s.name_hint = f"{plan.group(1).strip()}" if plan else "401(k)"
+    m = re.search(r"Statement Period:\s*(\d{2}/\d{2}/\d{4})\s+to\s+(\d{2}/\d{2}/\d{4})", t)
+    start, s.as_of = (_parse_date(m.group(1)), _parse_date(m.group(2))) if m else (None, None)
+    s.balance = _line_money(t, "Ending Balance")
+    fwd = _line_money(t, "Balance Forward")
+    if fwd and start:
+        s.history.append((start - timedelta(days=1), fwd, True))             # value when the period began
+    mix = {re.sub(r"\s+", " ", m["name"]).strip(): (int(m["st"]), int(m["bd"]), int(m["ot"])) for m in re.finditer(
+        r"(?m)^(?P<name>[A-Za-z][\w .&/-]*?\d{4}[\w ]*?|[A-Za-z][\w .&/-]*?)\s+(?P<st>\d{1,3})%\s+(?P<bd>\d{1,3})%\s+(?P<ot>\d{1,3})%\s*$", t)}
+    flat = re.sub(r"\s*\n\s*", " ", t)
+    for m in re.finditer(r"(?P<name>[A-Z][A-Za-z .&/-]*?(?:\d{4}(?: [A-Z])?)?) (?P<s0>[\d,]+\.\d{3}) ?(?P<s1>[\d,]+\.\d{3}) "
+                         r"\$(?P<p0>[\d,]+\.\d{2}) \$(?P<p1>[\d,]+\.\d{2}) \$(?P<v0>[\d,]+\.\d{2}) \$(?P<v1>[\d,]+\.\d{2})", flat):
+        name = m["name"].strip()
+        st, bd, ot = mix.get(name, (None, None, None))
+        desc = name + (f" ({st}% stocks · {bd}% bonds · {ot}% short-term)" if st is not None else "")
+        year = re.search(r"\d{4}", name)
+        symbol = re.sub(r"[^A-Z]", "", name.split()[0].upper())[:10] + (year.group(0) if year else "")
+        s.holdings.append({"symbol": symbol, "description": desc, "quantity": _num(m["s1"]), "price": _num(m["p1"]),
+                           "value": _num(m["v1"]), "cost_basis": None})
+    rows = {"Traditional": "pre_tax", "After-Tax": "after_tax", "Match": "employer_match", "Roth": "roth"}
+    for label, key in rows.items():
+        m = re.search(rf"{label}[^$\n]*(?:\n[^$\n]*){{0,3}}?\s*\$[\d,.]+\s*\$[\d,.]+\s*\d+%\s*\$([\d,]+\.\d{{2}})", t)
+        if m:
+            s.tax_sources[key] = _num(m.group(1))
+    if s.tax_sources:
+        s.notes.append("By tax type: " + ", ".join(f"{k.replace('_', ' ')} ${v:,.0f}" for k, v in s.tax_sources.items()))
+    if s.holdings and s.balance is not None:
+        listed = sum(h["value"] for h in s.holdings)
+        if abs(s.balance - listed) > max(1.0, 0.01 * listed):
+            s.notes.append(f"The balance read (${s.balance:,.2f}) doesn't match the funds listed (${listed:,.2f})")
+    if s.balance is None or s.as_of is None:
+        s.notes.append("Not found: " + ", ".join(n for n, v in (("date", s.as_of), ("balance", s.balance)) if v is None))
+    return s
+
+
 def parse_text(text: str) -> Statement:
+    if re.search(r"NetBenefits|Retirement Savings Statement", text) and re.search(r"401\(k\)|403\(b\)|457", text):
+        return _fidelity_401k(text)
     if re.search(r"\bTrade Confirmation\b", text[:400], re.IGNORECASE):
         return Statement(kind="unknown", institution=_institution(text), text=text, importable=False, notes=[
             "This is a trade confirmation (a record of individual trades), not a statement - it doesn't include "

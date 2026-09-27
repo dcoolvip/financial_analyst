@@ -395,3 +395,62 @@ def test_apple_savings_statement():
     assert (s.kind, s.account_type, s.institution, s.last4) == ("deposit", "savings", "Apple Savings", "1111")
     assert s.balance == 320 and s.as_of == date(2025, 8, 31)
     assert s.history == [(date(2025, 7, 31), 300.0, True)]                     # opening balance = July 31
+
+
+FIDELITY_401K = """Statement Details
+Acme 401(k) Plan Retirement Savings Statement
+JANE SAMPLE
+Your Account Summary Statement Period: 01/01/2021 to 09/25/2026
+Beginning Balance $0.00
+Employee Contributions $10,000.00
+Employer Contributions $5,000.00
+Balance Forward $100,000.00
+Fees -$5.00
+Change in Market Value $45,005.00
+Ending Balance $160,000.00
+LIFEPATH INDEX CORE FUNDS
+Fidelity NetBenefits - Statement Details
+Blended Fund Investments* $0.00$160,000.00
+LifePath Idx
+2040 A 0.000 1,000.000 $0.00 $40.00 $0.00 $40,000.00
+LifePath Idx
+2045 A 0.0004,000.000 $0.00 $30.00 $0.00 $120,000.00
+Account Totals $0.00$160,000.00
+ContributionsPeriod to
+date
+Inception To
+Date
+Vested
+Percent
+Total Account
+Balance
+Total Vested
+Balance
+Base Pay
+Traditional $9,000.00 $9,000.00 100%$100,000.00$100,000.00
+After-Tax $1,000.00 $1,000.00 100% $0.00 $0.00
+Acme
+Match $5,000.00 $5,000.00 100%$55,000.00$55,000.00
+Roth in-
+Plan
+Conversion
+$0.00 $0.00 100% $5,000.00 $5,000.00
+Blended Investment Stocks Bonds Short-Term/Other
+LifePath Idx 2040 A 73% 22% 5%
+LifePath Idx 2045 A 82% 13% 5%
+"""
+
+
+def test_fidelity_401k_statement():
+    s = parse_text(FIDELITY_401K)
+    assert (s.kind, s.institution, s.account_type, s.name_hint) == ("investment", "Fidelity", "retirement", "Acme 401(k)")
+    assert s.balance == 160_000 and s.as_of == date(2026, 9, 25)
+    assert s.history == [(date(2020, 12, 31), 100_000.0, True)]                   # value when the period began
+    assert [h["symbol"] for h in s.holdings] == ["LIFEPATH2040", "LIFEPATH2045"]
+    assert s.holdings[1]["value"] == 120_000 and "82% stocks" in s.holdings[1]["description"]
+    assert s.tax_sources == {"pre_tax": 100_000, "after_tax": 0.0, "employer_match": 55_000, "roth": 5_000}
+    from finance import portfolio
+    import pandas as pd
+    pf = portfolio.summarize(pd.DataFrame(s.holdings).assign(account="401k"))
+    assert pf["by_class"]["Stocks"] == pytest.approx(40_000 * 0.73 + 120_000 * 0.82)   # split by the fund's mix
+    assert not pf["concentrated"]                                                   # a fund isn't one company

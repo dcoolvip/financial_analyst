@@ -78,6 +78,8 @@ def apply_statement(conn, s: "statements.Statement", account_id: int, filename: 
         db.replace_holdings(conn, account_id, s.as_of, pd.DataFrame(s.holdings))
     if latest and s.as_of:
         db.replace_grants(conn, account_id, s.as_of, s.grants)
+    if latest and s.tax_sources:              # retirement plans: how much is pre-tax vs Roth (for taxes later)
+        db.set_setting(conn, f"tax_sources:{account_id}", {**s.tax_sources, "as_of": str(s.as_of)})
     db.update_account_details(conn, account_id, last4=s.last4,
                               rate=s.rate if latest and s.kind in ("loan", "credit_card") else None,
                               payment=s.payment if latest and s.kind == "loan" else None)

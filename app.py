@@ -1198,7 +1198,9 @@ def render_statement_review(pdf_files) -> None:
                          "date": s.as_of, "balance": s.balance,
                          "rate": round(s.rate * 100, 3) if s.rate is not None else None, "payment": s.payment,
                          "extras": s.extras, "account": suggest[i],
-                         "new_name": (f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip()
+                         "new_name": (f"{s.name_hint} ({SHORT_INST.get(s.institution, s.institution)})"
+                                      if s.name_hint and acct_type == "retirement" else   # "Apple 401(k) (Fidelity)"
+                                      f"{SHORT_INST.get(s.institution, s.institution)} {TYPE_LABELS[acct_type]}".strip()
                                       + (f" – {s.name_hint}" if s.name_hint else "")),
                          "type": acct_type})
         cols = ["save"] + ([] if PHONE else ["file"]) + ["date"] + [c for c, _ in fields] + ["account"] \
@@ -1272,7 +1274,7 @@ def render_statement_review(pdf_files) -> None:
                 as_of=pd.Timestamp(r.date).date(), balance=float(r.balance),
                 rate=float(r.rate) / 100 if pd.notna(r.rate) else None,
                 payment=float(r.payment) if pd.notna(r.payment) else None,
-                history=orig.history, holdings=orig.holdings, grants=orig.grants)
+                history=orig.history, holdings=orig.holdings, grants=orig.grants, tax_sources=orig.tax_sources)
             apply_statement(conn, s, ids[r.row_id], r.file, latest=r.row_id in newest)
         st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
         st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1   # empty the uploader

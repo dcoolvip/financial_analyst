@@ -586,3 +586,21 @@ def test_future_own_and_owe_view(env):
     at.segmented_control(key="future_view").set_value("Own & owe").run()
     assert not at.exception
     assert any(c.value.startswith("Most likely path: you own") for c in at.caption)
+
+
+def test_401k_statement_imports_as_a_retirement_account(env):
+    from tests.test_statements import FIDELITY_401K
+    conn, uploads = env
+    db.upsert_balance(conn, db.add_account(conn, "Checking", "Bank of America", "checking"), "2026-09-01", 1_000)
+    at = app()
+    uploads["active"] = uploads["keys"][-1]
+    uploads["files"] = [Upload("NetBenefits.pdf", _pdf(FIDELITY_401K.strip().splitlines()))]
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    click(at, "Save statements")
+    a = db.accounts(conn).set_index("name")
+    new = a[a["type"] == "retirement"]
+    assert len(new) == 1 and new["balance"].iloc[0] == 160_000
+    acct = int(new["id"].iloc[0])
+    assert db.get_setting(conn, f"tax_sources:{acct}")["roth"] == 5_000
+    assert len(db.latest_holdings(conn)) == 2

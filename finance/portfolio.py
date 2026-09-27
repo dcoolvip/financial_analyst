@@ -32,7 +32,11 @@ def asset_class(symbol: str, description: str = "") -> str:
 
 def is_single_company(symbol: str, description: str = "") -> bool:
     """True for an individual stock (concentration risk), False for funds/ETFs/cash."""
-    return asset_class(symbol, description) == "Stocks" and not _FUND.search(description or "")
+    return (asset_class(symbol, description) == "Stocks" and not _FUND.search(description or "")
+            and not _MIX.search(description or ""))                  # a blended fund holds many companies
+
+
+_MIX = re.compile(r"\((\d{1,3})% stocks · (\d{1,3})% bonds · (\d{1,3})% short-term\)")
 
 
 def summarize(holdings: pd.DataFrame) -> dict:
@@ -42,7 +46,14 @@ def summarize(holdings: pd.DataFrame) -> dict:
     h = holdings.copy()
     h["class"] = [asset_class(s, d) for s, d in zip(h["symbol"], h["description"])]
     total = float(h["value"].sum())
-    by_class = {c: float(h.loc[h["class"] == c, "value"].sum()) for c in ASSET_CLASSES}
+    by_class = {c: 0.0 for c in ASSET_CLASSES}
+    for r in h.itertuples():             # a blended fund (target-date) counts toward each class by its mix
+        mix = _MIX.search(str(r.description or ""))
+        if mix:
+            for c, pct in zip(("Stocks", "Bonds", "Cash"), map(int, mix.groups())):
+                by_class[c] += r.value * pct / 100
+        else:
+            by_class[h.at[r.Index, "class"]] += r.value
     # the same stock held in two accounts counts once
     if "cost_basis" not in h:
         h["cost_basis"] = None
