@@ -544,6 +544,14 @@ with tab_future:
                         a.health_extra_growth = st.slider("Healthcare grows faster than inflation by", 0.0, 5.0,
                                                           saved.health_extra_growth * 100, 0.25, format="%.2f%%",
                                                           help="Historically about 2 points a year.") / 100
+                        a.capital_gains_rate = st.slider(
+                            "Capital-gains tax when selling shares", 0, 45, int(round(saved.capital_gains_rate * 100)), 1,
+                            format="%d%%", help="On the gain part of shares sold to cover spending: ~20% federal + "
+                            "3.8% investment income tax + California.") / 100
+                        a.gain_share = st.slider(
+                            "Share of a sale that's gain", 0, 100, int(round(saved.gain_share * 100)), 5, format="%d%%",
+                            help="RSU, ESPP and long-held shares mostly are. 70% -> selling $1.30 of shares for each "
+                            "$1 needed at a 33% rate.") / 100
                         a.pretax_tax_rate = st.slider("Tax on 401(k) withdrawals", 10, 50, int(saved.pretax_tax_rate * 100),
                                                       1, format="%d%%", help=f"Pre-tax 401(k) money "
                                                       f"({money(pretax_total)} today) is taxed when it comes out; "

@@ -85,5 +85,3 @@ def test_selling_shares_to_cover_spending_pays_capital_gains_tax():
     untaxed = _run(years=30, capital_gains_rate=0.0)
     assert taxed.cash_flow["cg_tax"].sum() > 0 and untaxed.cash_flow["cg_tax"].sum() == 0
     assert taxed.expected["net_worth"].iloc[-1] < untaxed.expected["net_worth"].iloc[-1]
-    ratio = taxed.cash_flow["cg_tax"].sum() / untaxed.cash_flow["cg_tax"].sum() if untaxed.cash_flow["cg_tax"].sum() else None
-    assert ratio is None
