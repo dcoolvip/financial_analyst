@@ -287,3 +287,17 @@ def test_cash_flow_baseline_splits_loans_from_living_costs():
     b = insights.cash_flow_baseline(insights.enrich(t), today=today)
     assert b["months"] == 12 and b["income"] == pytest.approx(10_000)
     assert b["living"] == pytest.approx(8_000) and b["loans_seen"] == pytest.approx(3_000)
+
+
+def test_planned_refinance_lowers_the_payment_from_that_month():
+    base = dict(years=2, investment_return=0.0, investment_volatility=0.0, cash_yield=0.0, inflation=0.0,
+                monthly_income=20_000, monthly_living=5_000, income_growth=0.0)
+    loan = accts([("Checking", "checking", 0, None, None), ("Bellgrove", "mortgage", 1_700_000, 0.06625, 12_051.47)])
+    now = forecast.run(loan, forecast.Assumptions(**base))
+    refi = forecast.run(loan, forecast.Assumptions(**base, loan_changes=[
+        {"loan": "Bellgrove", "payment": 9_000, "month": 3, "rate": 0.055}]))
+    f0, f1 = now.cash_flow.set_index("period"), refi.cash_flow.set_index("period")
+    assert f0.loc[0, "loans"] == pytest.approx(12 * 12_051.47)
+    assert f1.loc[0, "loans"] == pytest.approx(2 * 12_051.47 + 10 * 9_000)         # months 1-2 old, then new
+    assert f1.loc[1, "saved"] - f0.loc[1, "saved"] == pytest.approx(12 * (12_051.47 - 9_000))
+    assert forecast.Assumptions.from_dict(forecast.Assumptions(**base, loan_changes=[{"loan": "x", "payment": 1}]).to_dict()).loan_changes

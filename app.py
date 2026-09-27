@@ -433,6 +433,26 @@ with tab_future:
                     a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.25, format="%.2f%%") / 100
                     a.home_appreciation = st.slider("Home value growth", -2.0, 8.0, saved.home_appreciation * 100, 0.25,
                                                     format="%.2f%%") / 100
+                    loan_names = [l.name for l in forecast.build_loans(accts)[0]]
+                    if loan_names:
+                        st.markdown("**Planned refinance**", help="A loan whose payment will change - e.g. an ARM "
+                                    "you're refinancing. The forecast uses today's payment until then.")
+                        plan = (saved.loan_changes or [{}])[0]
+                        choices = ["None"] + loan_names
+                        which = st.selectbox("Loan", choices, index=choices.index(plan["loan"])
+                                             if plan.get("loan") in loan_names else 0, key="refi_loan")
+                        if which != "None":
+                            r1, r2, r3 = st.columns(3)
+                            new_pay = r1.number_input("New payment ($)", value=float(plan.get("payment") or 0.0),
+                                                      step=100.0, key="refi_pay")
+                            new_rate = r2.number_input("New rate (%)", value=float((plan.get("rate") or 0) * 100),
+                                                       step=0.125, format="%.3f", key="refi_rate",
+                                                       help="0 = keep the current rate")
+                            when = r3.number_input("Starts in (months)", value=int(plan.get("month") or 2),
+                                                   min_value=1, max_value=120, key="refi_month")
+                            if new_pay > 0:
+                                a.loan_changes = [{"loan": which, "payment": new_pay, "month": int(when),
+                                                   "rate": new_rate / 100 if new_rate > 0 else None}]
                     if not split:
                         a.savings_growth = st.slider("Savings grow each year by", 0.0, 8.0, saved.savings_growth * 100,
                                                      0.25, format="%.2f%%", help="Raises.") / 100

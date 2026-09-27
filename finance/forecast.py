@@ -47,6 +47,9 @@ class Assumptions:
     monthly_income: float | None = None   # when both are set, saving = income - living costs - loan payments
     monthly_living: float | None = None   # everything spent except loan payments, today's prices
     income_growth: float = 0.03           # raises per year
+    # planned changes to a loan, e.g. a refinance: [{"loan": name, "month": months from now, "payment": new
+    # monthly payment, "rate": new yearly rate or None to keep the current one}]
+    loan_changes: list = field(default_factory=list)
     simulations: int = 1000
     seed: int = 7
 
@@ -165,7 +168,18 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     nw[:, 0] = cash + inv + val.sum(axis=1) - debt
     parts[0] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
 
+    changes = {}
+    names = [l.name for l in loans]
+    for ch in a.loan_changes or []:
+        if ch.get("loan") in names and ch.get("payment"):
+            changes.setdefault(int(ch.get("month") or 1), []).append(ch)
+
     for m in range(1, months + 1):
+        for ch in changes.get(m, []):             # a refinance: new payment (and rate) from this month on
+            i = names.index(ch["loan"])
+            loan_pay[i] = float(ch["payment"])
+            if ch.get("rate") is not None:
+                loan_rate[i] = float(ch["rate"]) / 12
         # loans: accrue interest, pay, and free up the payment once cleared
         active = loan_bal > 0
         owed = loan_bal * (1 + loan_rate)
