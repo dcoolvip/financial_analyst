@@ -103,37 +103,43 @@ def build_loans(accts: pd.DataFrame) -> tuple[list[Loan], float]:
     return loans, revolving
 
 
-def valuables_table(accts: pd.DataFrame, a: Assumptions) -> pd.DataFrame:
-    """Each home, car, collectible, gold... with the yearly growth rate the forecast uses for it.
-    Your own rate (Accounts table) wins; otherwise the Home/Car sliders or the type's default."""
-    from .assets import DEFAULT_GROWTH, growth_rate
+def valuables_table(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None,
+                    trend_overrides: dict | None = None) -> pd.DataFrame:
+    """Each home, car, collectible, gold... with the growth rate and volatility the forecast uses for it:
+    your own rate if set, else its history blended with the long-run rate (the Home/Car sliders are the
+    long-run anchors for those two kinds). See assets.py."""
+    from .assets import explain, outlook
     from .db import VALUABLE_TYPES
+    history = history if history is not None else pd.DataFrame(columns=["account_id", "date", "balance"])
     rows = []
     for r in accts[accts["type"].isin(VALUABLE_TYPES)].itertuples():
-        rate, source = growth_rate(r.type, r.rate)
-        if source == "default" and r.type == "property":
-            rate = a.home_appreciation
-        elif source == "default" and r.type == "vehicle":
-            rate = -a.vehicle_depreciation
+        anchor = {"property": a.home_appreciation, "vehicle": -a.vehicle_depreciation}.get(r.type)
+        o = outlook(r.type, r.rate, history[history["account_id"] == r.id], long_run=anchor,
+                    trend_override=(trend_overrides or {}).get(r.id))
         rows.append({"id": r.id, "name": r.name, "type": r.type, "value": float(r.balance or 0.0),
-                     "rate": rate, "source": source})
-    return pd.DataFrame(rows, columns=["id", "name", "type", "value", "rate", "source"])
+                     "rate": o["rate"], "vol": o["vol"], "source": o["source"], "trend": o["trend"],
+                     "years": o["years"], "weight": o["weight"], "why": explain(o)})
+    return pd.DataFrame(rows, columns=["id", "name", "type", "value", "rate", "vol", "source", "trend",
+                                       "years", "weight", "why"])
 
 
-def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
+def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, history=None, overrides=None):
     months = a.years * 12
     bal = accts.assign(balance=accts["balance"].fillna(0.0))
     by_type = bal.groupby("type")["balance"].sum()
     cash0 = by_type.reindex(["checking", "savings"]).fillna(0).sum()
     inv0 = by_type.reindex(["brokerage", "retirement"]).fillna(0).sum()
-    vt = valuables_table(bal, a)                 # every valuable grows at its own rate
-    val = vt["value"].to_numpy(dtype=float)
-    val_r = ((1 + vt["rate"].to_numpy(dtype=float)) ** (1 / 12) - 1) if len(vt) else np.zeros(0)
+    vt = valuables_table(bal, a, history, overrides)     # each valuable: its own rate and volatility
+    val = np.tile(vt["value"].to_numpy(dtype=float), (sims, 1))
+    v_rate, v_vol = vt["rate"].to_numpy(dtype=float), vt["vol"].to_numpy(dtype=float) * (sigma > 0)
     loans, revolving = build_loans(bal)
 
     rng = np.random.default_rng(a.seed)
     mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
     growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
+    v_mu = np.log1p(v_rate) / 12 - v_vol**2 / 24
+    v_growth = np.exp(rng.normal(v_mu, v_vol / np.sqrt(12), size=(sims, months, len(v_rate)))) \
+        if len(v_rate) else np.ones((sims, months, 0))
     cash_r = (1 + a.cash_yield) ** (1 / 12) - 1
 
     cash = np.full(sims, cash0, dtype=float)
@@ -145,11 +151,11 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
 
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
-    paths = np.empty((months + 1, len(val)))
-    paths[0] = val
+    paths = np.empty((months + 1, val.shape[1]))
+    paths[0] = val.mean(axis=0)
     debt = loan_bal.sum() + revolving
-    nw[:, 0] = cash + inv + val.sum() - debt
-    parts[0] = [cash.mean(), inv.mean(), val.sum(), debt]
+    nw[:, 0] = cash + inv + val.sum(axis=1) - debt
+    parts[0] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
 
     for m in range(1, months + 1):
         # loans: accrue interest, pay, and free up the payment once cleared
@@ -170,25 +176,28 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float):
             short = np.minimum(cash, 0)          # overdraw cash first, then investments
             cash -= short
             inv += short
-        val = val * (1 + val_r)
-        paths[m] = val
+        val = val * v_growth[:, m - 1, :]
+        paths[m] = val.mean(axis=0)
         debt = loan_bal.sum() + revolving
-        nw[:, m] = cash + inv + val.sum() - debt
-        parts[m] = [cash.mean(), inv.mean(), val.sum(), debt]
+        nw[:, m] = cash + inv + val.sum(axis=1) - debt
+        parts[m] = [cash.mean(), inv.mean(), val.sum(axis=1).mean(), debt]
     return nw, parts, loans, payoff, vt, paths
 
 
-def run(accts: pd.DataFrame, a: Assumptions) -> Forecast:
+def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None,
+        trend_overrides: dict | None = None) -> Forecast:
+    """history: balance history (for each valuable's own trend and volatility); trend_overrides: {account_id:
+    (trend, years)} where a same-items price trend is more honest than the raw value history."""
     dates = pd.date_range(pd.Timestamp.today().normalize(), periods=a.years * 12 + 1, freq="MS")
     deflator = (1 + a.inflation) ** (np.arange(len(dates)) / 12)
 
-    nw, _, loans, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility)
+    nw, _, loans, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
     p10, p50, p90 = np.percentile(nw, [10, 50, 90], axis=0)
     bands = pd.DataFrame({"date": dates, "p10": p10, "p50": p50, "p90": p90})
     for c in ("p10", "p50", "p90"):
         bands[f"{c}_real"] = bands[c] / deflator
 
-    _, parts, _, payoff, vt, paths = _simulate(accts, a, 1, 0.0)   # expected-return path for the breakdown
+    _, parts, _, payoff, vt, paths = _simulate(accts, a, 1, 0.0, history, trend_overrides)  # expected path
     expected = pd.DataFrame(parts, columns=["cash", "investments", "property", "debt"])
     expected.insert(0, "date", dates)
     expected["net_worth"] = expected[["cash", "investments", "property"]].sum(axis=1) - expected["debt"]

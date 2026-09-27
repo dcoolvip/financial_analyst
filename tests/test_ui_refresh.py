@@ -406,8 +406,10 @@ def test_valuables_in_accounts_and_future(env, monkeypatch):
     assert accounts.set_index("name").loc["Pokemon collection", "trend"] == "+25.0%/yr"    # its own history
     assert any("Property & valuables" == g for g in accounts["Group"])
     future = table_with(at, "Growth / yr").set_index("Asset")
-    assert future.loc["Gold coins", "Growth / yr"] == pytest.approx(4.0)                    # default for gold
-    assert future.loc["Pokemon collection", "Based on"].startswith("default")
+    assert future.loc["Gold coins", "Growth / yr"] == pytest.approx(4.0)                    # long-run: no history
+    # 1 year of history at +25%/yr earns 1/(1+5) weight; the rest is the long-run +3% for collectibles
+    assert future.loc["Pokemon collection", "Growth / yr"] == pytest.approx((25 + 5 * 3) / 6, abs=0.1)
+    assert future.loc["Pokemon collection", "Based on"].startswith("your history +25.0%/yr")
     db.apply_account_edits(conn, {cards: {"rate": 0.10}})                                  # set your own rate
     at.run()
     future = table_with(at, "Growth / yr").set_index("Asset")

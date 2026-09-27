@@ -190,6 +190,18 @@ totals = insights.group_totals(accts) if len(accts) else {}
 est_savings = insights.estimate_monthly_savings(txns, rules=rule_map)
 
 
+def pokemon_trend() -> dict | None:
+    g = db.get_setting(conn, "pokemon_price_growth")
+    return g if isinstance(g, dict) and g.get("growth") is not None else None
+
+
+def trend_overrides() -> dict:
+    """Same-cards price trend for the Pokemon collection (its raw value history includes cards bought)."""
+    g = pokemon_trend()
+    return ({g["account_id"]: (g["growth"], g["years"], g.get("vol"))}
+            if g and g.get("account_id") in set(accts["id"]) else {})
+
+
 def run_ai_categorize() -> None:
     bar = st.progress(0.0, text="Categorizing merchants…")
     try:
@@ -369,7 +381,7 @@ with tab_future:
                 real = st.toggle("Show in today's dollars", value=True,
                                  help="Removes inflation so future numbers feel like today's money.")
 
-        fc = forecast.run(accts, a)
+        fc = forecast.run(accts, a, history=db.balance_history(conn), trend_overrides=trend_overrides())
         sfx = "_real" if real else ""
         end = fc.bands.iloc[-1]
         with chart_col:
@@ -389,20 +401,21 @@ with tab_future:
                 st.markdown("#### Property & valuables")
                 v = fc.valuables
                 hist_all = db.balance_history(conn)
-                trend_of = {r.id: assets.trend(hist_all[hist_all["account_id"] == r.id]) for r in v.itertuples()}
                 shown = pd.DataFrame({
                     "Asset": v["name"], "Today": v["value"], "Growth / yr": v["rate"] * 100,
-                    "Based on": ["your rate" if s_ == "yours" else f"default for {TYPE_LABELS[t].lower()}"
-                                 for s_, t in zip(v["source"], v["type"])],
-                    "Past trend": [f"{trend_of[i]:+.1%}/yr" if trend_of[i] is not None else "" for i in v["id"]],
+                    "Swings / yr": v["vol"] * 100, "Based on": v["why"],
                     f"In {a.years} years": v["end_real"] if real else v["end"]})
                 st.dataframe(shown, hide_index=True, width="stretch", column_config={
                     "Today": st.column_config.NumberColumn(format="$%,.0f"),
                     "Growth / yr": st.column_config.NumberColumn(format="%+.1f%%"),
+                    "Swings / yr": st.column_config.NumberColumn(
+                        format="±%.0f%%", help="How much the value typically moves in a year - from its own history "
+                                               "when there's enough, else typical for its kind. Widens the range."),
                     f"In {a.years} years": st.column_config.NumberColumn(
                         format="$%,.0f", help="In today's dollars" if real else "Future dollars")})
-                st.caption("Change an asset's growth in **Accounts → Rate / growth %**. Past trend is shown for "
-                           "reference - a hot year for one asset rarely repeats for a decade.")
+                st.caption("Each rate blends the asset's own history with the long-run rate for its kind - the "
+                           "longer the history, the more it counts (1 yr ≈ 17%, 5 yrs = 50%, 10 yrs ≈ 67%). "
+                           "Type your own in **Accounts → Rate / growth %** to override.")
                 pick = st.selectbox("See an asset's history and outlook", list(v["name"]), key="asset_outlook")
                 aid = int(v.loc[v["name"] == pick, "id"].iloc[0])
                 deflate = (1 + a.inflation) ** (np.arange(len(fc.valuable_paths)) / 12) if real else 1
@@ -551,9 +564,10 @@ with tab_accounts:
         has_debt = bool(table["is_liability"].any())
         is_valuable = table["type"].isin(db.VALUABLE_TYPES)
         history = db.balance_history(conn)
+        same_items = {i: o[0] for i, o in trend_overrides().items()}       # e.g. Pokemon: same-cards prices
         table["trend"] = [
-            (f"{t:+.1%}/yr" if (t := assets.trend(history[history["account_id"] == i])) is not None else "")
-            if v else "" for i, v in zip(table["id"], is_valuable)]
+            (f"{t:+.1%}/yr" if (t := same_items.get(i, assets.trend(history[history["account_id"] == i])))
+             is not None else "") if v else "" for i, v in zip(table["id"], is_valuable)]
         has_terms = has_debt or bool(is_valuable.any())
         table["new_balance"] = table["new_balance"].astype("float64")
         cols = (["name", "shown_balance", "new_balance", "Updated"] if PHONE else
@@ -629,15 +643,16 @@ with tab_accounts:
         with st.expander("🃏 Pokemon collection (from your Pokemon dashboard)"):
             st.caption("Values your owned cards at their latest raw prices, with month-end history from the "
                        "dashboard's price snapshots. Your Pokemon database is only read, never changed.")
-            if (g := db.get_setting(conn, "pokemon_price_growth")) is not None:
-                st.caption(f"Cards you've held since the first snapshot changed **{g:+.0%}/yr** in price. "
-                           "That's the past, not a forecast - the Future tab uses the rate in the table "
-                           f"(default {assets.DEFAULT_GROWTH['collectible']:+.0%}/yr for collectibles).")
+            if (g := pokemon_trend()) is not None:
+                st.caption(f"Cards you've held since the first snapshot changed **{g['growth']:+.0%}/yr** in price "
+                           f"over {g['years']:.1f} years. The Future tab blends that with the long-run rate for "
+                           "collectibles, giving history more weight as it gets longer.")
             if st.button("Refresh from Pokemon dashboard"):
                 with st.spinner("Reading your Pokemon dashboard (about 30 seconds)…"):
                     try:
                         r = pokemon.sync(conn)
-                        db.set_setting(conn, "pokemon_price_growth", r["growth"])
+                        db.set_setting(conn, "pokemon_price_growth", {"growth": r["growth"], "years": r["years"],
+                                                                      "vol": r["vol"], "account_id": r["account_id"]})
                         st.session_state["flash"] = (f"Pokemon collection: {money(r['value'])} "
                                                      f"({r['cards']:,} cards, {r['points']} month-end values)")
                         st.session_state["acct_table_ver"] = st.session_state.get("acct_table_ver", 0) + 1
