@@ -205,3 +205,8 @@ def test_ai_other_does_not_block_keywords_and_names_survive():
     assert insights.categorize("Black Angus-1083", -38, {"BLACK ANGUS": ("Travel", "user")}) == "Travel"
     assert merchant_key("AplPay SKINSPIRIT_49LOS GATOS CA") == "APLPAY SKINSPIRIT GATOS CA"
     assert insights.categorize("EVENT ATM #1-4 06/07 #000640474 WITHDRWL DE ANZA COLLEGE", -60) == "Cash & ATM"
+
+
+def test_property_tax_is_its_own_category():
+    assert insights.categorize("Santa Clara DTAC DES:SantaClara ID:3910396148 INDN:X", -25130.14) == "Property tax"
+    assert "Property tax" in categorize.CATEGORIES and "property tax" not in categorize.CATEGORY_HELP["Housing"]

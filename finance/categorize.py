@@ -33,8 +33,8 @@ CATEGORY_HELP = {
     "Mortgage": "Monthly payments on a home loan (principal + interest, plus escrow for property tax and home "
                 "insurance when the lender collects it).",
     "Loan payments": "Monthly payments on car, student and personal loans.",
-    "Housing": "Rent, HOA dues, property tax paid directly, and home repair, maintenance, pest control, "
-               "cleaning and furnishing services.",
+    "Property tax": "County property tax paid directly (not through a mortgage escrow), for every home.",
+    "Housing": "Rent, HOA dues, and home repair, maintenance, pest control, cleaning and furnishing services.",
     "Utilities": "Electricity, gas, water, trash, internet, and phone/mobile plans.",
     "Groceries": "Supermarkets, grocery and specialty food stores (incl. Asian and Indian markets), "
                  "warehouse clubs.",
