@@ -335,3 +335,21 @@ def test_money_paid_back_is_not_income_but_dividends_are():
     h = pd.DataFrame({"account": ["DS", "DS", "Merrill"], "symbol": ["AAPL", "CASH", "AAPL"],
                       "quantity": [100.0, 0.0, 50.0], "value": [1.0, 1.0, 1.0]})
     assert insights.yearly_dividends(h, {"AAPL": 1.06}) == {"DS": pytest.approx(106.0), "Merrill": pytest.approx(53.0)}
+
+
+def test_month_over_month_explains_the_change():
+    rows = [("2026-06-05", "APPLE INC. DES:PAYROLL ID:1", 9_000.0), ("2026-06-19", "APPLE INC. DES:PAYROLL ID:1", 9_000.0),
+            ("2026-07-03", "APPLE INC. DES:PAYROLL ID:1", 9_000.0), ("2026-07-17", "APPLE INC. DES:PAYROLL ID:1", 9_000.0),
+            ("2026-07-31", "APPLE INC. DES:PAYROLL ID:1", 9_000.0),
+            ("2026-06-10", "UNITED AIRLINES", -500.0), ("2026-07-10", "UNITED AIRLINES", -3_000.0),
+            ("2026-06-11", "JUNE INTEREST", 400.0), ("2026-07-11", "JULY INTEREST", 420.0)]
+    t = pd.DataFrame(rows, columns=["date", "description", "amount"]).assign(date=lambda d: pd.to_datetime(d["date"]),
+                                                                            category=None)
+    w = insights.month_over_month(t, {"UNITED AIRLINES": ("Travel", "ai")}, today=pd.Timestamp("2026-09-26")).set_index("month")
+    jul = w.loc[pd.Timestamp("2026-07-01")]
+    assert jul["in_why"].startswith("vs Jun: +$9.0K") and "Apple pay +$9.0K (3 paydays vs 2)" in jul["in_why"]
+    assert "Interest" in jul["in_why"] or "JULY" not in jul["in_why"]            # interest months don't show as names
+    assert jul["out_why"].startswith("vs Jun: +$2.5K") and "Travel +$2.5K" in jul["out_why"]
+    fig = __import__("finance.charts", fromlist=["x"]).cash_flow_bars(
+        insights.monthly_cash_flow(t, {"UNITED AIRLINES": ("Travel", "ai")}).merge(w.reset_index(), on="month"), "light")
+    assert "3 paydays vs 2" in str(fig.data[0].customdata)                        # it's in the hover

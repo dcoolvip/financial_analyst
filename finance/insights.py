@@ -459,3 +459,55 @@ def cash_yield(enriched: pd.DataFrame, balances: pd.DataFrame, today: pd.Timesta
     if interest <= 0 or avg <= 1_000:
         return None
     return {"yield": float(interest / avg), "interest": float(interest), "average_cash": float(avg)}
+
+
+def _income_source(r) -> str:
+    """A steady name for where money in came from, so month-to-month changes line up."""
+    d = r.description.upper()
+    if r.category == "Rental income":
+        return "Rent"
+    if "INTEREST" in d:
+        return "Interest"
+    if "PAYROLL" in d:
+        return f"{_short_name(r.merchant).replace(' Inc.', '').replace(' INC.', '').title()} pay"
+    return _short_name(r.merchant)
+
+
+def month_over_month(txns: pd.DataFrame, rules: dict | None = None, top: int = 3,
+                     today: pd.Timestamp | None = None) -> pd.DataFrame:
+    """Per month: what moved money in and money out compared with the month before - the biggest changes by
+    source (money in) and by category (money out). Columns: month, in_why, out_why (short text, <br>-separated)."""
+    t = enrich(txns, rules)
+    t = t[~t["is_transfer"]]
+    if t.empty:
+        return pd.DataFrame(columns=["month", "in_why", "out_why"])
+    this_month = (today or pd.Timestamp.today()).to_period("M").to_timestamp()
+    t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp(), income=t["category"].isin(INCOME_CATEGORIES))
+    got = t[t["income"] & (t["amount"] > 0)]
+    got = got.assign(src=[_income_source(r) for r in got.itertuples()])
+    ins = got.pivot_table(index="month", columns="src", values="amount", aggfunc="sum").fillna(0)
+    paydays = got[got["description"].str.upper().str.contains("PAYROLL")].groupby(["month", "src"])["date"].nunique()
+    spent = t[~t["income"]].assign(category=lambda d: d["category"].replace({"Other income": "Refunds & paybacks"}))
+    outs = (-spent.pivot_table(index="month", columns="category", values="amount", aggfunc="sum")).fillna(0)
+    months = sorted(set(t["month"]))
+    ins, outs = ins.reindex(months, fill_value=0), outs.reindex(months, fill_value=0)
+
+    def why(frame: pd.DataFrame, i: int, pay: bool) -> str:
+        if i == 0:
+            return ""
+        d = (frame.iloc[i] - frame.iloc[i - 1])
+        d = d[d.abs() >= 100].reindex(d.abs().sort_values(ascending=False).index).dropna().head(top)
+        total = frame.iloc[i].sum() - frame.iloc[i - 1].sum()
+        m, prev = frame.index[i], frame.index[i - 1]
+        parts = []
+        for k, v in d.items():
+            note = ""
+            if pay and (m, k) in paydays.index:
+                n, n0 = int(paydays.get((m, k), 0)), int(paydays.get((prev, k), 0))
+                note = f" ({n} paydays vs {n0})" if n != n0 else ""
+            label = ("Less paid back" if v >= 0 else "More paid back") if k == "Refunds & paybacks" else k
+            parts.append(f"{label} {'+' if v >= 0 else '−'}{_m(abs(v))}{note}")
+        head = f"vs {prev:%b}: {'+' if total >= 0 else '−'}{_m(abs(total))}" + (" (month so far)" if m >= this_month else "")
+        return head + ("<br>" + "<br>".join(parts) if parts else "")
+    return pd.DataFrame({"month": months, "in_why": [why(ins, i, True) for i in range(len(months))],
+                         "out_why": [why(outs, i, False) for i in range(len(months))]})

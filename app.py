@@ -715,7 +715,8 @@ with tab_flow:
 
         st.markdown("#### Each month", help="Money in and out per month. Transfers between your own accounts "
                     "and card bill payments aren't counted.")
-        plot(charts.cash_flow_bars(cf.tail(6 if PHONE else 12), mode, compact=PHONE))
+        cf_why = cf.merge(insights.month_over_month(txns, rule_map), on="month", how="left")
+        plot(charts.cash_flow_bars(cf_why.tail(6 if PHONE else 12), mode, compact=PHONE))
 
         cats = insights.spending_by_category(txns, rules=rule_map)
         if len(cats):

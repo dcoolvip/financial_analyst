@@ -146,13 +146,21 @@ def forecast_fan(history: pd.DataFrame, bands: pd.DataFrame, real: bool, mode: s
 
 
 def cash_flow_bars(cf: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
+    """Money in and out per month. With in_why / out_why columns (insights.month_over_month), hovering a bar
+    also says what changed from the month before."""
     c = PALETTE[mode]
     fig = go.Figure()
-    common = dict(x=cf["month"], customdata=cf[["saved"]].values)
-    fig.add_trace(go.Bar(**common, y=cf["money_in"], name="Money in", marker_color=c["s1"],
-                         hovertemplate="<b>%{x|%b %Y}</b><br>In $%{y:,.0f}<br>Left over $%{customdata[0]:,.0f}<extra></extra>"))
-    fig.add_trace(go.Bar(**common, y=cf["money_out"], name="Money out", marker_color=c["s2"],
-                         hovertemplate="<b>%{x|%b %Y}</b><br>Out $%{y:,.0f}<br>Left over $%{customdata[0]:,.0f}<extra></extra>"))
+    in_why = cf["in_why"].fillna("") if "in_why" in cf else pd.Series("", index=cf.index)
+    out_why = cf["out_why"].fillna("") if "out_why" in cf else pd.Series("", index=cf.index)
+    small = lambda s: s.map(lambda w: f"<br><span style='font-size:12px'>{w}</span>" if w else "")   # noqa: E731
+    fig.add_trace(go.Bar(x=cf["month"], y=cf["money_in"], name="Money in", marker_color=c["s1"],
+                         customdata=pd.concat([cf["saved"], small(in_why)], axis=1).values,
+                         hovertemplate="<b>%{x|%b %Y}</b><br>In $%{y:,.0f}<br>Left over $%{customdata[0]:,.0f}"
+                                       "%{customdata[1]}<extra></extra>"))
+    fig.add_trace(go.Bar(x=cf["month"], y=cf["money_out"], name="Money out", marker_color=c["s2"],
+                         customdata=pd.concat([cf["saved"], small(out_why)], axis=1).values,
+                         hovertemplate="<b>%{x|%b %Y}</b><br>Out $%{y:,.0f}<br>Left over $%{customdata[0]:,.0f}"
+                                       "%{customdata[1]}<extra></extra>"))
     fig.update_layout(barmode="group", bargroupgap=0.08)
     return _layout(fig, c, legend=True, compact=compact)
 
