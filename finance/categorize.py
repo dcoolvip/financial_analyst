@@ -41,7 +41,7 @@ CATEGORY_HELP = {
     "Dining": "Restaurants, cafes, bakeries, dessert shops, bars, food delivery and takeout.",
     "Transport": "Fuel, EV charging, parking, tolls, rideshare, transit, car service and repair, DMV fees.",
     "Shopping": "Clothing, shoes, electronics, department stores, online retail, home goods, hobby and toy "
-                "stores.",
+                "stores, postage and shipping.",
     "Health": "Doctors, dentists, hospitals, pharmacies, vision, therapy, lab tests.",
     "Subscriptions": "Recurring digital services: streaming, apps, cloud storage, news, software.",
     "Insurance": "Car, home, life, health and umbrella insurance premiums paid directly.",
@@ -53,7 +53,9 @@ CATEGORY_HELP = {
     "Gifts & donations": "Gifts, charities, fundraisers, religious donations.",
     "Fees & interest": "Bank and card fees, card interest charges, late fees, wire fees, cash-back reversals.",
     "Taxes": "Income tax payments, government fines and court fees, business filings and licences.",
-    "Payments to people": "Zelle, Venmo, PayPal or Apple Cash to or from individuals, when the purpose is unknown.",
+    "Payments to people": "Zelle, Venmo, PayPal or Apple Cash to or from individuals or small businesses, when "
+                          "the purpose is unknown.",
+    "Cash & ATM": "ATM withdrawals and cash back - spent on something the statement can't show.",
     "Transfer": "Money moving between your own accounts, credit card bill payments, investing. Not spending.",
     "Other": "Genuinely unclear, e.g. a bare check. Use a category above whenever there's a reasonable guess.",
 }
@@ -81,13 +83,14 @@ def _is_code(token: str) -> bool:
     if not digits:
         return False
     return (digits >= 3 or token[0] in "#$" or bool(re.search(r"\d[/-]\d", token))
-            or (len(token) >= 4 and digits >= 2))            # HS01, IL04: a store or building code
+            or (4 <= len(token) <= 6 and digits >= 2))       # HS01, IL04: a store or building code
 
 
 def _name_part(token: str) -> str:
-    """"BP#9563966TTA#" -> "BP", "ARCO#82967" -> "ARCO": the store name glued to its number."""
-    head = token.split("#", 1)[0]
-    return head if "#" in token and len(head) >= 2 and head.isalpha() else token
+    """The store name glued to its number: "BP#9563966TTA#" -> "BP", "ANGUS-1083" -> "ANGUS",
+    "SKINSPIRIT_49LOS" -> "SKINSPIRIT"."""
+    head = re.split(r"[#_]|-(?=\d)", token, maxsplit=1)[0]
+    return head if head != token and len(head) >= 2 and head.replace("'", "").replace("&", "").isalpha() else token
 
 
 def merchant_key(description: str) -> str:

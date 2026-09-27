@@ -197,3 +197,11 @@ def test_common_chains_known_without_ai():
     assert insights.categorize("BP#9563966TTA# 39", -27.47) == "Transport"
     assert insights.categorize("MICRO CENTER# 195", -518.98) == "Shopping"
     assert insights.categorize("BPX CONSULTING", -50) != "Transport"          # whole word only
+
+
+def test_ai_other_does_not_block_keywords_and_names_survive():
+    rules = {"BLACK ANGUS": ("Other", "ai")}
+    assert insights.categorize("Black Angus-1083", -38, rules) == "Dining"         # AI "Other" = no opinion
+    assert insights.categorize("Black Angus-1083", -38, {"BLACK ANGUS": ("Travel", "user")}) == "Travel"
+    assert merchant_key("AplPay SKINSPIRIT_49LOS GATOS CA") == "APLPAY SKINSPIRIT GATOS CA"
+    assert insights.categorize("EVENT ATM #1-4 06/07 #000640474 WITHDRWL DE ANZA COLLEGE", -60) == "Cash & ATM"

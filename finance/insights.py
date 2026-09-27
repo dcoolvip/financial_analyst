@@ -37,14 +37,15 @@ TRANSFER_RE = re.compile(
 # First match wins. Extend freely - it's just keywords.
 CATEGORY_RULES = [
     ("Income", r"PAYROLL|DIRECT DEP|DES:SALARY|\bINTEREST(?! CHARGE)\b|DIVIDEND"),
+    ("Cash & ATM", r"\bATM\b.*(WITHDRAW|WITHDRWL)|ATM WITHDRAWAL|CASH WITHDRAWAL"),
     ("Mortgage", r"MORTG|MTG PYMT|HOME LOAN|DOVENMUEHLE|MR\.? COOPER|ROCKET MORTGAGE"),
     ("Loan payments", r"AUTO LOAN|CAR LOAN|HMFUSA|STUDENT LOAN|NAVIENT|NELNET|SALLIE MAE|LOAN PYMT"),
     ("Housing", r"\bRENT\b|HOA|PROPERTY TAX|PEST"),
     ("Utilities", r"PG&E|PGE|COMCAST|XFINITY|AT&T|VERIZON|T-MOBILE|WATER|ELECTRIC"),
     ("Groceries", r"WHOLE FOODS|SAFEWAY|TRADER JOE|COSTCO|KROGER|SPROUTS"),
-    ("Dining", r"RESTAURANT|DOORDASH|UBER EATS|STARBUCKS|CHIPOTLE|CAFE|GRUBHUB"),
+    ("Dining", r"RESTAURANT|BLACK ANGUS|DOORDASH|UBER EATS|STARBUCKS|CHIPOTLE|CAFE|GRUBHUB"),
     ("Transport", r"SHELL|CHEVRON|EXXON|\bBP\b|\bARCO\b|VALERO|UBER|LYFT|TOLL|PARKING|DMV"),
-    ("Shopping", r"AMAZON|AMZN|TARGET|WALMART|APPLE\.COM|BEST BUY|MICRO CENTER|\bGAP\b|OLD NAVY|BANANA REPUBLIC|NORDSTROM|MACY"),
+    ("Shopping", r"AMAZON|AMZN|TARGET|WALMART|APPLE\.COM|BEST BUY|MICRO CENTER|POSTAL SERVICE|USPS|\bGAP\b|OLD NAVY|BANANA REPUBLIC|NORDSTROM|MACY"),
     ("Health", r"PHARMACY|CVS|WALGREENS|KAISER|DENTAL|MEDICAL"),
     ("Subscriptions", r"NETFLIX|SPOTIFY|HULU|DISNEY|YOUTUBE|ICLOUD"),
     ("Insurance", r"INSURANCE|GEICO|STATE FARM|ALLSTATE|PROGRESSIVE"),
@@ -63,7 +64,7 @@ def categorize(description: str, amount: float, rules: dict | None = None) -> st
         return rule[0]
     if is_transfer(description):
         return "Transfer"
-    if rule:
+    if rule and not (rule[1] == "ai" and rule[0] == "Other"):     # the AI saying "Other" = no opinion
         return rule[0]
     for name, rx in _CATEGORY_RES:
         if rx.search(description):
