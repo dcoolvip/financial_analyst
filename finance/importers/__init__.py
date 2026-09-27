@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from .. import db
-from . import amex, bofa, chase, statements, wealthfront
+from . import amex, barclays, bofa, chase, statements, wealthfront
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 
 # Add new institutions here; each module exposes parse(content) -> ParsedFile
-IMPORTERS = [bofa, chase, wealthfront, amex]
+IMPORTERS = [bofa, chase, wealthfront, amex, barclays]
 
 
 def parse_file(content: bytes | str, filename: str = "") -> ParsedFile:

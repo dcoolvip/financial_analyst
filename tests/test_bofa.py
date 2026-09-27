@@ -258,3 +258,23 @@ def test_amex_reimport_and_account_matching(conn):
     assert suggest_csv_account(conn, parsed, "activity.csv", db.accounts(conn))[0] == "Amex Gold"   # by card digits
     assert apply(conn, parsed, gold, "activity.csv")["transactions_added"] == 5
     assert apply(conn, parsed, gold, "activity.csv")["transactions_added"] == 0
+
+
+# --- Barclays ----------------------------------------------------------------------------
+
+def test_barclays_csv_includes_balance():
+    from finance import insights
+    p = parse_file(read("barclays_card.csv"), filename="CreditCard_20250101_20250925.csv")
+    assert (p.kind, p.institution, p.account_hint) == ("credit_card", "Barclays", "4321")
+    assert p.balances.values.tolist() == [[date(2025, 9, 26), 245.10]]            # owed, from the header
+    assert len(p.transactions) == 4 and p.transactions["fingerprint"].is_unique   # identical GAP buys kept twice
+    assert p.transactions["amount"].sum() == pytest.approx(100 - 45.10 * 2 - 200)
+    assert insights.categorize("Payment Received", 100.0) == "Transfer"
+    assert insights.categorize("GAP OUTLET US 2814", -45.10) == "Shopping"
+
+
+def test_barclays_import_sets_card_balance(conn):
+    card = db.add_account(conn, "Barclays Card", "Barclays", "credit_card")
+    apply(conn, parse_file(read("barclays_card.csv")), card, "barclays.csv")
+    a = db.accounts(conn).set_index("name").loc["Barclays Card"]
+    assert a["balance"] == pytest.approx(245.10) and a["as_of"] == "2025-09-26"
