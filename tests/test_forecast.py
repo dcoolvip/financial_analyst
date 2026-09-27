@@ -370,3 +370,19 @@ def test_a_short_hot_streak_fades_instead_of_compounding_for_decades():
     mine = forecast.run(cards.assign(rate=0.10), forecast.Assumptions(years=10, investment_volatility=0.0,
                                                                       inflation=0.0, simulations=50), history=hist)
     assert mine.valuables.iloc[0]["end"] == pytest.approx(42_000 * 1.10 ** 10, rel=0.01)   # your own rate: kept
+
+
+def test_one_company_same_average_year_bigger_swings():
+    """Holding Apple: same expected year as the market, much bigger swings -> lower typical compounded result and
+    a wider range (the volatility drag), not Apple's past 27%/yr."""
+    port = accts([("Brokerage", "brokerage", 1_000_000, None, None)])
+    mkt = forecast.run(port, forecast.Assumptions(years=30, investment_return=0.10, inflation=0.0, simulations=3000))
+    one = forecast.run(port, forecast.Assumptions(years=30, investment_return=0.10, inflation=0.0, simulations=3000,
+                                                  single_stock_share=0.9))
+    m, o = mkt.bands.iloc[-1], one.bands.iloc[-1]
+    assert o["p50"] < m["p50"]                                                  # lower typical result
+    assert (o["p90"] - o["p10"]) / o["p50"] > (m["p90"] - m["p10"]) / m["p50"]   # wider range
+    assert o["p50"] < 1_000_000 * 1.10 ** 30                                   # below the market's typical x17
+    assert o["p50"] < 0.02 * 1_000_000 * 1.27 ** 30                            # nowhere near Apple's past x1300
+    exp_one, exp_mkt = one.expected["investments"].iloc[-1], mkt.expected["investments"].iloc[-1]
+    assert exp_one < exp_mkt                                                     # the expected path agrees

@@ -62,3 +62,21 @@ def table() -> pd.DataFrame:
 def stock_years() -> np.ndarray:
     """Real yearly stock returns to replay in the forecast's simulations."""
     return YEARLY["stocks"].to_numpy(dtype=float)
+
+
+# Apple (AAPL) total return per year, 2011-2025 - approximate, same caveats as above. Used only for the SHAPE of
+# a single big company's years (how far it swings), never its level: nobody should plan on 27%/yr for decades.
+APPLE = pd.Series([25.6, 32.6, 8.1, 40.0, -3.0, 12.5, 48.5, -5.4, 89.0, 82.3, 34.6, -26.4, 49.0, 30.7, 9.0],
+                  index=range(2011, 2026)) / 100
+
+
+def apple_years(arithmetic_mean: float) -> np.ndarray:
+    """Apple's real yearly returns, shifted so their simple average equals `arithmetic_mean` (the market's):
+    the same expected year as the market, with Apple's much bigger swings."""
+    r = APPLE.to_numpy(dtype=float)
+    return (1 + r) * (1 + arithmetic_mean) / (1 + r.mean()) - 1
+
+
+def arithmetic_from_compounded(compounded: float, volatility: float) -> float:
+    """A compounded (typical) yearly return -> the simple average year that produces it at this volatility."""
+    return compounded + volatility ** 2 / 2

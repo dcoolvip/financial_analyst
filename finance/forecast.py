@@ -51,6 +51,7 @@ class Assumptions:
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
+    single_stock_share: float = 0.0       # share of investments held in one company (Apple): its bigger swings
     # Retirement (see retirement.py). people: [{name, born 'YYYY-MM', retire_age, pay (monthly take-home),
     # ss_monthly (today's $, at 67), ss_claim_age, k401_yearly (pre-tax in), roth_yearly, stock_yearly (RSU/ESPP
     # net)}]. With people, income = each person's pay until they retire + other_income + Social Security.
@@ -169,16 +170,27 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     loans, revolving = build_loans(bal)
 
     rng = np.random.default_rng(a.seed)
+    share = min(max(a.single_stock_share or 0.0, 0.0), 1.0)
     if a.replay_history and sigma > 0:
         # each simulated year is a real year from history, picked at random, scaled so the typical outcome
         # matches the return you chose (history's shape - crashes, booms - with your level)
-        from .history import _growth, stock_years
+        from .history import _growth, apple_years, stock_years
         real = stock_years()
         scaled = (1 + real) * (1 + a.investment_return) / (1 + _growth(pd.Series(real))) - 1
-        picks = scaled[rng.integers(0, len(scaled), size=(sims, -(-months // 12)))]
+        n_years = -(-months // 12)
+        picks = scaled[rng.integers(0, len(scaled), size=(sims, n_years))]
+        if share:                            # one company: same average year as the market, Apple's swings
+            one = apple_years(float(np.mean(scaled)))
+            picks = share * one[rng.integers(0, len(one), size=(sims, n_years))] + (1 - share) * picks
         growth = np.repeat((1 + picks) ** (1 / 12), 12, axis=1)[:, :months]
     else:
-        mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
+        typical = a.investment_return
+        if share:                            # the expected path: the typical compounded result with those swings
+            from .history import APPLE, arithmetic_from_compounded
+            arith = arithmetic_from_compounded(a.investment_return, a.investment_volatility)
+            vol = np.sqrt((share * float(APPLE.std(ddof=1))) ** 2 + ((1 - share) * a.investment_volatility) ** 2)
+            typical = arith - vol ** 2 / 2
+        mu = np.log1p(typical) / 12 - sigma**2 / 24
         growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
     paths_r = np.stack([rate_path(r.rate, r.long_run, r.years, r.source, months) for r in vt.itertuples()], axis=1) \
         if len(vt) else np.zeros((months, 0))                    # months x assets: each one's rate, fading

@@ -428,7 +428,9 @@ with tab_future:
                         "investment_volatility": h30["stock_volatility"], "home_appreciation": h30["homes"],
                         "cash_yield": your_cash["yield"] if your_cash else h30["cash"],
                         "invest_share": totals.get("Investments", 0) / liquid if liquid else 0.8,
-                        "income_growth": 0.0}
+                        "income_growth": 0.0,
+                        "single_stock_share": max([sh for _, sh in portfolio.summarize(db.latest_holdings(conn))["concentrated"]]
+                                                  or [0.0])}
         if db.get_setting(conn, "assumptions") is None:
             saved.monthly_savings = round(est_savings or 0, -1)
             for k, v in from_history.items():
@@ -571,6 +573,12 @@ with tab_future:
                                                format="%d%%", help=f"The rest stays in cash. Starts at how you hold "
                                                f"money today: {pct(from_history['invest_share'])} of your cash + "
                                                f"investments is invested.") / 100
+                    a.single_stock_share = st.slider(
+                        "Held in one company (Apple)", 0, 100, int(round(saved.single_stock_share * 100)), 1,
+                        format="%d%%", help=f"Starts at your actual share ({from_history['single_stock_share']:.0%}), "
+                        "kept as is (no shift to bonds). One company is expected to earn about what the market does "
+                        "in an average year, but swings about twice as much (Apple: ±31%/yr over 2011-2025). "
+                        "Bigger swings mean a lower typical compounded result and a much wider range.") / 100
                     a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.05, format="%.2f%%",
                                              help=(f"What your cash actually earned over the last 12 months: "
                                                    f"{money(your_cash['interest'])} of interest on "
