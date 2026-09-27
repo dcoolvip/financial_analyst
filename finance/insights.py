@@ -17,12 +17,13 @@ from .categorize import merchant_key
 GROUPS = {
     "checking": "Cash", "savings": "Cash",
     "brokerage": "Investments", "retirement": "Investments",
-    "property": "Property", "vehicle": "Property", "other_asset": "Property",
+    "property": "Property & valuables", "vehicle": "Property & valuables", "collectible": "Property & valuables",
+    "precious_metal": "Property & valuables", "other_asset": "Property & valuables",
     "mortgage": "Loans", "auto_loan": "Loans", "heloc": "Loans", "personal_loan": "Loans",
     "student_loan": "Loans", "other_liability": "Loans",
     "credit_card": "Credit cards",
 }
-ASSET_GROUPS = ["Cash", "Investments", "Property"]
+ASSET_GROUPS = ["Cash", "Investments", "Property & valuables"]
 DEBT_GROUPS = ["Loans", "Credit cards"]
 
 # Money moving between your own accounts - neither income nor spending

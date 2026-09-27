@@ -15,7 +15,7 @@ from __future__ import annotations
 import io
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 MONEY = r"\$?\s*(-?[\d,]+\.\d{2})"
 _DATE_NUM = r"(\d{1,2}/\d{1,2}/\d{2,4})"
@@ -126,6 +126,8 @@ def _line_money(text: str, label: str) -> float | None:
 
 
 def _institution(text: str) -> str:
+    if "goldman sachs bank usa" in text.lower() and "daily cash" in text.lower():
+        return "Apple Savings"                                   # Apple's savings account, run by Goldman Sachs
     m = re.search(r"\b(?:The\s+)?((?:[A-Z][\w&.'-]*|\d+)(?:\s+(?:[A-Z][\w&.'-]*|\d+)){0,4}\s+Credit Union)\b", text)
     if m:                                                    # e.g. "The Golden 1 Credit Union"
         return m.group(1)
@@ -144,6 +146,7 @@ def _last4(text: str) -> str | None:
     for pat in (r"(?:account|loan)\s*(?:number|no\.?|#)\s*:?\s*([\dX*•][\dA-Z*•\- ]{3,24}\d)",
                 r"(?:primary account)\s*:?\s*([\dA-Z][\dA-Z\-]{3,20}\d)",
                 r"\b(\d{3}-\d{6}-\d{3})\b",            # Morgan Stanley / E*TRADE style
+                r"(?m)^\s*Account\s+(\d{8,17})\s*$",    # "Account 910100019753" on its own line
                 r"[X*•]{2,}[\s-]*(\d{4})\b"):
         m = re.search(pat, text, re.IGNORECASE)
         if m:
@@ -196,6 +199,17 @@ def _parse_loan(s: Statement, t: str) -> None:
     s.as_of = _date_after(t, [r"statement date", r"as of", r"statement period"])
 
 
+def _opening_balance(s: Statement, t: str) -> None:
+    """'Beginning balance on August 1, 2026 $X' / 'Beginning Balance (as of Aug 1) $X' / 'Opening Balance $X'
+    -> the value at the end of the previous month."""
+    if not s.as_of:
+        return
+    m = re.search(rf"(?:beginning|opening) balance[^$\n]{{0,40}}{MONEY}", t, re.IGNORECASE)
+    if m:
+        start = date(s.as_of.year, s.as_of.month, 1)
+        s.history.append((start - timedelta(days=1), _money(m.group(1)), True))
+
+
 def _parse_deposit(s: Statement, t: str) -> None:
     s.account_type = "savings" if re.search(r"\bsavings\b", t, re.IGNORECASE) and not re.search(
         r"\bchecking\b", t, re.IGNORECASE) else "checking"
@@ -210,6 +224,9 @@ def _parse_deposit(s: Statement, t: str) -> None:
         m = re.search(rf"(?:to|through|-)\s*{_DATE_LONG}", t, re.IGNORECASE) or \
             re.search(rf"(?:to|through|-)\s*{_DATE_NUM}", t, re.IGNORECASE)
         s.as_of = _parse_date(m.group(1)) if m else _date_after(t, [r"statement date", r"statement period"])
+    if s.as_of is None:                                          # "Aug 1, 2026 - Aug 31, 2026"
+        s.as_of = _period_end(t)
+    _opening_balance(s, t)
 
 
 def _parse_card(s: Statement, t: str) -> None:

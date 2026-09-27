@@ -113,7 +113,8 @@ st.markdown(f"""
 
 TYPE_LABELS = {
     "checking": "Checking", "savings": "Savings", "brokerage": "Brokerage", "retirement": "Retirement (401k/IRA)",
-    "property": "Home / real estate", "vehicle": "Vehicle", "other_asset": "Other asset",
+    "property": "Home / real estate", "vehicle": "Vehicle", "collectible": "Collectibles (cards, art…)",
+    "precious_metal": "Gold / precious metals", "other_asset": "Other asset",
     "credit_card": "Credit card", "mortgage": "Mortgage", "auto_loan": "Auto loan", "heloc": "HELOC",
     "personal_loan": "Personal loan", "student_loan": "Student loan", "other_liability": "Other debt",
 }

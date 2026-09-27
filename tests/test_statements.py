@@ -371,3 +371,27 @@ def test_robinhood_multi_account_pdf_splits_into_accounts():
     assert got[1].history == [(date(2025, 7, 31), 2_000.0, True)]
     assert {h["symbol"]: h["value"] for h in got[1].holdings} == {"SPY": 1_400.0, "NVDA": 1_000.0, "CASH": 50.0}
     assert not any(s.notes for s in got)                                    # values match their positions
+
+
+APPLE_SAVINGS = """Statement
+Savings Customer:
+Jane Sample, jane@example.com Aug 1, 2025 - Aug 31, 2025
+Account 910100011111
+Routing 124085082
+Deposit products provided by Goldman Sachs Bank USA, Salt Lake City Branch. Member FDIC.
+Account Activity
+Date Description Amount Balance
+08/01/2025 Opening Balance $300.00
+08/02/2025 Daily Cash Deposit $20.00 $320.00
+Closing Balance $320.00
+Account Summary
+Beginning Balance (as of Aug 1) $300.00
+Ending Balance (as of Aug 31) $320.00
+"""
+
+
+def test_apple_savings_statement():
+    s = parse_text(APPLE_SAVINGS)
+    assert (s.kind, s.account_type, s.institution, s.last4) == ("deposit", "savings", "Apple Savings", "1111")
+    assert s.balance == 320 and s.as_of == date(2025, 8, 31)
+    assert s.history == [(date(2025, 7, 31), 300.0, True)]                     # opening balance = July 31

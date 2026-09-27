@@ -17,7 +17,10 @@ from . import paths
 
 ROOT = Path(__file__).resolve().parent.parent
 
-ASSET_TYPES = ["checking", "savings", "brokerage", "retirement", "property", "vehicle", "other_asset"]
+ASSET_TYPES = ["checking", "savings", "brokerage", "retirement", "property", "vehicle", "collectible",
+               "precious_metal", "other_asset"]
+# Things you own that aren't accounts: valued by hand (or synced), each growing at its own yearly rate
+VALUABLE_TYPES = ["property", "vehicle", "collectible", "precious_metal", "other_asset"]
 LIABILITY_TYPES = ["credit_card", "mortgage", "auto_loan", "heloc", "personal_loan", "student_loan", "other_liability"]
 ACCOUNT_TYPES = ASSET_TYPES + LIABILITY_TYPES
 
