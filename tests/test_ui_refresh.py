@@ -629,9 +629,8 @@ def test_future_retirement_controls_from_household_settings(env):
     pays = {n.key: n.value for n in at.number_input if n.key and n.key.startswith("pay_")}
     assert pays == {"pay_Alex": 8_000, "pay_Blair": 6_000}
     assert {x.key for x in at.slider if x.key} >= {"retire_Alex", "retire_Blair", "claim_Alex", "claim_Blair"}
-    from finance import retirement
-    oldest = retirement.age_on(f"{today.year - 50}-01", today)
-    assert next(x.value for x in at.slider if x.label == "Years ahead") == round(90 - oldest)   # until the oldest is 90
+    assert next(x.value for x in at.slider if x.label == "Plan until the younger of you is") == 95
+    assert not any(x.label == "Years ahead" for x in at.slider)                        # the planning age sets it
     assert any("SSA estimate" in c.value for c in at.caption)                             # Blair has SSA figures
     at.slider(key="retire_Alex").set_value(55).run()
     assert not at.exception

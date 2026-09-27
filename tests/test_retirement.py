@@ -123,3 +123,15 @@ def test_retired_years_use_real_brackets_and_fill_the_24_percent_bracket_with_ro
     assert f.loc[late, "out_401k"] < r.loc[late, "out_401k"]                        # smaller required withdrawals
     after_tax = lambda fc: fc.expected["net_worth"].iloc[-1] - 0.45 * fc.expected["pretax"].iloc[-1]   # noqa: E731
     assert after_tax(fill) > after_tax(req)                    # counting the tax still owed on the 401(k)
+
+
+def test_kids_supported_after_college_worst_case():
+    now = pd.Timestamp.today()
+    kids = [{"name": "K1", "born": f"{now.year - 10}-{now.month:02d}"}, {"name": "K2", "born": f"{now.year - 10}-{now.month:02d}"}]
+    life = _run(years=30, kids=kids, kid_support_yearly=35_000, college_extra_growth=0.0).cash_flow.set_index("period")
+    none = _run(years=30, kids=kids, kid_support_yearly=0.0, college_extra_growth=0.0).cash_flow.set_index("period")
+    assert life.loc[11, "kid_support"] == 0                                  # still in college at 21
+    assert life.loc[13, "kid_support"] == pytest.approx(2 * 35_000)          # both at home after college
+    assert life.loc[29, "kid_support"] == pytest.approx(2 * 35_000)          # for life
+    until26 = _run(years=30, kids=kids, kid_support_yearly=35_000, kid_support_until_age=26).cash_flow.set_index("period")
+    assert until26.loc[20, "kid_support"] == 0 and none["kid_support"].sum() == 0

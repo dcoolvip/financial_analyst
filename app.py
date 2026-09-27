@@ -469,8 +469,8 @@ with tab_future:
         pretax_total = sum((db.get_setting(conn, f"tax_sources:{int(i)}") or {}).get(k, 0.0)
                            for i in accts.loc[accts["type"] == "retirement", "id"]
                            for k in ("pre_tax", "employer_match", "after_tax"))
-        if household and db.get_setting(conn, "assumptions") is None:     # through the oldest turning 90
-            saved.years = int(min(50, round(90 - max(retirement.age_on(p["born"], now_ts) for p in household))))
+        youngest = min(retirement.age_on(p["born"], now_ts) for p in household) if household else None
+        planning_age = int((db.get_setting(conn, "assumptions") or {}).get("planning_age", 95))
         saved_people = {q.get("name"): q for q in (saved.people or [])}
         kids = db.get_setting(conn, "household_kids") or []
         kid_costs = 0.0
@@ -489,8 +489,16 @@ with tab_future:
             with st.container(border=not PHONE):
                 if not PHONE:
                     st.markdown("**Your assumptions**")
+                if household:           # plan until the younger of you reaches this age (people often outlive averages)
+                    planning_age = st.slider(
+                        "Plan until the younger of you is", 85, 105, planning_age, 1,
+                        help="Life expectancy for someone your age and income is late 80s; a couple has about a 1-in-5 "
+                             "chance one of you reaches 95. Planners usually use 95, sometimes 100.")
+                    years_ahead = int(round(planning_age - youngest))
+                else:
+                    years_ahead = st.slider("Years ahead", 5, 50, min(50, saved.years))
                 a = forecast.Assumptions(
-                    years=st.slider("Years ahead", 5, 50, min(50, saved.years)),
+                    years=years_ahead,
                     inflation=st.slider("Inflation", 0.0, 8.0, saved.inflation * 100, 0.05, format="%.2f%%",
                                         help="Living costs rise at this rate every year; loan payments don't. "
                                              "Starts at the 30-year average of US consumer prices. "
@@ -548,6 +556,7 @@ with tab_future:
                             value=float(saved.other_income if saved.other_income is not None else round(other_default, -2)),
                             help="Continues after retiring and grows with inflation.")
                         a.monthly_income = sum(q["pay"] for q in people_now) + a.other_income
+                        a.planning_age = planning_age
                         if kids:
                             st.markdown("**Kids**", help="There's no separate college fund, so college is paid from "
                                         "savings and investments (selling shares, with capital-gains tax).")
@@ -563,6 +572,18 @@ with tab_future:
                                 0.25, format="%.2f%%", help="Tuition has historically outpaced prices in general.") / 100
                             st.caption(f"{ages} now. Today's kids' costs ({money(kid_costs)}/month: school, activities, "
                                        "care) leave the budget when each starts college.")
+                            until = {"life": 200, "30": 30, "26": 26, "none": 0}
+                            now_until = next((k for k, v in until.items() if v == saved.kid_support_until_age), "life")
+                            pick = st.selectbox("Supporting them after college", list(until), index=list(until).index(now_until),
+                                                format_func={"life": "For life (worst case: no jobs)", "30": "Until 30",
+                                                             "26": "Until 26", "none": "No support"}.get,
+                                                help="Living at home after college: food and household costs, their own "
+                                                     "health insurance, a car, phone, spending money.")
+                            a.kid_support_until_age = until[pick]
+                            a.kid_support_yearly = 0.0 if pick == "none" else st.number_input(
+                                "Support per child per year ($)", step=2_500.0,
+                                value=float(saved.kid_support_yearly or 35_000.0),
+                                help="Today's dollars, rising with inflation.")
                         a.pretax_balance = pretax_total
                         a.roth_balance = roth_total
                         a.dividends_monthly = yearly_div / 12
@@ -795,7 +816,8 @@ with tab_future:
                     who = person["name"]
                     events += [(born.year + person.get("retire_age", 65), f"{who} retires"),
                                (born.year + person.get("ss_claim_age", 67), f"{who} Social Security"),
-                               (born.year + retirement.MEDICARE_AGE, f"{who} Medicare")]
+                               (born.year + retirement.MEDICARE_AGE, f"{who} Medicare"),
+                               (born.year + 90, f"{who} 90")]
                 starts = sorted({pd.Timestamp(f"{k['born']}-01").year + a.college_start_age for k in (a.kids or [])})
                 for y in starts:
                     names = " & ".join(k["name"] for k in a.kids

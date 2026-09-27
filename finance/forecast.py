@@ -72,6 +72,8 @@ class Assumptions:
     college_years: int = 4
     college_start_age: int = 18
     college_extra_growth: float = 0.02        # college costs grow this much faster than inflation
+    kid_support_yearly: float = 0.0           # per child after college, today's dollars (living at home, insurance...)
+    kid_support_until_age: int = 200          # 200 = for life
     use_tax_brackets: bool = True             # once everyone is retired: federal + CA tax each year (taxes.py)
     withdrawal_strategy: str = "fill24"       # "required" (RMDs only) or "fill22"/"fill24"/"fill32": each retired
                                               # year, convert 401(k) money to Roth up to the top of that bracket
@@ -252,8 +254,9 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     stk_basis = stk * (1 - a.gain_share)
     # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
     # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending),
-    # capital-gains tax on shares sold to cover spending, college, Roth conversions, income tax (retired years)
-    flow = np.zeros((months, 13))
+    # capital-gains tax on shares sold to cover spending, college, Roth conversions, income tax (retired years),
+    # supporting the kids after college
+    flow = np.zeros((months, 14))
     kids = [k for k in (a.kids or []) if k.get("born")] if people else []
     kid_ages0 = [ret.age_on(k["born"], now) for k in kids] if kids else []
     nw = np.empty((sims, months + 1))
@@ -344,8 +347,11 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                       - (a.income_tax_monthly if bracket else 0.0)) * price  # retired: tax computed instead
             in_college = sum(1 for k in kid_ages if a.college_start_age <= k < a.college_start_age + a.college_years)
             college = in_college * a.college_yearly / 12 * (1 + a.inflation + a.college_extra_growth) ** years
+            after = a.college_start_age + a.college_years
+            supported = sum(1 for k in kid_ages if after <= k < a.kid_support_until_age)
+            support = supported * a.kid_support_yearly / 12 * price
             income = pay + other + ss
-            save = income - living - paid - health - college
+            save = income - living - paid - health - college - support
             # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
             pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
             rth += sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
@@ -381,6 +387,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                     flow[m - 1, 11] = float(conv.mean())
             flow[m - 1, :7] = [income, living, paid, health, pay, ss, other]
             flow[m - 1, 10] = college
+            flow[m - 1, 13] = support
         elif split:
             income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
             living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
@@ -414,7 +421,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                 raise_cash(short)
             flow[m - 1, 12] = float(tax.mean())
         if people and m % 12 == 0:               # year end: cash beyond a year of spending gets invested
-            spare = np.maximum(cash - 12 * (living + paid + health + college), 0)
+            spare = np.maximum(cash - 12 * (living + paid + health + college + support), 0)
             cash -= spare
             inv += spare
             inv_basis += spare
@@ -464,7 +471,7 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     cash_flow = pd.DataFrame()
     if flow is not None:                                  # per year, nominal and in today's dollars
         f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k",
-                                        "out_401k", "cg_tax", "college", "roth_conv", "income_tax"])
+                                        "out_401k", "cg_tax", "college", "roth_conv", "income_tax", "kid_support"])
         f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
         f["deflator"] = deflator[1:]
         f["month"] = dates[1:]
@@ -473,14 +480,14 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
                                             ss=("ss", "sum"), other=("other", "sum"), tax_401k=("tax_401k", "sum"),
                                             out_401k=("out_401k", "sum"), cg_tax=("cg_tax", "sum"),
                                             college=("college", "sum"), roth_conv=("roth_conv", "sum"),
-                                            income_tax=("income_tax", "sum"),
+                                            income_tax=("income_tax", "sum"), kid_support=("kid_support", "sum"),
                                             deflator=("deflator", "mean"),
                                             months=("income", "size"), first=("month", "min"), last=("month", "max"))
         cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
         cash_flow["saved"] = (cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
-                              - cash_flow["college"])
+                              - cash_flow["college"] - cash_flow["kid_support"])
         for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "out_401k", "cg_tax",
-                  "college", "roth_conv", "income_tax", "saved"):
+                  "college", "roth_conv", "income_tax", "kid_support", "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
     return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)
