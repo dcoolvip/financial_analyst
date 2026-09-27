@@ -801,7 +801,7 @@ with tab_accounts:
                          column_config={"grant_date": "Granted", "type": "Type", "symbol": "Symbol",
                                         "quantity": st.column_config.NumberColumn("Shares", format="%,.0f"),
                                         "value": st.column_config.NumberColumn("Value", format="$%,.0f")})
-        acct_txns = txns[txns["account"] == pick]
+        acct_txns = insights.enrich(txns[txns["account"] == pick], rule_map)   # same categories as Money in & out
         if len(acct_txns):
             with st.expander(f"This account's {len(acct_txns):,} transactions ({acct_txns['date'].min():%b %Y} – "
                              f"{acct_txns['date'].max():%b %Y})"):

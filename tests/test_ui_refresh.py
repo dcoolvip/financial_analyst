@@ -465,6 +465,13 @@ def test_accounts_in_sections_with_plain_column_names_and_details(env, monkeypat
     assert values["how"].str.startswith("Estimated").sum() == 14
     assert any(m.label == "Values on record" and m.value == "15 (14 est.)" for m in at.metric)
     assert any("Future tab:" in m.value for m in at.markdown)
+    at.selectbox(key="acct_detail").set_value("Checking").run()
+    db.insert_transactions(conn, chk, pd.DataFrame([("2026-09-01", "SAFEWAY #123", -80.0, "s1")],
+                                                   columns=["date", "description", "amount", "fingerprint"]), "x")
+    at.run()
+    own = next(d.value for d in at.dataframe if "category" in d.value.columns and "merchant" in d.value.columns
+               and set(d.value["account"]) == {"Checking"} and len(d.value) == 1)
+    assert own["category"].iloc[0] == "Groceries"                          # regression: showed None
     at.selectbox(key="acct_detail").set_value("Car loan").run()
     assert any("payments left" in m.value for m in at.markdown)
     assert next(d.value for d in at.dataframe if "how" in d.value.columns)["how"].iloc[0] == "Imported from statement.pdf"
