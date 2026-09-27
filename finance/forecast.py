@@ -51,7 +51,8 @@ class Assumptions:
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
-    single_stock_share: float = 0.0       # share of investments held in one company (Apple): its bigger swings
+    single_stock_share: float = 0.0       # share of investments held in one company (Apple), kept as is
+    single_stock_scenario: str = "economy"  # its path: history.SINGLE_STOCK_PATHS
     # Retirement (see retirement.py). people: [{name, born 'YYYY-MM', retire_age, pay (monthly take-home),
     # ss_monthly (today's $, at 67), ss_claim_age, k401_yearly (pre-tax in), roth_yearly, stock_yearly (RSU/ESPP
     # net)}]. With people, income = each person's pay until they retire + other_income + Social Security.
@@ -171,27 +172,29 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
 
     rng = np.random.default_rng(a.seed)
     share = min(max(a.single_stock_share or 0.0, 0.0), 1.0)
+    n_years = -(-months // 12)
     if a.replay_history and sigma > 0:
         # each simulated year is a real year from history, picked at random, scaled so the typical outcome
         # matches the return you chose (history's shape - crashes, booms - with your level)
-        from .history import _growth, apple_years, stock_years
+        from .history import _growth, stock_years
         real = stock_years()
         scaled = (1 + real) * (1 + a.investment_return) / (1 + _growth(pd.Series(real))) - 1
-        n_years = -(-months // 12)
         picks = scaled[rng.integers(0, len(scaled), size=(sims, n_years))]
-        if share:                            # one company: same average year as the market, Apple's swings
-            one = apple_years(float(np.mean(scaled)))
-            picks = share * one[rng.integers(0, len(one), size=(sims, n_years))] + (1 - share) * picks
         growth = np.repeat((1 + picks) ** (1 / 12), 12, axis=1)[:, :months]
     else:
-        typical = a.investment_return
-        if share:                            # the expected path: the typical compounded result with those swings
-            from .history import APPLE, arithmetic_from_compounded
-            arith = arithmetic_from_compounded(a.investment_return, a.investment_volatility)
-            vol = np.sqrt((share * float(APPLE.std(ddof=1))) ** 2 + ((1 - share) * a.investment_volatility) ** 2)
-            typical = arith - vol ** 2 / 2
-        mu = np.log1p(typical) / 12 - sigma**2 / 24
+        mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
         growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
+    # One company's shares (Apple) follow their own path - grows with the economy, or like IBM / GE / GM did -
+    # with that company's real yearly swings around it in the simulations. Never rebalanced ("no shift").
+    stk_growth = np.ones((sims, months))
+    if share:
+        from .history import single_stock_path, single_stock_swings
+        path = single_stock_path(a.single_stock_scenario, n_years, a.investment_return)
+        yearly = np.tile(1 + path, (sims, 1))
+        if sigma > 0:
+            swings = single_stock_swings()
+            yearly = np.where(yearly <= 0, 0.0, yearly * swings[rng.integers(0, len(swings), size=(sims, n_years))])
+        stk_growth = np.repeat(np.maximum(yearly, 0.0) ** (1 / 12), 12, axis=1)[:, :months]
     paths_r = np.stack([rate_path(r.rate, r.long_run, r.years, r.source, months) for r in vt.itertuples()], axis=1) \
         if len(vt) else np.zeros((months, 0))                    # months x assets: each one's rate, fading
     v_mu = np.log1p(paths_r) / 12 - v_vol**2 / 24
@@ -200,7 +203,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     cash_r = (1 + a.cash_yield) ** (1 / 12) - 1
 
     cash = np.full(sims, cash0, dtype=float)
-    inv = np.full(sims, inv0, dtype=float)
+    stk = np.full(sims, share * inv0, dtype=float)            # the one company's shares
+    inv = np.full(sims, inv0 - share * inv0, dtype=float)     # everything else invested
     loan_bal = np.array([l.balance for l in loans], dtype=float)
     loan_rate = np.array([l.apr / 12 for l in loans], dtype=float)
     loan_pay = np.array([l.payment for l in loans], dtype=float)
@@ -212,7 +216,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         from . import retirement as ret
         now = pd.Timestamp.today().normalize()
         ages0 = [ret.age_on(p["born"], now) for p in people]
-        pre = np.full(sims, min(float(a.pretax_balance or 0), inv0), dtype=float)
+        pre = np.full(sims, min(float(a.pretax_balance or 0), float(inv[0])), dtype=float)
         inv = inv - pre                        # taxable investments; pre-tax 401(k) kept apart
     else:
         pre = np.zeros(sims)
@@ -224,8 +228,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     paths = np.empty((months + 1, val.shape[1]))
     paths[0] = val.mean(axis=0)
     debt = loan_bal.sum() + revolving
-    nw[:, 0] = cash + inv + pre + val.sum(axis=1) - debt
-    parts[0] = [cash.mean(), (inv + pre).mean(), val.sum(axis=1).mean(), debt]
+    nw[:, 0] = cash + inv + pre + stk + val.sum(axis=1) - debt
+    parts[0] = [cash.mean(), (inv + pre + stk).mean(), val.sum(axis=1).mean(), debt]
 
     changes = {}
     names = [l.name for l in loans]
@@ -267,7 +271,12 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             save = income - living - paid - health
             # while working: 401(k) contributions (pre-tax + match), after-tax -> Roth, RSU/ESPP shares
             pre += sum(p.get("k401_yearly", 0) for p, w in zip(people, working) if w) / 12
-            inv += sum(p.get("roth_yearly", 0) + p.get("stock_yearly", 0) for p, w in zip(people, working) if w) / 12
+            inv += sum(p.get("roth_yearly", 0) for p, w in zip(people, working) if w) / 12
+            new_stock = sum(p.get("stock_yearly", 0) for p, w in zip(people, working) if w) / 12   # RSU/ESPP shares
+            if share:
+                stk += new_stock
+            else:
+                inv += new_stock
             oldest = max(ages)
             if (m - 1) % 12 == 0 and oldest >= a.rmd_age and (d := ret.rmd_divisor(oldest)):
                 out = pre / d                      # required yearly withdrawal, taxed, rest reinvested
@@ -284,6 +293,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             save = a.monthly_savings * (1 + a.savings_growth) ** ((m - 1) // 12) + freed
         inv = inv * growth[:, m - 1]
         pre = pre * growth[:, m - 1]
+        stk = stk * stk_growth[:, m - 1]
         cash = cash * (1 + cash_r)
         if save >= 0:
             inv += save * a.invest_share
@@ -293,6 +303,10 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             short = np.minimum(cash, 0)          # overdraw cash first, then taxable investments,
             cash -= short
             inv += short
+            need = np.maximum(-inv, 0)           # then the one company's shares
+            sold = np.minimum(need, stk)
+            stk -= sold
+            inv = np.where(inv < 0, inv + sold, inv)
             if people:                           # then pre-tax 401(k): taxed (and +10% before 59.5)
                 need = np.maximum(-inv, 0)
                 inv = np.maximum(inv, 0)
@@ -305,8 +319,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
         val = val * v_growth[:, m - 1, :]
         paths[m] = val.mean(axis=0)
         debt = loan_bal.sum() + revolving
-        nw[:, m] = cash + inv + pre + val.sum(axis=1) - debt
-        parts[m] = [cash.mean(), (inv + pre).mean(), val.sum(axis=1).mean(), debt]
+        nw[:, m] = cash + inv + pre + stk + val.sum(axis=1) - debt
+        parts[m] = [cash.mean(), (inv + pre + stk).mean(), val.sum(axis=1).mean(), debt]
     return nw, parts, loans, payoff, vt, paths, (flow if split else None)
 
 

@@ -386,3 +386,17 @@ def test_one_company_same_average_year_bigger_swings():
     assert o["p50"] < 0.02 * 1_000_000 * 1.27 ** 30                            # nowhere near Apple's past x1300
     exp_one, exp_mkt = one.expected["investments"].iloc[-1], mkt.expected["investments"].iloc[-1]
     assert exp_one < exp_mkt                                                     # the expected path agrees
+
+
+def test_single_stock_paths_like_past_dominant_companies():
+    port = accts([("Brokerage", "brokerage", 1_000_000, None, None)])
+    end = {}
+    for kind in ("market", "economy", "ibm", "ge", "gm"):
+        fc = forecast.run(port, forecast.Assumptions(years=30, investment_return=0.10, inflation=0.0, simulations=500,
+                                                     single_stock_share=1.0, single_stock_scenario=kind))
+        end[kind] = fc.expected["investments"].iloc[-1]
+    assert end["market"] > end["economy"] > end["ibm"] > end["ge"] > end["gm"] == 0     # GM: the shares go to $0
+    assert end["economy"] == pytest.approx(1_000_000 * 1.074 ** 30, rel=0.01)
+    half = forecast.run(port, forecast.Assumptions(years=30, investment_return=0.10, inflation=0.0, simulations=500,
+                                                   single_stock_share=0.5, single_stock_scenario="gm"))
+    assert half.expected["investments"].iloc[-1] == pytest.approx(500_000 * 1.10 ** 30, rel=0.01)   # the rest lives on

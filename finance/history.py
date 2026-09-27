@@ -65,18 +65,47 @@ def stock_years() -> np.ndarray:
 
 
 # Apple (AAPL) total return per year, 2011-2025 - approximate, same caveats as above. Used only for the SHAPE of
-# a single big company's years (how far it swings), never its level: nobody should plan on 27%/yr for decades.
+# a single big company's years (how far it swings, see single_stock_swings), never its level: nobody should plan
+# on 27%/yr for decades.
 APPLE = pd.Series([25.6, 32.6, 8.1, 40.0, -3.0, 12.5, 48.5, -5.4, 89.0, 82.3, 34.6, -26.4, 49.0, 30.7, 9.0],
                   index=range(2011, 2026)) / 100
 
 
-def apple_years(arithmetic_mean: float) -> np.ndarray:
-    """Apple's real yearly returns, shifted so their simple average equals `arithmetic_mean` (the market's):
-    the same expected year as the market, with Apple's much bigger swings."""
-    r = APPLE.to_numpy(dtype=float)
-    return (1 + r) * (1 + arithmetic_mean) / (1 + r.mean()) - 1
+# What one dominant company's stock might do from here, as a typical yearly return per coming year. Stylized from
+# what happened to past #1 US companies after their peak (approximate, total return with dividends):
+#   IBM after ~1985: fell ~75% by 1993, then recovered; roughly 4-5%/yr over ~40 years
+#   GE after 2000: fell ~85-90% (2009, 2018), partial recovery after the split-up; roughly 1%/yr over 25 years
+#   GM after the 1960s: decades of decline, then bankruptcy in 2009 - shareholders got $0
+# After a stylized episode ends, the stock grows with the economy again.
+GROWS_WITH_ECONOMY = 0.074     # ~4.5%/yr nominal GDP growth + ~2.9%/yr returned via buybacks and dividends
+SINGLE_STOCK_PATHS = {
+    "economy": "Grows with the economy (~7.4%/yr)",
+    "market": "Keeps up with the stock market",
+    "ibm": "Like IBM after 1985: -75% over 6 years, then recovers",
+    "ge": "Like GE after 2000: -85% over 9 years, ~1%/yr over 25 years",
+    "gm": "Like GM after the 1960s: declines, then $0 after 25 years",
+}
 
 
-def arithmetic_from_compounded(compounded: float, volatility: float) -> float:
-    """A compounded (typical) yearly return -> the simple average year that produces it at this volatility."""
-    return compounded + volatility ** 2 / 2
+def single_stock_path(kind: str, years: int, market_return: float) -> np.ndarray:
+    """Typical yearly return of the single stock for each coming year."""
+    tail = lambda n: [GROWS_WITH_ECONOMY] * max(n, 0)          # noqa: E731
+    if kind == "market":
+        path = [market_return] * years
+    elif kind == "ibm":
+        path = [-0.20] * 6 + [0.091] * 31
+    elif kind == "ge":
+        path = [-0.19] * 9 + [0.143] * 16
+    elif kind == "gm":
+        path = [-0.05] * 24 + [-1.0]                            # bankruptcy in year 25; nothing after
+        return np.array((path + [0.0] * years)[:years])
+    else:
+        path = []
+    return np.array((path + tail(years - len(path)))[:years])
+
+
+def single_stock_swings() -> np.ndarray:
+    """Apple's real yearly swings around its typical path: factors whose compounded average is 1, so a
+    simulated year is typical-path x a real Apple year's deviation."""
+    r = 1 + APPLE.to_numpy(dtype=float)
+    return r / (np.prod(r) ** (1 / len(r)))

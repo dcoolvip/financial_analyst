@@ -579,6 +579,16 @@ with tab_future:
                         "kept as is (no shift to bonds). One company is expected to earn about what the market does "
                         "in an average year, but swings about twice as much (Apple: ±31%/yr over 2011-2025). "
                         "Bigger swings mean a lower typical compounded result and a much wider range.") / 100
+                    if a.single_stock_share:
+                        paths_ = list(history.SINGLE_STOCK_PATHS)
+                        a.single_stock_scenario = st.selectbox(
+                            "Apple's path", paths_, format_func=history.SINGLE_STOCK_PATHS.get,
+                            index=paths_.index(saved.single_stock_scenario) if saved.single_stock_scenario in paths_ else 0,
+                            help="What Apple's stock does from here - the typical path, with Apple's real ±31%/yr swings "
+                                 "around it. Growing with the economy keeps Apple at about today's share of it (~15% of "
+                                 "US GDP); keeping up with the market for 43 years would take Apple to ~44% of US GDP, "
+                                 "which no company has come close to. IBM, GE and GM show what happened to past #1 "
+                                 "US companies after their peak.")
                     a.cash_yield = st.slider("Cash interest", 0.0, 6.0, saved.cash_yield * 100, 0.05, format="%.2f%%",
                                              help=(f"What your cash actually earned over the last 12 months: "
                                                    f"{money(your_cash['interest'])} of interest on "
@@ -657,7 +667,7 @@ with tab_future:
                 e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]
                 own0 = e0[f"cash{sfx}"] + e0[f"investments{sfx}"] + e0[f"property{sfx}"]
                 own1 = e1[f"cash{sfx}"] + e1[f"investments{sfx}"] + e1[f"property{sfx}"]
-                st.caption(f"Most likely path: you own {money(own0)} → {money(own1)} and owe {money(e0[f'debt{sfx}'])} "
+                st.caption(f"Typical path (each holding at its typical return): you own {money(own0)} → {money(own1)} and owe {money(e0[f'debt{sfx}'])} "
                            f"→ {money(e1[f'debt{sfx}'])} by {e1['date']:%Y}" + (" (today's dollars)." if real else ".")
                            + " Solid: recorded so far. Dashed: ahead.")
             else:

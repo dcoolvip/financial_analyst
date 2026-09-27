@@ -585,7 +585,7 @@ def test_future_own_and_owe_view(env):
     at = app()
     at.segmented_control(key="future_view").set_value("Own & owe").run()
     assert not at.exception
-    assert any(c.value.startswith("Most likely path: you own") for c in at.caption)
+    assert any(c.value.startswith("Typical path") for c in at.caption)
 
 
 def test_401k_statement_imports_as_a_retirement_account(env):
