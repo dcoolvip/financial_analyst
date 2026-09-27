@@ -53,8 +53,9 @@ def parse(content: bytes | str, filename: str = "") -> ParsedFile:
             continue
         desc = " ".join(r["Description"].split())
         out.append({"date": datetime.strptime(r["Transaction Date"].strip(), "%m/%d/%Y").date(),
-                    "description": desc, "amount": amount})
-    df = pd.DataFrame(out, columns=["date", "description", "amount"])
+                    "description": desc, "amount": amount,
+                    "bank_category": (r.get("Category") or "").strip() or None})
+    df = pd.DataFrame(out, columns=["date", "description", "amount", "bank_category"])
     key = df["date"].astype(str) + "|" + df["description"] + "|" + df["amount"].map("{:.2f}".format)
     df["fingerprint"] = key + "|" + key.groupby(key).cumcount().astype(str)          # identical same-day buys
     return ParsedFile(kind="credit_card", institution=INSTITUTION, transactions=df, balances=balances,

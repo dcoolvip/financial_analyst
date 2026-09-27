@@ -72,5 +72,6 @@ def _card(rows: list[dict]) -> ParsedFile:
            + df["amount"].map("{:.2f}".format))
     df["fingerprint"] = key + "|" + key.groupby(key).cumcount().astype(str)   # identical same-day purchases
     return ParsedFile(kind="credit_card", institution=INSTITUTION,
-                      transactions=df[["date", "description", "amount", "fingerprint"]].reset_index(drop=True),
+                      transactions=df.assign(bank_category=df.get("Category"))[
+                          ["date", "description", "amount", "bank_category", "fingerprint"]].reset_index(drop=True),
                       as_of=df["date"].max() if len(df) else None)

@@ -188,6 +188,7 @@ def kpi_row(items: list[tuple[str, str]]) -> None:
 
 accts = db.accounts(conn)
 txns = db.transactions(conn)
+categorize.match_loan_payments(conn, txns)          # payments at your loans' exact amount = that loan
 rule_map = categorize.rules(conn)
 nw = db.net_worth_series(conn)
 totals = insights.group_totals(accts) if len(accts) else {}

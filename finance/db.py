@@ -120,6 +120,9 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
         conn.execute("ALTER TABLE transactions ADD COLUMN purchaser TEXT")   # who made it, on shared cards
         _split_purchasers(conn)
         conn.commit()
+    if "bank_category" not in {r[1] for r in conn.execute("PRAGMA table_info(transactions)")}:
+        conn.execute("ALTER TABLE transactions ADD COLUMN bank_category TEXT")   # the bank's own label, a hint
+        conn.commit()
     if get_setting(conn, "merchant_key_version", 1) < 2:
         # merchant names now keep short numbers ("99 RANCH", not "RANCH"): carry saved categories over
         from .categorize import upgrade_rule_keys
@@ -399,8 +402,13 @@ def insert_transactions(conn, account_id: int, txns: pd.DataFrame, source: str) 
             for r in txns.itertuples()
         ],
     )
+    added = conn.total_changes - before
+    if "bank_category" in txns:          # also fills the hint in on rows an earlier import saved without it
+        conn.executemany("UPDATE transactions SET bank_category = ? WHERE fingerprint = ? AND bank_category IS NULL",
+                         [(r.bank_category, f"{account_id}|{r.fingerprint}") for r in txns.itertuples()
+                          if isinstance(r.bank_category, str) and r.bank_category])
     conn.commit()
-    return conn.total_changes - before
+    return added
 
 
 def transaction_overlap(conn, account_ids: list[int], fingerprints: list[str]) -> dict[int, int]:
@@ -418,7 +426,8 @@ def transaction_overlap(conn, account_ids: list[int], fingerprints: list[str]) -
 
 
 def transactions(conn, account_ids: list[int] | None = None) -> pd.DataFrame:
-    q = """SELECT t.id, t.date, a.name AS account, t.description, t.amount, t.category, t.purchaser
+    q = """SELECT t.id, t.date, a.name AS account, a.type AS account_type, t.description, t.amount, t.category,
+                  t.purchaser, t.bank_category
            FROM transactions t JOIN accounts a ON a.id = t.account_id"""
     params: list = []
     if account_ids:

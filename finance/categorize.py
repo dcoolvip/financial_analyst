@@ -126,7 +126,8 @@ def _ensure(conn) -> None:
 
 
 def rules(conn) -> dict[str, tuple[str, str]]:
-    """merchant -> (category, source)."""
+    """merchant -> (category, source). source: 'user' (yours, always wins), 'loan' (matched to one of your
+    loans' monthly payment), or 'ai'."""
     _ensure(conn)
     return {m: (c, src) for m, c, src in conn.execute("SELECT merchant, category, source FROM merchant_rules")}
 
@@ -142,6 +143,70 @@ def set_rule(conn, merchant: str, category: str, source: str = "user") -> None:
                         ON CONFLICT(merchant) DO UPDATE SET category = excluded.category, source = 'user'""",
                      (merchant, category))
     conn.commit()
+
+
+# --- context from the rest of your data --------------------------------------------
+
+LOAN_CATEGORY = {"mortgage": "Mortgage", "heloc": "Mortgage", "auto_loan": "Loan payments",
+                 "personal_loan": "Loan payments", "student_loan": "Loan payments"}
+
+
+def match_loan_payments(conn, txns: pd.DataFrame) -> dict[str, tuple[str, str]]:
+    """Payments from a bank account that repeat at one of your loans' exact monthly payment ARE that loan:
+    DOVENMUEHLE -$3,135.97 every month = the Golden 1 mortgage's $3,135.97 payment. Saved as 'loan' rules
+    (only your own choice beats them; the AI never overrides them). Returns {merchant: (category, loan name)}."""
+    _ensure(conn)
+    loans = conn.execute("SELECT name, type, payment FROM accounts WHERE active = 1 AND payment > 0 AND type IN "
+                         f"({','.join('?' * len(LOAN_CATEGORY))})", list(LOAN_CATEGORY)).fetchall()
+    if not loans or txns.empty:
+        return {}
+    out = txns[txns["amount"] < 0]
+    if "account_type" in out:
+        out = out[out["account_type"].isin(["checking", "savings"])]
+    out = out.assign(merchant=out["description"].map(merchant_key), paid=-out["amount"])
+    found = {}
+    for m, g in out.groupby("merchant"):
+        for name, kind, payment in loans:
+            hits = (g["paid"] - payment).abs() <= max(1.0, 0.01 * payment)
+            if hits.sum() >= 2 and hits.mean() >= 0.5:
+                found[m] = (LOAN_CATEGORY[kind], name)
+    known = rules(conn)
+    changed = False
+    for m, (cat, _name) in found.items():
+        if known.get(m, (None, None))[1] != "user" and known.get(m) != (cat, "loan"):
+            conn.execute("INSERT OR REPLACE INTO merchant_rules VALUES (?, ?, 'loan')", (m, cat))
+            changed = True
+    if changed:
+        conn.commit()
+    return found
+
+
+def household(conn) -> dict:
+    """What the AI is told about the household, to read transactions in context: who the loans are with and
+    their monthly payments, and where the cards, bank and investment accounts are - so a payment to one of
+    them reads as a bill payment or transfer. No account numbers, balances or names."""
+    rows = conn.execute("SELECT institution, type, payment FROM accounts WHERE active = 1").fetchall()
+    where = lambda types: sorted({i for i, t, _ in rows if t in types and i})   # noqa: E731
+    return {"loans": [{"lender": i, "kind": t.replace("_", " "), "monthly_payment": round(p, 2)}
+                      for i, t, p in rows if t in LOAN_CATEGORY and p],
+            "credit_cards_at": where({"credit_card"}), "bank_accounts_at": where({"checking", "savings"}),
+            "investment_accounts_at": where({"brokerage", "retirement"})}
+
+
+def merchant_context(txns: pd.DataFrame) -> pd.DataFrame:
+    """Per merchant: typical amount, how often, on what kind of account, whether it's the same amount every
+    time, and the bank's own label for it (card downloads include one)."""
+    t = txns.assign(merchant=txns["description"].map(merchant_key),
+                    month=pd.to_datetime(txns["date"]).dt.to_period("M") if "date" in txns else None)
+    kind = {"credit_card": "credit card", "checking": "bank account", "savings": "bank account"}
+    t["where"] = t["account_type"].map(lambda k: kind.get(k, k)) if "account_type" in t else None
+    g = t.groupby("merchant")
+    out = g["amount"].agg(amount="median", n="size", lo="min", hi="max")
+    out["months"] = g["month"].nunique() if "date" in txns else None
+    out["where"] = g["where"].agg(lambda w: ", ".join(sorted({x for x in w if isinstance(x, str)})) or None)
+    out["bank_category"] = (g["bank_category"].agg(lambda c: c.dropna().mode().iloc[0] if c.notna().any() else None)
+                            if "bank_category" in t else None)
+    return out.reset_index()
 
 
 # --- the model call -------------------------------------------------------------
@@ -188,6 +253,15 @@ removed), whether money came in or went out, a typical amount, and how many time
 Pick exactly one category per item. The categories and what each covers:
 """ + "\n".join(f"- {c}: {d}" for c, d in CATEGORY_HELP.items()) + """
 
+How to use the context you're given:
+- "household" lists the household's loans (lender, kind, monthly payment) and where its cards, bank and
+  investment accounts are. A bank-account payment matching a loan's monthly payment is that loan (Mortgage
+  or Loan payments) even when the name is a loan servicer you don't recognize. Payments to the household's
+  own card issuers, banks or brokerages are Transfer.
+- Each item says where it happened (credit card / bank account), how many times and in how many months,
+  and whether the amount is always the same (a fixed monthly amount suggests a bill, loan or subscription).
+- "bank_category" is the card issuer's own label: a useful hint, but coarse and sometimes wrong.
+
 Make your best guess from the name - most merchants are ordinary businesses you can place from their
 words or what they're known for (a "RANCH" market, "K1 SPEED" go-karts, "US MOBILE" phone plans,
 "NCOURT" / "COURT EPAY" court fees, "ZENBUSINESS" business filings, a "5K FUN RUN" event).
@@ -206,7 +280,7 @@ _SCHEMA = {
 }
 
 
-def _call_model(items: list[dict]) -> dict[int, str]:
+def _call_model(items: list[dict], household: dict | None = None) -> dict[int, str]:
     import anthropic
     import truststore
 
@@ -218,7 +292,7 @@ def _call_model(items: list[dict]) -> dict[int, str]:
             max_tokens=8000,
             output_config={"effort": "medium", "format": {"type": "json_schema", "schema": _SCHEMA}},
             system=SYSTEM,
-            messages=[{"role": "user", "content": json.dumps(items)}],
+            messages=[{"role": "user", "content": json.dumps({"household": household or {}, "items": items})}],
         )
     except anthropic.AuthenticationError:
         _token_cache["token"] = ""   # stale token: next attempt fetches a fresh one
@@ -232,15 +306,14 @@ def _call_model(items: list[dict]) -> dict[int, str]:
 
 
 def uncategorized_merchants(conn, txns: pd.DataFrame, is_transfer, recheck: bool = False) -> pd.DataFrame:
-    """Merchants with no rule yet (skipping ones the transfer detector already handles).
-    recheck=True: also merchants the AI already did - everything except your own choices."""
+    """Merchants with no rule yet (skipping ones the transfer detector already handles), with their context.
+    recheck=True: also merchants the AI already did - everything except yours and ones matched to a loan."""
     if txns.empty:
         return pd.DataFrame(columns=["merchant", "amount", "n"])
-    known = {m for m, (_, src) in rules(conn).items() if src == "user" or not recheck}
-    t = txns[~txns["description"].map(is_transfer)].assign(merchant=txns["description"].map(merchant_key))
-    t = t[~t["merchant"].isin(known)]
-    return (t.groupby("merchant")["amount"].agg(amount="median", n="size").reset_index()
-            .sort_values("n", ascending=False))
+    known = {m for m, (_, src) in rules(conn).items() if src in ("user", "loan") or not recheck}
+    t = txns[~txns["description"].map(is_transfer)]
+    ctx = merchant_context(t) if len(t) else pd.DataFrame(columns=["merchant", "amount", "n"])
+    return ctx[~ctx["merchant"].isin(known)].sort_values("n", ascending=False).reset_index(drop=True)
 
 
 def needs_recheck(conn) -> bool:
@@ -251,20 +324,32 @@ def needs_recheck(conn) -> bool:
     return bool(has_ai) and (row is None or int(json.loads(row[0])) < CATEGORY_VERSION)
 
 
+def _item(i: int, r) -> dict:
+    """One merchant as the AI sees it: cleaned name plus its context (never dates, names or account numbers)."""
+    item = {"id": i, "merchant": r["merchant"], "direction": "in" if r["amount"] > 0 else "out",
+            "typical_amount": round(abs(r["amount"])), "times": int(r["n"])}
+    if "months" in r and pd.notna(r["months"]):
+        item["months"] = int(r["months"])
+        item["same_amount_every_time"] = bool(r["n"] > 1 and abs(r["hi"] - r["lo"]) <= max(1.0, 0.01 * abs(r["amount"])))
+    for k in ("where", "bank_category"):
+        if isinstance(r.get(k), str) and r.get(k):
+            item[k] = r[k]
+    return item
+
+
 def auto_categorize(conn, txns: pd.DataFrame, is_transfer, progress=None, recheck: bool = False) -> int:
     """Classify every merchant that has no rule yet (recheck=True: every merchant except your own choices).
     Returns number of merchants categorized. Merchants the model leaves out are asked about once more."""
+    match_loan_payments(conn, txns)                  # certain matches first - never left to a guess
     todo = uncategorized_merchants(conn, txns, is_transfer, recheck=recheck)
+    home = household(conn)
     done = 0
     for start in range(0, len(todo), BATCH):
         chunk = todo.iloc[start:start + BATCH].reset_index(drop=True)
         pending = list(range(len(chunk)))
         for _attempt in range(2):
-            items = [{"id": i, "merchant": chunk.at[i, "merchant"],
-                      "direction": "in" if chunk.at[i, "amount"] > 0 else "out",
-                      "typical_amount": round(abs(chunk.at[i, "amount"])), "times": int(chunk.at[i, "n"])}
-                     for i in pending]
-            answered = {i: c for i, c in _call_model(items).items() if i in pending and c in CATEGORIES}
+            items = [_item(i, chunk.iloc[i]) for i in pending]
+            answered = {i: c for i, c in _call_model(items, household=home).items() if i in pending and c in CATEGORIES}
             for i, cat in answered.items():
                 set_rule(conn, chunk.at[i, "merchant"], cat, source="ai")
             done += len(answered)

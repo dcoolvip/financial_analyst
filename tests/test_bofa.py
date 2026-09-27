@@ -246,7 +246,9 @@ def test_amex_csv():
     assert amounts["320000000000000004"] == 500.00 and amounts["320000000000000005"] == 12.00
     pay = p.transactions.loc[p.transactions["fingerprint"] == "320000000000000004", "description"].iloc[0]
     assert insights.categorize(pay, 500.0) == "Transfer"                              # paying the card isn't income
-    assert "(John Sample)" in p.transactions.iloc[1]["description"] and "2 cards" in p.note
+    row = p.transactions.iloc[1]
+    assert row["description"] == "WHOLE FOODS" and row["purchaser"] == "John Sample" and "2 cards" in p.note
+    assert p.transactions["bank_category"].notna().any()                  # the bank's own label, kept as a hint
 
 
 def test_amex_reimport_and_account_matching(conn):

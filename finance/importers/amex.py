@@ -37,12 +37,13 @@ def parse(content: bytes | str, filename: str = "") -> ParsedFile:
         if amount is None:
             continue
         desc = " ".join(r["Description"].split())
-        if len(members) > 1:
-            desc += f" ({r['Card Member'].strip().title()})"
+        who = r["Card Member"].strip().title() if len(members) > 1 else None
         ref = (r.get("Reference") or "").strip().strip("'")
+        legacy = f"{desc} ({who})" if who else desc          # fingerprints of earlier imports used this
         out.append({"date": datetime.strptime(r["Date"].strip(), "%m/%d/%Y").date(), "description": desc,
-                    "amount": -amount, "fingerprint": ref or f"{r['Date']}|{desc}|{amount:.2f}"})
-    df = pd.DataFrame(out, columns=["date", "description", "amount", "fingerprint"])
+                    "amount": -amount, "purchaser": who, "bank_category": (r.get("Category") or "").strip() or None,
+                    "fingerprint": ref or f"{r['Date']}|{legacy}|{amount:.2f}"})
+    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "bank_category", "fingerprint"])
     if len(df) and not df["fingerprint"].is_unique:                      # only possible without references
         df["fingerprint"] = df["fingerprint"] + "|" + df.groupby("fingerprint").cumcount().astype(str)
     # The account's own card: the one payments are made on (else the most used)

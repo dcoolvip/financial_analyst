@@ -36,7 +36,7 @@ def test_rule_precedence(conn):
 def test_auto_categorize_batches_by_merchant(conn, monkeypatch):
     calls = []
 
-    def fake(items):
+    def fake(items, household=None):
         calls.append(items)
         return {it["id"]: ("Income" if it["direction"] == "in" else "Payments to people") for it in items}
 
@@ -55,7 +55,7 @@ def test_merchants_the_model_skips_are_asked_again(tmp_path, monkeypatch):
     txns = pd.DataFrame({"description": ["NETFLIX", "SAFEWAY", "SHELL OIL"], "amount": [-15.0, -80.0, -40.0]})
     calls = []
 
-    def fake(items):
+    def fake(items, household=None):
         calls.append([i["merchant"] for i in items])
         return {i["id"]: "Other" for i in items[:1]} if len(calls) == 1 else {i["id"]: "Groceries" for i in items}
     monkeypatch.setattr(categorize, "_call_model", fake)
@@ -101,7 +101,7 @@ def test_recheck_redoes_ai_rules_but_never_yours(conn, monkeypatch):
     assert categorize.needs_recheck(conn)                                      # older AI rules, newer categories
     seen = []
 
-    def fake(items):
+    def fake(items, household=None):
         seen.extend(i["merchant"] for i in items)
         return {i["id"]: "Mortgage" if "MORTG" in i["merchant"] else "Subscriptions" for i in items}
     monkeypatch.setattr(categorize, "_call_model", fake)
@@ -110,3 +110,65 @@ def test_recheck_redoes_ai_rules_but_never_yours(conn, monkeypatch):
     assert sorted(seen) == ["DOVENMUEHLE MTG MORTG PYMT", "NETFLIX"]           # yours isn't even sent
     assert r["DOVENMUEHLE MTG MORTG PYMT"] == ("Mortgage", "ai") and r["SAFEWAY"] == ("Dining", "user")
     assert not categorize.needs_recheck(conn)
+
+
+def test_payments_at_a_loans_exact_amount_are_that_loan(conn, monkeypatch):
+    """Regression: DOVENMUEHLE -$3,135.97 every month was guessed as Housing - it's the Golden 1 mortgage's
+    exact monthly payment, which the data already knew."""
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    mtg = db.add_account(conn, "Golden 1 Schott Loan", "Golden 1 Credit Union", "mortgage")
+    car = db.add_account(conn, "Hyundai loan", "Hyundai Motor Finance", "auto_loan")
+    db.update_account_terms(conn, mtg, 0.0675, 3135.97)
+    db.update_account_terms(conn, car, 0.0099, 1323.78)
+    rows = []
+    for m in range(1, 7):
+        rows += [(f"2026-0{m}-01", f"DOVENMUEHLE MTG DES:MORTG PYMT ID:00{m}", -3135.97, f"d{m}"),
+                 (f"2026-0{m}-08", f"HMF DES:HMFUSA.COM ID:{m}", -1323.78, f"h{m}"),
+                 (f"2026-0{m}-15", "SAFEWAY", -1323.78 if m == 1 else -80.0, f"s{m}")]   # one coincidence
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    categorize.set_rule(conn, "DOVENMUEHLE MTG MORTG PYMT", "Housing", "ai")          # the old guess
+    t = db.transactions(conn)
+    found = categorize.match_loan_payments(conn, t)
+    assert found == {"DOVENMUEHLE MTG MORTG PYMT": ("Mortgage", "Golden 1 Schott Loan"),
+                     "HMF HMFUSA.COM": ("Loan payments", "Hyundai loan")}             # not Safeway's one-off
+    r = categorize.rules(conn)
+    assert r["DOVENMUEHLE MTG MORTG PYMT"] == ("Mortgage", "loan")
+    categorize.set_rule(conn, "DOVENMUEHLE MTG MORTG PYMT", "Housing", "ai")          # AI can't undo it
+    assert categorize.rules(conn)["DOVENMUEHLE MTG MORTG PYMT"] == ("Mortgage", "loan")
+    assert "DOVENMUEHLE MTG MORTG PYMT" not in set(
+        categorize.uncategorized_merchants(conn, t, insights.is_transfer, recheck=True)["merchant"])
+
+
+def test_ai_gets_the_context_not_just_a_name(conn, monkeypatch):
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    card = db.add_account(conn, "Sapphire", "Chase", "credit_card")
+    db.update_account_terms(conn, db.add_account(conn, "Mortgage", "Golden 1 Credit Union", "mortgage"), 0.0675, 3135.97)
+    db.add_account(conn, "Brokerage", "Robinhood", "brokerage")
+    db.insert_transactions(conn, card, pd.DataFrame(
+        [("2026-01-05", "K1 SPEED #22", -40.0, "Entertainment", "a"), ("2026-02-05", "K1 SPEED #22", -40.0, None, "b")],
+        columns=["date", "description", "amount", "bank_category", "fingerprint"]), "x")
+    seen = {}
+
+    def fake(items, household=None):
+        seen.update(items=items, household=household)
+        return {i["id"]: "Entertainment" for i in items}
+    monkeypatch.setattr(categorize, "_call_model", fake)
+    categorize.auto_categorize(conn, db.transactions(conn), insights.is_transfer)
+    item = seen["items"][0]
+    assert item["merchant"] == "K1 SPEED" and item["where"] == "credit card" and item["bank_category"] == "Entertainment"
+    assert item["times"] == 2 and item["months"] == 2 and item["same_amount_every_time"] is True
+    hh = seen["household"]
+    assert hh["loans"] == [{"lender": "Golden 1 Credit Union", "kind": "mortgage", "monthly_payment": 3135.97}]
+    assert hh["credit_cards_at"] == ["Chase"] and hh["investment_accounts_at"] == ["Robinhood"]
+    assert "Checking" not in str(hh) and "Sapphire" not in str(hh)            # institutions only, no account names
+
+
+def test_bank_category_filled_in_by_reimport_without_duplicates(conn):
+    from finance.importers import apply, parse_file
+    from tests.test_bofa import read
+    card = db.add_account(conn, "Amex", "American Express", "credit_card")
+    parsed = parse_file(read("amex_activity.csv"), filename="activity.csv")
+    db.insert_transactions(conn, card, parsed.transactions.drop(columns=["bank_category"]), "old import")
+    assert db.transactions(conn)["bank_category"].isna().all()
+    assert apply(conn, parsed, card, "activity.csv")["transactions_added"] == 0     # nothing doubled
+    assert db.transactions(conn)["bank_category"].notna().any()                     # hints filled in

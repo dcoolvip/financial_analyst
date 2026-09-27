@@ -41,11 +41,12 @@ def parse(content: bytes | str, filename: str = "") -> ParsedFile:
         who = (r.get("Purchased By") or "").strip() if len(people) > 1 and kind != "Payment" else ""
         out.append({"date": datetime.strptime(r["Transaction Date"].strip(), "%m/%d/%Y").date(),
                     "description": desc, "amount": -amount, "purchaser": who or None,
+                    "bank_category": (r.get("Category") or "").strip() or None,
                     "key": f"{r['Transaction Date']}|{r['Clearing Date']}|{r['Description'].strip()}|{kind}|{amount:.2f}"})
-    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "key"])
+    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "bank_category", "key"])
     df["fingerprint"] = df["key"] + "|" + df.groupby("key").cumcount().astype(str)
     return ParsedFile(kind="credit_card", institution=INSTITUTION,
-                      transactions=df[["date", "description", "amount", "purchaser", "fingerprint"]],
+                      transactions=df[["date", "description", "amount", "purchaser", "bank_category", "fingerprint"]],
                       as_of=df["date"].max() if len(df) else None,
                       note="" if len(people) < 2 else
                       f"Shared card ({', '.join(sorted(people))}) - imported as one account; each purchase records who made it.")
