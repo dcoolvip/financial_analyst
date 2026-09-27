@@ -353,3 +353,20 @@ def test_month_over_month_explains_the_change():
     fig = __import__("finance.charts", fromlist=["x"]).cash_flow_bars(
         insights.monthly_cash_flow(t, {"UNITED AIRLINES": ("Travel", "ai")}).merge(w.reset_index(), on="month"), "light")
     assert "3 paydays vs 2" in str(fig.data[0].customdata)                        # it's in the hover
+
+
+def test_a_short_hot_streak_fades_instead_of_compounding_for_decades():
+    """Regression: $42K of Pokemon cards with 1.2 years of +74%/yr prices became $10M in 43 years (+16.6%/yr
+    every year). A history-based rate moves back to the long-run rate over about as many years as the history."""
+    d = pd.date_range("2025-08-31", periods=15, freq="ME")
+    hist = pd.DataFrame({"account_id": 1, "date": d, "balance": 42_000 / 1.745 ** ((len(d) - 1 - np.arange(len(d))) / 12)})
+    cards = pd.DataFrame([{"id": 1, "name": "Cards", "type": "collectible", "balance": 42_000, "rate": None, "payment": None}])
+    fc = forecast.run(cards, forecast.Assumptions(years=43, investment_volatility=0.0, inflation=0.0, simulations=50),
+                      history=hist)
+    v = fc.valuables.iloc[0]
+    assert v["rate"] > 0.10                                      # this year still reflects the hot streak
+    assert v["end"] < 42_000 * 1.20 * 1.03 ** 43                 # but not +16.6% for 43 years ($10M)
+    assert "fades to +3.0%" in v["why"]
+    mine = forecast.run(cards.assign(rate=0.10), forecast.Assumptions(years=10, investment_volatility=0.0,
+                                                                      inflation=0.0, simulations=50), history=hist)
+    assert mine.valuables.iloc[0]["end"] == pytest.approx(42_000 * 1.10 ** 10, rel=0.01)   # your own rate: kept

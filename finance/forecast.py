@@ -139,9 +139,22 @@ def valuables_table(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame |
                     trend_override=(trend_overrides or {}).get(r.id))
         rows.append({"id": r.id, "name": r.name, "type": r.type, "value": float(r.balance or 0.0),
                      "rate": o["rate"], "vol": o["vol"], "source": o["source"], "trend": o["trend"],
-                     "years": o["years"], "weight": o["weight"], "why": explain(o)})
+                     "years": o["years"], "weight": o["weight"], "long_run": o["long_run"],
+                     "why": explain(o) + (f"; fades to {o['long_run']:+.1%} over ~{max(o['years'], 1):.0f} yrs"
+                                          if o["source"] == "history" and abs(o["rate"] - o["long_run"]) > 0.001 else "")})
     return pd.DataFrame(rows, columns=["id", "name", "type", "value", "rate", "vol", "source", "trend",
-                                       "years", "weight", "why"])
+                                       "years", "weight", "long_run", "why"])
+
+
+def rate_path(rate: float, long_run: float, years_of_history: float, source: str, months: int) -> np.ndarray:
+    """Yearly growth rate for each coming month. A trend seen over N years says little about decade N+10, so a
+    rate built from history moves back toward the long-run rate for the asset's kind, over about as many years
+    as the history covers (1.2 years of hot Pokemon prices fade within a few years; 10 years of steady home
+    prices fade slowly). A rate you typed in stays as you set it."""
+    if source != "history":
+        return np.full(months, rate)
+    t = np.arange(months) / 12
+    return long_run + (rate - long_run) * np.exp(-t / max(years_of_history, 1.0))
 
 
 def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, history=None, overrides=None):
@@ -167,7 +180,9 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     else:
         mu = np.log1p(a.investment_return) / 12 - sigma**2 / 24
         growth = np.exp(rng.normal(mu, sigma / np.sqrt(12), size=(sims, months)))
-    v_mu = np.log1p(v_rate) / 12 - v_vol**2 / 24
+    paths_r = np.stack([rate_path(r.rate, r.long_run, r.years, r.source, months) for r in vt.itertuples()], axis=1) \
+        if len(vt) else np.zeros((months, 0))                    # months x assets: each one's rate, fading
+    v_mu = np.log1p(paths_r) / 12 - v_vol**2 / 24
     v_growth = np.exp(rng.normal(v_mu, v_vol / np.sqrt(12), size=(sims, months, len(v_rate)))) \
         if len(v_rate) else np.ones((sims, months, 0))
     cash_r = (1 + a.cash_yield) ** (1 / 12) - 1
