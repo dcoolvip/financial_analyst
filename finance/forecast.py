@@ -66,6 +66,8 @@ class Assumptions:
     health_extra_growth: float = 0.02         # healthcare costs grow this much faster than inflation
     pretax_tax_rate: float = 0.30             # tax on pre-tax 401(k) money when it comes out
     rmd_age: int = 75                         # required withdrawals start (born 1960 or later)
+    capital_gains_rate: float = 0.33          # on the gain when shares are sold: ~20% federal + 3.8% NIIT + CA
+    gain_share: float = 0.70                  # how much of a sale is gain (RSU / ESPP / old shares: low basis)
     simulations: int = 1000
     seed: int = 7
 
@@ -229,8 +231,9 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
     else:
         pre = np.zeros(sims)
     # per month (nominal): income, living costs, loan payments, healthcare, pay, social security, other income,
-    # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending)
-    flow = np.zeros((months, 9))
+    # tax on 401(k) withdrawals, 401(k) withdrawals (gross: required ones + any taken to cover spending),
+    # capital-gains tax on shares sold to cover spending
+    flow = np.zeros((months, 10))
     nw = np.empty((sims, months + 1))
     parts = np.empty((months + 1, 4))  # cash, investments, property & valuables, debt (sim 0 / mean)
     paths = np.empty((months + 1, val.shape[1]))
@@ -260,7 +263,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             payoff[loans[i].name] = m
         freed = loan_pay[~active].sum()          # loans already cleared before this month
 
-        tax_401k = out_401k = 0.0
+        tax_401k = out_401k = cg_tax = 0.0
         if people:
             years = (m - 1) / 12
             price = (1 + a.inflation) ** years
@@ -292,7 +295,7 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
                 inv += out * (1 - a.pretax_tax_rate)
                 tax_401k += float((out * a.pretax_tax_rate).mean())
                 out_401k += float(out.mean())
-            flow[m - 1] = [income, living, paid, health, pay, ss, other, 0.0, 0.0]
+            flow[m - 1, :7] = [income, living, paid, health, pay, ss, other]
         elif split:
             income = a.monthly_income * (1 + a.income_growth) ** ((m - 1) // 12)
             living = a.monthly_living * (1 + a.inflation) ** ((m - 1) / 12)
@@ -309,23 +312,25 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             cash += save * (1 - a.invest_share)
         else:
             cash += save
-            short = np.minimum(cash, 0)          # overdraw cash first, then taxable investments,
-            cash -= short
-            inv += short
-            need = np.maximum(-inv, 0)           # then the one company's shares
-            sold = np.minimum(need, stk)
-            stk -= sold
-            inv = np.where(inv < 0, inv + sold, inv)
+            need = np.maximum(-cash, 0)          # cash first; then sell shares, paying capital-gains tax:
+            cash = np.maximum(cash, 0)
+            keep = 1 - a.capital_gains_rate * a.gain_share      # of each $1 sold, what's left after the tax
+            for bucket in ("inv", "stk"):        # other investments, then the one company's shares
+                held = inv if bucket == "inv" else stk
+                sell = np.minimum(np.maximum(held, 0), need / keep)
+                held -= sell
+                need = need - sell * keep
+                cg_tax += float((sell * (1 - keep)).mean())
             if people:                           # then pre-tax 401(k): taxed (and +10% before 59.5)
-                need = np.maximum(-inv, 0)
-                inv = np.maximum(inv, 0)
                 rate = a.pretax_tax_rate + (0.10 if max(ages) < ret.PENALTY_FREE_AGE else 0)
                 gross = need / (1 - rate)
                 pre -= gross
                 tax_401k += float((gross - need).mean())
                 out_401k += float(gross.mean())
+            else:
+                inv -= need                      # nothing left to sell: shown as borrowing
         if people:
-            flow[m - 1, 7:9] = [tax_401k, out_401k]
+            flow[m - 1, 7:10] = [tax_401k, out_401k, cg_tax]
         val = val * v_growth[:, m - 1, :]
         paths[m] = val.mean(axis=0)
         debt = loan_bal.sum() + revolving
@@ -370,19 +375,20 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     cash_flow = pd.DataFrame()
     if flow is not None:                                  # per year, nominal and in today's dollars
         f = pd.DataFrame(flow, columns=["income", "living", "loans", "health", "pay", "ss", "other", "tax_401k",
-                                        "out_401k"])
+                                        "out_401k", "cg_tax"])
         f["period"] = np.arange(len(f)) // 12                # 12-month periods from now: no partial years
         f["deflator"] = deflator[1:]
         f["month"] = dates[1:]
         cash_flow = f.groupby("period").agg(income=("income", "sum"), living=("living", "sum"),
                                             loans=("loans", "sum"), health=("health", "sum"), pay=("pay", "sum"),
                                             ss=("ss", "sum"), other=("other", "sum"), tax_401k=("tax_401k", "sum"),
-                                            out_401k=("out_401k", "sum"),
+                                            out_401k=("out_401k", "sum"), cg_tax=("cg_tax", "sum"),
                                             deflator=("deflator", "mean"),
                                             months=("income", "size"), first=("month", "min"), last=("month", "max"))
         cash_flow["year"] = cash_flow["last"].dt.year          # labelled by the year each period ends in
         cash_flow["saved"] = cash_flow["income"] - cash_flow["living"] - cash_flow["loans"] - cash_flow["health"]
-        for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "out_401k", "saved"):
+        for c in ("income", "living", "loans", "health", "pay", "ss", "other", "tax_401k", "out_401k", "cg_tax",
+                  "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
     return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)
