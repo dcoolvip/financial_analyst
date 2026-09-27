@@ -51,6 +51,12 @@ class Assumptions:
     # monthly payment, "rate": new yearly rate or None to keep the current one}]
     loan_changes: list = field(default_factory=list)
     replay_history: bool = True           # investment ups and downs replay real stock years (history.py)
+    # Market crashes made visible: "none"; "every10" (every ~10 years, long-run average kept - history's average
+    # already includes crashes); "retire" (one when everyone has retired, average kept); "extra" (every ~10 years on
+    # top of normal returns - worse than history). crash_drop: market fall; one company falls crash_drop_single.
+    crash_mode: str = "none"
+    crash_drop: float = 0.35
+    crash_drop_single: float = 0.45
     single_stock_share: float = 0.0       # share of investments held in one company (Apple), kept as is
     single_stock_scenario: str = "mix"      # its path: history.SINGLE_STOCK_PATHS
     # with "mix", each simulation draws one path with these weights (a judgment call; see SINGLE_STOCK_PATHS)
@@ -220,6 +226,30 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             swings = single_stock_swings()
             yearly = np.where(yearly <= 0, 0.0, yearly * swings[rng.integers(0, len(swings), size=(sims, n_years))])
         stk_growth = np.repeat(np.maximum(yearly, 0.0) ** (1 / 12), 12, axis=1)[:, :months]
+    if a.crash_mode != "none":
+        years_idx = np.arange(n_years)
+        if a.crash_mode == "retire" and a.people:
+            from . import retirement as ret_
+            now_ = pd.Timestamp.today().normalize()
+            last = max(p.get("retire_age", 65) - ret_.age_on(p["born"], now_) for p in a.people if p.get("born"))
+            crash_years = [int(np.ceil(last))] if last < n_years else []
+        else:
+            first = max(0, 2030 - pd.Timestamp.today().year)
+            crash_years = list(range(first, n_years, 10))
+
+        def overlay(drop):
+            f = np.ones(n_years)
+            f[[y for y in crash_years if y < n_years]] = 1 - drop
+            if a.crash_mode in ("every10", "retire") and crash_years:
+                # keep the long-run average: the years after each crash recover the fall (to the next crash / the end)
+                marks = sorted(crash_years) + [n_years]
+                for c, nxt in zip(marks, marks[1:]):
+                    span = nxt - c - 1
+                    if span > 0:
+                        f[c + 1:nxt] = (1 / (1 - drop)) ** (1 / span)
+            return np.repeat(f ** (1 / 12), 12)[:months]
+        growth = growth * overlay(a.crash_drop)
+        stk_growth = stk_growth * overlay(a.crash_drop_single)
     paths_r = np.stack([rate_path(r.rate, r.long_run, r.years, r.source, months) for r in vt.itertuples()], axis=1) \
         if len(vt) else np.zeros((months, 0))                    # months x assets: each one's rate, fading
     v_mu = np.log1p(paths_r) / 12 - v_vol**2 / 24

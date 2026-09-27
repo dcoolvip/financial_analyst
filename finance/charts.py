@@ -237,6 +237,16 @@ def forecast_scenarios(history: pd.DataFrame, scenarios: dict, blend: pd.DataFra
     return _layout(fig, c, height=400, legend=True, compact=compact)
 
 
+def add_comparison_line(fig: go.Figure, bands: pd.DataFrame, real: bool, mode: str, name: str) -> go.Figure:
+    """Overlay another run's typical net worth as a dashed line (e.g. the same plan with market crashes)."""
+    c = PALETTE[mode]
+    sfx = "_real" if real else ""
+    fig.add_trace(go.Scatter(x=bands["date"], y=bands[f"p50{sfx}"], mode="lines", name=name,
+                             line=dict(color=c["ink"], width=2, dash="dash"),
+                             hovertemplate=f"{name}: $%{{y:,.0f}}<extra></extra>"))
+    return fig
+
+
 def forecast_own_owe(history: pd.DataFrame, expected: pd.DataFrame, real: bool, mode: str,
                      compact: bool = False) -> go.Figure:
     """What you own and what you owe: recorded so far (solid) and the most likely path ahead (dashed)."""

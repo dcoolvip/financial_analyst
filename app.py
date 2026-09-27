@@ -745,6 +745,20 @@ with tab_future:
                         f'{money(end[f"p10{sfx}"])} and {money(end[f"p90{sfx}"])}.</p>', unsafe_allow_html=True)
             future_view = st.segmented_control("Future view", ["Net worth", "Own & owe"], default="Net worth",
                                                key="future_view", label_visibility="collapsed") or "Net worth"
+            crash_labels = {"none": "No crashes shown", "every10": "Crashes every ~10 years",
+                            "retire": "A crash when you retire", "extra": "Crashes, worse than history"}
+            crash = st.segmented_control(
+                "Market crashes", list(crash_labels), format_func=crash_labels.get, default="none", key="crash_mode",
+                help="Draws the same plan with market crashes as a dashed line: the market falls 35% and Apple 45% in "
+                     "a crash year. History's average return already includes crashes (2000-02, 2008, 2022), so "
+                     "'every ~10 years' and 'when you retire' keep the long-run average - they show WHEN the drops hit "
+                     "(right at retirement hurts most, because you're selling to live). 'Worse than history' adds the "
+                     "drops on top, with no extra recovery.") or "none"
+            crash_fc = None
+            if crash != "none":
+                import dataclasses
+                crash_fc = forecast.run(accts, dataclasses.replace(a, crash_mode=crash, simulations=400),
+                                        history=db.balance_history(conn), trend_overrides=trend_overrides())
             if future_view == "Own & owe":
                 plot(charts.forecast_own_owe(nw.tail(24), fc.expected, real, mode, compact=PHONE))
                 e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]
@@ -758,7 +772,10 @@ with tab_future:
                 runs = {k: forecast.run(accts, dataclasses.replace(a, single_stock_scenario=k, simulations=400),
                                         history=db.balance_history(conn), trend_overrides=trend_overrides()).bands
                         for k in ("economy", "ibm", "gm")}
-                plot(charts.forecast_scenarios(nw.tail(24), runs, fc.bands, real, mode, compact=PHONE))
+                fig = charts.forecast_scenarios(nw.tail(24), runs, fc.bands, real, mode, compact=PHONE)
+                if crash_fc is not None:
+                    charts.add_comparison_line(fig, crash_fc.bands, real, mode, f"With {crash_labels[crash].lower()}")
+                plot(fig)
                 ends = {k: b.iloc[-1][f"p50{sfx}"] for k, b in runs.items()}
                 st.caption(f"By {end['date']:%Y}, typically: " + " · ".join(
                     f"**{charts.SCENARIO_STYLE[k][1]}** {money(v)}" for k, v in ends.items())
@@ -766,7 +783,16 @@ with tab_future:
                       f"{a.single_stock_weights['gm']:.0%} blend. Each band is that scenario's middle half of outcomes"
                     + (" (today's dollars)." if real else "."))
             else:
-                plot(charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE))
+                fig = charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE)
+                if crash_fc is not None:
+                    charts.add_comparison_line(fig, crash_fc.bands, real, mode, f"With {crash_labels[crash].lower()}")
+                plot(fig)
+            if crash_fc is not None:
+                e_no, e_cr = fc.bands.iloc[-1][f"p50{sfx}"], crash_fc.bands.iloc[-1][f"p50{sfx}"]
+                ex = crash_fc.expected
+                liquid = (ex["cash"] + ex["investments"]) / ((1 + a.inflation) ** (np.arange(len(ex)) / 12) if real else 1)
+                st.caption(f"**{crash_labels[crash]}:** by {end['date']:%Y} typically {money(e_cr)} vs {money(e_no)} without "
+                           f"({(e_cr - e_no) / e_no:+.0%}). Cash + investments never drop below {money(liquid.min())}.")
 
         with detail_col:
             # right under the net worth chart: how money moves in and out explains the line above

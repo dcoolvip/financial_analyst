@@ -400,3 +400,19 @@ def test_single_stock_paths_like_past_dominant_companies():
     half = forecast.run(port, forecast.Assumptions(years=30, investment_return=0.10, inflation=0.0, simulations=500,
                                                    single_stock_share=0.5, single_stock_scenario="gm"))
     assert half.expected["investments"].iloc[-1] == pytest.approx(500_000 * 1.10 ** 30, rel=0.01)   # the rest lives on
+
+
+def test_market_crashes_toggle():
+    """Crashes every ~10 years keep the long-run average (history already includes them) but show the drops;
+    'extra' crashes on top of normal returns end lower."""
+    port = accts([("Brokerage", "brokerage", 1_000_000, None, None)])
+    run = lambda mode: forecast.run(port, forecast.Assumptions(years=30, investment_return=0.08, inflation=0.0,   # noqa: E731
+                                                               investment_volatility=0.0, crash_mode=mode, simulations=50))
+    none, every, extra = run("none"), run("every10"), run("extra")
+    path = every.expected.set_index("date")["investments"]
+    assert path.min() < none.expected["investments"].min() * 10                 # sanity: ran
+    yearly = path.iloc[::12]                                                    # the forecast's own 12-month steps
+    assert (yearly.pct_change() < -0.25).any()                                  # a visible crash year
+    last = lambda fc: fc.expected["investments"].iloc[-1]                       # noqa: E731
+    assert last(extra) < 0.6 * last(none)                                       # worse than history
+    assert last(every) == pytest.approx(last(none), rel=0.35)                   # average kept (roughly)
