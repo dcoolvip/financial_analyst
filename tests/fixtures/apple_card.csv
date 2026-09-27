@@ -1,0 +1,7 @@
+Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By
+09/11/2025,09/11/2025,"CODE CLASS 10501 MAIN ST SPRINGFIELD 22032 VA USA","Code Class","Other","Purchase","227.00","Jane Sample"
+09/11/2025,09/11/2025,"CODE CLASS 10501 MAIN ST SPRINGFIELD 22032 VA USA","Code Class","Other","Purchase","227.00","Jane Sample"
+09/07/2025,09/08/2025,"HULU 2500 BROADWAY 90404 CA USA","Hulu","Utilities","Purchase","2.99","John Sample"
+09/05/2025,09/05/2025,"ACH DEPOSIT INTERNET TRANSFER FROM ACCOUNT ENDING IN 1234","Ach Deposit Internet Transfe","Payment","Payment","-400.00","John Sample"
+09/02/2025,09/03/2025,"STORE REFUND","Store","Credit","Credit","-12.00","Jane Sample"
+09/01/2025,09/01/2025,"DAILY CASH ADJUSTMENT","Daily Cash Adjustment","Debit","Debit","0.12","John Sample"

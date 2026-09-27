@@ -278,3 +278,25 @@ def test_barclays_import_sets_card_balance(conn):
     apply(conn, parse_file(read("barclays_card.csv")), card, "barclays.csv")
     a = db.accounts(conn).set_index("name").loc["Barclays Card"]
     assert a["balance"] == pytest.approx(245.10) and a["as_of"] == "2025-09-26"
+
+
+# --- Apple Card --------------------------------------------------------------------------
+
+def test_apple_card_csv():
+    from finance import insights
+    p = parse_file(read("apple_card.csv"), filename="Apple Card Transactions Jan 01 2025 - Sep 26 2025.csv")
+    assert (p.kind, p.institution) == ("credit_card", "Apple Card") and p.balances.empty
+    t = p.transactions
+    assert len(t) == 6 and t["fingerprint"].is_unique                          # the two $227 charges both kept
+    assert t["amount"].tolist() == [-227.0, -227.0, -2.99, 400.0, 12.0, -0.12]   # signs flipped to bank style
+    assert t["description"].iloc[2] == "Hulu (John Sample)"                     # clean merchant + who
+    assert insights.categorize(t["description"].iloc[3], 400.0) == "Transfer"   # the payment
+    assert insights.categorize("APPLECARD GSBANK DES:PAYMENT ID:999", -400.0) == "Transfer"   # bank side
+    assert "Shared card" in p.note
+
+
+def test_apple_card_reimport_is_idempotent(conn):
+    card = db.add_account(conn, "Apple Card", "Apple Card", "credit_card")
+    parsed = parse_file(read("apple_card.csv"))
+    assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 6
+    assert apply(conn, parsed, card, "a.csv")["transactions_added"] == 0

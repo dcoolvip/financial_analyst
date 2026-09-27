@@ -12,6 +12,7 @@ import streamlit as st
 import finance.importers.base
 import finance.importers.bofa
 import finance.importers.amex
+import finance.importers.apple_card
 import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
@@ -28,7 +29,7 @@ def _reload_changed_modules() -> None:
     """Streamlit reruns app.py on refresh but can keep stale copies of finance/* in memory
     (its polling watcher misses some edits). Reload any module whose file changed since it
     was loaded, dependencies first, so a refresh always runs current code."""
-    order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
+    order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.apple_card, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
              insights, forecast, charts, demo, portfolio, editing, checkpoints]
@@ -840,7 +841,7 @@ with tab_add:
             try:
                 parsed = parse_file(f.getvalue(), filename=f.name)
             except UnrecognizedFile:
-                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill, Chase, Wealthfront, American Express and Barclays CSVs are supported). "
+                st.error(f"**{f.name}**: this isn't a format I recognize yet (Bank of America, Merrill, Chase, Wealthfront, American Express, Barclays and Apple Card CSVs are supported). "
                          "Share the column headers and I'll add support.")
                 continue
             st.markdown(f"**{f.name}** · {KIND_LABELS[parsed.kind]} · {parsed.summary}"
