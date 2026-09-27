@@ -98,3 +98,28 @@ def explain(o: dict) -> str:
         return f"long-run {o['long_run']:+.1%} (not enough history yet)"
     return (f"your history {o['trend']:+.1%}/yr over {o['years']:.1f} yrs ({o['weight']:.0%} weight) "
             f"+ long-run {o['long_run']:+.1%}")
+
+
+# Typical yearly value loss of a car bought new, by year of ownership (industry depreciation curves:
+# steepest in year 1, flattening as it ages). Later years keep the last rate.
+VEHICLE_DEPRECIATION_BY_AGE = [0.20, 0.15, 0.14, 0.13, 0.12, 0.11, 0.10]
+
+
+def vehicle_history(price: float, bought, value_now: float, as_of) -> pd.DataFrame:
+    """Estimated month-end values (date, value) for a car bought new, from purchase to as_of. Follows the
+    typical depreciation curve's shape, adjusted evenly so it starts exactly at the price paid and ends
+    exactly at today's value (KBB) - no car-history service needed."""
+    bought, as_of = pd.Timestamp(bought), pd.Timestamp(as_of)
+    dates = [bought] + [d for d in pd.date_range(bought, as_of, freq="ME") if d > bought] + [as_of]
+    dates = sorted(set(dates))
+    ages = np.array([(d - bought).days / 365.25 for d in dates])
+    rates = VEHICLE_DEPRECIATION_BY_AGE
+
+    def curve(age):                       # log of value / price along the typical curve
+        full = int(age)
+        yrs = [rates[min(i, len(rates) - 1)] for i in range(full + 1)]
+        return sum(np.log1p(-r) for r in yrs[:full]) + (age - full) * np.log1p(-yrs[full])
+    raw = np.array([curve(a) for a in ages])
+    fix = (np.log(value_now / price) - raw[-1]) * ages / ages[-1]     # spread the difference evenly
+    values = price * np.exp(raw + fix)
+    return pd.DataFrame({"date": [d.date() for d in dates], "value": values.round(0)})

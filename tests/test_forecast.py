@@ -123,3 +123,14 @@ def test_pokemon_partial_snapshots_are_skipped(tmp_path):
     assert h["value"].min() == 1000                                            # never the 3-card $297
     ix = pokemon.price_index(p, list(h["date"]))
     assert ix["index"].iloc[-1] == pytest.approx(1.4)                          # 10 -> 14 per card
+
+
+def test_vehicle_history_from_price_and_todays_value():
+    from finance.assets import trend, vehicle_history
+    h = vehicle_history(30_000, "2020-03-15", 12_000, "2026-03-15")
+    assert h["value"].iloc[0] == 30_000 and h["value"].iloc[-1] == 12_000   # pinned at both ends
+    assert h["value"].is_monotonic_decreasing
+    first_year = 1 - h["value"].iloc[12] / 30_000
+    last_year = 1 - h["value"].iloc[-1] / h["value"].iloc[-13]
+    assert first_year > last_year                                            # steepest when new
+    assert trend(h.rename(columns={"value": "balance"})) == pytest.approx(-0.14, abs=0.02)
