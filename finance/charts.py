@@ -156,8 +156,15 @@ def cash_flow_bars(cf: pd.DataFrame, mode: str, compact: bool = False) -> go.Fig
     return _layout(fig, c, legend=True, compact=compact)
 
 
-def category_bars(df: pd.DataFrame, mode: str, compact: bool = False) -> go.Figure:
-    return breakdown_bars(dict(zip(df["category"], df["monthly"])), mode, debt=True, compact=compact)
+def category_bars(df: pd.DataFrame, mode: str, compact: bool = False, about: dict | None = None) -> go.Figure:
+    """Monthly spend per category; about = {category: what it covers}, shown when you hover a bar."""
+    fig = breakdown_bars(dict(zip(df["category"], df["monthly"])), mode, debt=True, compact=compact)
+    if about:
+        import textwrap
+        bar = fig.data[0]
+        bar.customdata = ["<br>".join(textwrap.wrap(about.get(c, ""), 48)) for c in bar.y]
+        bar.hovertemplate = "<b>%{y}</b> · $%{x:,.0f} a month<br><span style='font-size:12px'>%{customdata}</span><extra></extra>"
+    return fig
 
 
 def account_history(hist: pd.DataFrame, mode: str, debt: bool = False, compact: bool = False) -> go.Figure:

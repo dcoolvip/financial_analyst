@@ -149,3 +149,36 @@ def test_source_labels():
     assert insights.source_label("eStmt_2026-09-01.pdf") == "Imported from eStmt_2026-09-01.pdf"
     assert insights.is_estimate("Estimated (payment schedule)") and insights.is_estimate("Approximate gold price")
     assert not insights.is_estimate("Redfin estimate history") and insights.source_label("Redfin estimate history") == "Redfin estimate"
+
+
+def test_overview_insights_are_worked_out_from_the_data():
+    today = pd.Timestamp("2026-09-26")
+    rows = []
+    for m in range(1, 7):                                            # Mar..Aug 2026: complete months
+        d = (pd.Timestamp("2026-09-01") - pd.DateOffset(months=m)) + pd.Timedelta(days=4)
+        rows += [(d, "ACME DES:PAYROLL", 10_000.0), (d, "DOVENMUEHLE MTG DES:MORTG PYMT", -8_000.0),
+                 (d, "SAFEWAY", -1_000.0), (d, "Online Banking transfer to SAV 1234", -5_000.0)]
+        rows.append((d, "UNITED AIRLINES", -4_000.0 if m == 1 else -200.0))      # August's travel jump
+    t = pd.DataFrame(rows, columns=["date", "description", "amount"]).assign(category=None)
+    e = insights.enrich(t, {"UNITED AIRLINES": ("Travel", "ai"), "ACME PAYROLL": ("Income", "ai")})
+    accts = pd.DataFrame([
+        {"id": 1, "name": "Checking", "type": "checking", "balance": 30_000, "rate": None, "payment": None, "as_of": "2026-08-01"},
+        {"id": 2, "name": "Gold", "type": "precious_metal", "balance": 40_000, "rate": None, "payment": None, "as_of": "2026-06-20"},
+        {"id": 3, "name": "Car loan", "type": "auto_loan", "balance": 12_000, "rate": 0.0, "payment": 1_000, "as_of": "2026-09-20"},
+    ])
+    totals = {"Cash": 30_000, "Investments": 0, "Property & valuables": 40_000, "Loans": 12_000, "Credit cards": 0}
+    moves = pd.DataFrame({"account_id": [1], "name": ["Checking"], "then": [10_000.0], "now": [30_000.0], "change": [20_000.0]})
+    out = {i["icon"]: i for i in insights.overview(e, accts, totals, moves, (20_000.0, 50_000.0, ["Gold"]), today=today)}
+    cash_flow = out["💰"]["text"]                                     # 10K in; 8K + 1K + ~0.8K travel out
+    assert "You keep about **$167 a month**" in cash_flow             # transfers to savings aren't spending
+    assert cash_flow.split("Biggest costs: ")[1].startswith("Mortgage $8.0K")
+    e2 = insights.enrich(t.assign(amount=t["amount"].where(t["description"] != "ACME DES:PAYROLL", 5_000.0)),
+                         {"UNITED AIRLINES": ("Travel", "ai")})
+    short = {i["icon"]: i for i in insights.overview(e2, accts, totals, moves, (None, None, []), today=today)}
+    assert "above what came in" in short["💸"]["text"]                # spending more than pay: said plainly
+    assert "Travel" in out["🔎"]["text"] and "August" in out["🔎"]["text"]
+    assert "mostly Checking (+$20K)" in out["📈"]["text"] and "1 newer account not included" in out["📈"]["text"]
+    assert "Gold" in out["📈"]["help"]                                # which ones: on the ⓘ, not in the sentence
+    assert "Car loan" in out["🏦"]["text"] and "Sep 2027" in out["🏦"]["text"]    # 12 payments of $1,000
+    assert "Checking (Aug 1)" in out["⏰"]["text"] and "Gold" not in out["⏰"]["text"]  # gold: fine for months
+    assert all(i["help"] for i in out.values())

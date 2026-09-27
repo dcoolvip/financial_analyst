@@ -177,3 +177,115 @@ def change_by_group(changes: pd.DataFrame, types: dict) -> dict[str, float]:
         if g:
             out[g] += r.change
     return {g: v for g, v in out.items() if abs(v) >= 0.5}
+
+
+# How long before a value counts as out of date, by kind of account: statements come monthly; a home, car or
+# gold is fine for months.
+STALE_DAYS = {"property": 180, "vehicle": 180, "collectible": 120, "precious_metal": 120, "other_asset": 180}
+
+
+def _m(v: float) -> str:
+    from .charts import money
+    return money(v)
+
+
+def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: pd.DataFrame,
+             year_change: tuple, today: pd.Timestamp | None = None) -> list[dict]:
+    """Plain-language takeaways, worked out from everything imported so far. Each: icon, text, help (how it's
+    calculated - shown on the ⓘ). enriched = enrich(transactions); moves = db.account_changes(conn, 12);
+    year_change = db.net_worth_change(conn, 12)."""
+    today = (today or pd.Timestamp.today()).normalize()
+    this_month = today.to_period("M").to_timestamp()
+    out = []
+    t = enriched[~enriched["is_transfer"]] if len(enriched) else enriched
+    t = t.assign(month=t["date"].dt.to_period("M").dt.to_timestamp()) if len(t) else t
+    recent = t[(t["month"] >= this_month - pd.DateOffset(months=6)) & (t["month"] < this_month)] if len(t) else t
+    months = recent["month"].nunique() if len(recent) else 0
+
+    spend = 0.0
+    if months:
+        income = recent.loc[recent["amount"] > 0, "amount"].sum() / months
+        spend = -recent.loc[recent["amount"] < 0, "amount"].sum() / months
+        costs = (-recent[recent["amount"] < 0].groupby("category")["amount"].sum() / months).sort_values(ascending=False)
+        top = ", ".join(f"{c} {_m(v)}" for c, v in costs.head(3).items())
+        gap = income - spend
+        how = (f"Last {months} complete months. Money in = pay and other deposits; out = everything spent, incl. "
+               "mortgage, taxes and card purchases. Transfers between your own accounts and card bill payments are "
+               "left out, so nothing counts twice. Stock vesting and investment growth aren't cash coming in - "
+               "they show up in net worth instead.")
+        if gap >= 0:
+            out.append({"icon": "💰", "help": how,
+                        "text": f"You keep about **{_m(gap)} a month** ({gap / income:.0%} of what comes in). "
+                                f"Biggest costs: {top} a month."})
+        else:
+            out.append({"icon": "💸", "help": how,
+                        "text": f"Spending ran **{_m(-gap)} a month above what came in** ({_m(income)} in, "
+                                f"{_m(spend)} out). Biggest costs: {top} a month."})
+
+        # what changed: last complete month against the months before it
+        last = t[t["month"] == this_month - pd.DateOffset(months=1)]
+        before = t[(t["month"] >= this_month - pd.DateOffset(months=7)) & (t["month"] < this_month - pd.DateOffset(months=1))]
+        n_before = before["month"].nunique()
+        if len(last) and n_before >= 2:
+            now_c = -last[last["amount"] < 0].groupby("category")["amount"].sum()
+            usual = -before[before["amount"] < 0].groupby("category")["amount"].sum() / n_before
+            jump = (now_c - usual.reindex(now_c.index).fillna(0)).sort_values(ascending=False)
+            if len(jump) and jump.iloc[0] >= 300 and now_c[jump.index[0]] >= 1.5 * usual.get(jump.index[0], 0):
+                c = jump.index[0]
+                month_name = (this_month - pd.DateOffset(months=1)).strftime("%B")
+                out.append({"icon": "🔎", "help": f"{month_name}'s spending per category, against its average over "
+                                                   f"the {n_before} months before. Shows the biggest jump.",
+                            "text": f"**{c}** was {_m(now_c[c])} in {month_name}, against a usual "
+                                    f"{_m(usual.get(c, 0))} a month."})
+
+    yr, base, left_out = year_change
+    if yr is not None and base:
+        drivers = moves.sort_values("change", ascending=yr < 0).head(2) if len(moves) else moves
+        why = (", mostly " + " and ".join(f"{r.name} ({'+' if r.change >= 0 else ''}{_m(r.change)})"
+                                          for r in drivers.itertuples()) if len(drivers) else "")
+        out.append({"icon": "📈" if yr >= 0 else "📉",
+                    "help": "Like-for-like: only accounts that had a value a year ago and today, so adding an account "
+                            "never looks like a gain."
+                            + (f" Not included yet (no value a year ago): {', '.join(left_out)}." if left_out else ""),
+                    "text": f"Net worth is {'up' if yr >= 0 else 'down'} **{_m(abs(yr))}** over the past year "
+                            f"({yr / abs(base):+.0%}){why}."
+                            + (f" {len(left_out)} newer account{'s' if len(left_out) > 1 else ''} not included." if left_out else "")})
+
+    if spend > 0 and totals.get("Cash"):
+        out.append({"icon": "🛟", "help": "Cash (checking + savings) divided by your average monthly spending. "
+                                         "3–6 months is the usual cushion.",
+                    "text": f"Your cash would cover **{totals['Cash'] / spend:.1f} months** of spending."})
+
+    own = sum(totals.get(g, 0) for g in ASSET_GROUPS)
+    owe = sum(totals.get(g, 0) for g in DEBT_GROUPS)
+    if own:
+        text = f"Debt is **{owe / own:.0%}** of what you own."
+        payoffs = []
+        for r in accts[accts["type"].isin(["mortgage", "auto_loan", "heloc", "personal_loan", "student_loan"])].itertuples():
+            if p := loan_payoff(r.balance, r.rate, r.payment):
+                payoffs.append((p[0], r.name, r.payment))
+        if payoffs:
+            n, name, pay = min(payoffs)
+            text += (f" Next paid off: **{name}** around {today + pd.DateOffset(months=n):%b %Y}, freeing "
+                     f"{_m(pay)} a month.")
+        out.append({"icon": "🏦", "text": text,
+                    "help": "What you owe on cards and loans, against everything you own. Payoff dates use each loan's "
+                            "rate and monthly payment."})
+
+    missing = accts[accts["balance"].isna()]
+    if len(missing):
+        out.append({"icon": "💳", "help": "Card downloads don't include a balance.",
+                    "text": f"**{len(missing)} account(s) have no balance yet:** " + ", ".join(missing["name"])
+                            + ". Type it from the bank's app into **Accounts**, or import a statement PDF."})
+
+    have = accts[accts["balance"].notna()].copy()
+    if len(have):
+        age = (today - pd.to_datetime(have["as_of"])).dt.days
+        due = have[age > have["type"].map(lambda k: STALE_DAYS.get(k, 45))]
+        if len(due):
+            items = ", ".join(f"{r.name} ({pd.Timestamp(r.as_of):%b %-d})" for r in due.itertuples())
+            out.append({"icon": "⏰", "help": "Accounts with statements: after 45 days. Homes, cars, gold and "
+                                             "collectibles: after 4–6 months.",
+                        "text": f"**Due for an update:** {items}. Import their latest statements, or type the value "
+                                "in **Accounts**."})
+    return out

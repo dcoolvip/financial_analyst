@@ -256,38 +256,11 @@ with tab_overview:
         kpi_row([("Change, past month", signed(change_since(1))), ("Change, past year", signed(change_since(12))),
                  ("Cash", money(totals["Cash"])), ("Investments", money(totals["Investments"]))])
 
-        # plain-language takeaways
-        notes = []
-        cf = insights.monthly_cash_flow(txns, rule_map)
-        this_month = pd.Timestamp.today().to_period("M").to_timestamp()
-        recent = cf[cf["month"] < this_month].tail(6)
-        if len(recent):
-            income, spend = recent["money_in"].mean(), recent["money_out"].mean()
-            rate = (income - spend) / income if income else 0
-            notes.append(f"💰 You keep about **{money(income - spend)} a month** "
-                         f"({rate:.0%} of what comes in), based on the last {len(recent)} months.")
-            if spend > 0:
-                notes.append(f"🛟 Your cash would cover **{totals['Cash'] / spend:.1f} months** of spending "
-                             f"(3–6 is the usual comfort zone).")
-        yr, base, left_out = db.net_worth_change(conn, 12)
-        if yr is not None and base:
-            notes.append(f"📈 Net worth is {'up' if yr >= 0 else 'down'} **{money(abs(yr))}** over the past year "
-                         f"({yr / abs(base):+.0%})"
-                         + (f", not counting {', '.join(left_out)} (no history that far back yet)." if left_out else "."))
-        if own:
-            notes.append(f"🏦 Debt is **{owe / own:.0%}** of what you own.")
-        missing = accts[accts["balance"].isna()]
-        if len(missing):
-            notes.append(f"💳 **{len(missing)} account(s) have no balance yet:** " + ", ".join(missing["name"])
-                         + ". Card downloads don't include one - type the balance from the bank's app into the "
-                         "**Accounts** table, or import a statement PDF.")
-        stale = insights.stale_accounts(accts[accts["balance"].notna()])
-        if len(stale):
-            notes.append(f"⏰ {len(stale)} account(s) haven't been updated in 45+ days: "
-                         + ", ".join(stale["name"]) + ". Update them in **Accounts**.")
+        # plain-language takeaways, worked out from everything imported so far (ⓘ: how each is calculated)
         with st.container(border=True):
-            for n in notes:
-                st.markdown(n)
+            for n in insights.overview(insights.enrich(txns, rule_map), accts, totals, db.account_changes(conn, 12),
+                                       db.net_worth_change(conn, 12)):
+                st.markdown(f"{n['icon']} {n['text']}", help=n["help"])
 
         head, pick_range, pick_view = st.columns([2, 1.3, 1.3]) if not PHONE else (st, st, st)
         head.markdown("#### Net worth over time")
@@ -303,10 +276,11 @@ with tab_overview:
 
         left, right = st.columns(2)
         with left:
-            st.markdown("#### What you own")
+            st.markdown("#### What you own", help="Today's value of everything you own, by group. Homes, cars, "
+                        "gold and collectibles are in Property & valuables.")
             plot(charts.breakdown_bars({g: totals[g] for g in insights.ASSET_GROUPS}, mode, compact=PHONE))
         with right:
-            st.markdown("#### What you owe")
+            st.markdown("#### What you owe", help="Loan balances and card balances, as the lender shows them.")
             if owe:
                 plot(charts.breakdown_bars({g: totals[g] for g in insights.DEBT_GROUPS}, mode, debt=True,
                                            compact=PHONE))
@@ -315,7 +289,9 @@ with tab_overview:
 
         moves = db.account_changes(conn, 12)
         if len(moves) and moves["change"].abs().sum() >= 1:
-            st.markdown("#### What moved your net worth, past year")
+            st.markdown("#### What moved your net worth, past year",
+                        help="Each account's change over 12 months, only for accounts that had a value then - so "
+                             "a newly added account never counts as a gain. Paying down debt counts as a gain.")
             by_group = insights.change_by_group(moves, dict(zip(accts["id"], accts["type"])))
             left, right = st.columns([1, 1.2]) if not PHONE else (st.container(), st.container())
             with left:
@@ -340,7 +316,8 @@ with tab_overview:
         holdings = db.latest_holdings(conn)
         if len(holdings):
             pf = portfolio.summarize(holdings)
-            st.markdown("#### Investments")
+            st.markdown("#### Investments", help="From the positions in your brokerage statements: what you "
+                        "hold, gains not yet sold, and unvested stock grants.")
             grants = db.latest_grants(conn)
             items = [("Invested", money(pf["total"]))]
             if pf["gain"] is not None:
@@ -438,7 +415,9 @@ with tab_future:
                      ("Debt left", money(exp[f"debt{sfx}"]))])
 
             if len(fc.valuables):
-                st.markdown("#### Property & valuables")
+                st.markdown("#### Property & valuables",
+                            help="How each home, car, collectible and gold holding is expected to change - from its "
+                                 "own history, blended with the long-run rate for its kind.")
                 v = fc.valuables
                 hist_all = db.balance_history(conn)
                 shown = pd.DataFrame({
@@ -462,7 +441,7 @@ with tab_future:
                 plot(charts.asset_outlook(hist_all[hist_all["account_id"] == aid], fc.valuable_paths[pick] / deflate,
                                           mode, compact=PHONE))
 
-            st.markdown("#### Milestones")
+            st.markdown("#### Milestones", help="Loans paid off and other points the most likely path reaches.")
             if fc.milestones:
                 for when, what in fc.milestones:
                     st.markdown(f"- **{when:%b %Y}**: {what}")
@@ -470,7 +449,7 @@ with tab_future:
                 st.caption("No milestones within this horizon. Try more years.")
 
             if fc.loans:
-                st.markdown("#### Loans")
+                st.markdown("#### Loans", help="The rate and monthly payment the forecast pays each loan down with.")
                 est = [l.name for l in fc.loans if l.estimated]
                 st.dataframe(pd.DataFrame([{"Loan": l.name, "Balance": l.balance, "Rate": l.apr * 100,
                                             "Monthly payment": l.payment} for l in fc.loans]),
@@ -530,20 +509,21 @@ with tab_flow:
         st.caption("Monthly averages over the last 6 complete months. Transfers between your own accounts "
                    "and card payments are left out so nothing is counted twice.")
 
-        st.markdown("#### Each month")
+        st.markdown("#### Each month", help="Money in and out per month. Transfers between your own accounts "
+                    "and card bill payments aren't counted.")
         plot(charts.cash_flow_bars(cf.tail(6 if PHONE else 12), mode, compact=PHONE))
 
         cats = insights.spending_by_category(txns, rules=rule_map)
         if len(cats):
-            st.markdown("#### Where it goes" + ("" if PHONE else " (monthly average, last 3 months)"))
+            st.markdown("#### Where it goes" + ("" if PHONE else " (monthly average, last 3 months)"),
+                        help="Hover a bar to see what that category covers. Change a transaction's category in the "
+                             "table below and every transaction from that merchant follows.")
             if PHONE:
                 st.caption("Monthly average, last 3 months")
-            plot(charts.category_bars(cats, mode, compact=PHONE))
+            plot(charts.category_bars(cats, mode, compact=PHONE, about=categorize.CATEGORY_HELP))
 
-        with st.expander("ℹ️ What each category covers"):
-            st.markdown("\n".join(f"- **{c}** - {d}" for c, d in categorize.CATEGORY_HELP.items()))
-
-        st.markdown("#### Transactions")
+        st.markdown("#### Transactions", help="Every transaction from every account. Categories: your "
+                    "choices first, then matches to your loans, then the AI, then built-in keywords.")
         view = insights.enrich(txns, rule_map)
         cat_options = sorted(set(categorize.CATEGORIES) | set(view["category"].dropna()))
         periods = {"All time": None, "This month": 0, "Last 3 months": 3, "Last 12 months": 12}
@@ -593,7 +573,7 @@ with tab_flow:
                 "purchaser": st.column_config.TextColumn("Who", help="Who made the purchase, on a shared card"),
                 "category": st.column_config.SelectboxColumn(
                     "Category ✏️", options=cat_options, required=True,
-                    help="What each category covers: see ℹ️ above the table"),
+                    help="Hover a bar in Where it goes to see what each category covers"),
                 "amount": st.column_config.NumberColumn("Amount", format="$%,.0f" if PHONE else "$%,.2f")})
         changed = edited[edited["category"] != view["category"]]
         if len(changed):
@@ -612,6 +592,15 @@ with tab_flow:
 # --- accounts -----------------------------------------------------------------
 
 LABEL_TO_TYPE = {v: k for k, v in TYPE_LABELS.items()}
+GROUP_HELP = {
+    "Cash": "Checking and savings - money you can spend today.",
+    "Investments": "Brokerage and retirement accounts, at their latest statement or holdings value.",
+    "Property & valuables": "Homes, cars, gold and collectibles, at their latest estimated value. They grow (or "
+                            "shrink) in the Future tab at the rate shown here.",
+    "Credit cards": "What you owe on each card, as the card company shows it. Paid in full each month, it's not "
+                    "really debt - it's spending waiting to be paid.",
+    "Loans": "Mortgages, car and other loans, with the rate and monthly payment used to pay them down.",
+}
 
 
 with tab_accounts:
@@ -690,7 +679,7 @@ with tab_accounts:
                 rows = table[table["Group"] == g].reset_index(drop=True)
                 if rows.empty:
                     continue
-                st.markdown(f"**{g}** · {money(totals[g])}")
+                st.markdown(f"**{g}** · {money(totals[g])}", help=GROUP_HELP.get(g))
                 shown_word, new_word = balance_word.get(g, ("Balance", "Type new balance ✏️"))
                 cols = (["name", "shown_balance", "new_balance", "Updated"] if PHONE else
                         ["name", "bank", "Type", "shown_balance", "new_balance", "year"]
@@ -751,7 +740,8 @@ with tab_accounts:
             st.rerun()
 
         # --- one account, in depth: every value on record, where it came from, and what's behind it
-        st.markdown("### Account details")
+        st.markdown("### Account details", help="Pick an account to see every value on record and where it "
+                    "came from, plus its holdings, transactions or loan payoff.")
         pick = st.selectbox("Show details for", table["name"].tolist(), key="acct_detail")
         r = table.loc[table["name"] == pick].iloc[0]
         aid, debt = int(r["id"]), bool(r["is_liability"])
