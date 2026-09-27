@@ -493,3 +493,28 @@ def test_net_worth_range_and_own_owe_view(env):
     assert not at.exception
     spec = at.get("plotly_chart")[0].proto.spec
     assert '"What you own"' in spec and '"What you owe"' in spec
+
+
+def test_dollar_amounts_never_render_as_math(env):
+    """Regression: Streamlit typesets text between two "$" as a formula - "$29K in, $40K out" came out as
+    garbled italics. Every displayed "$" must be escaped, on every tab."""
+    import re as _re
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    loan = db.add_account(conn, "Car loan", "Hyundai Motor Finance", "auto_loan")
+    db.update_account_terms(conn, loan, 0.05, 900.0)
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for m in range(8, 0, -1):
+        d = (today - pd.DateOffset(months=m)).date()
+        db.upsert_balance(conn, chk, d, 20_000)
+        db.upsert_balance(conn, loan, d, 30_000 - 800 * (8 - m))
+        rows += [(d, "ACME DES:PAYROLL", 5_000.0, f"p{m}"), (d, "SAFEWAY", -9_000.0, f"s{m}")]
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    at = app()
+    at.selectbox(key="acct_detail").set_value("Car loan").run()
+    texts = [e.value for e in list(at.markdown) + list(at.caption) + list(at.info) + list(at.warning)]
+    texts += [e.proto.help for e in list(at.markdown) if e.proto.help]
+    bad = [t for t in texts if len(_re.findall(r"(?<!\\)\$", t)) >= 2]
+    assert not bad, bad[:3]
+    assert any("above what came in" in t and r"\$" in t for t in texts)      # the insight is there, escaped

@@ -112,6 +112,34 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+# Streamlit reads text between two "$" as a math formula, so "$29K in, $40K out" came out as garbled italics.
+# This app never shows formulas: every "$" in displayed text is a dollar sign. Escape them in one place.
+_DOLLAR = re.compile(r"(?<!\\)\$")
+
+
+def _dollars_as_text(fn, method: bool = False):
+    def call(*args, **kwargs):
+        args = list(args)
+        i = 1 if method else 0                      # container.markdown(self, body, ...) vs st.markdown(body, ...)
+        if len(args) > i and isinstance(args[i], str):
+            args[i] = _DOLLAR.sub(r"\\$", args[i])
+        if isinstance(kwargs.get("body"), str):
+            kwargs["body"] = _DOLLAR.sub(r"\\$", kwargs["body"])
+        if isinstance(kwargs.get("help"), str):
+            kwargs["help"] = _DOLLAR.sub(r"\\$", kwargs["help"])
+        return fn(*args, **kwargs)
+    call._dollars_escaped = True        # own marker: Streamlit's functions already carry __wrapped__
+    return call
+
+
+from streamlit.delta_generator import DeltaGenerator  # noqa: E402 - columns/containers: col.markdown(...)
+
+for _name in ("markdown", "caption", "info", "warning", "success", "error", "toast"):
+    if not getattr(getattr(st, _name), "_dollars_escaped", False):          # the page reruns; wrap once
+        setattr(st, _name, _dollars_as_text(getattr(st, _name)))
+    if hasattr(DeltaGenerator, _name) and not getattr(getattr(DeltaGenerator, _name), "_dollars_escaped", False):
+        setattr(DeltaGenerator, _name, _dollars_as_text(getattr(DeltaGenerator, _name), method=True))
+
 TYPE_LABELS = {
     "checking": "Checking", "savings": "Savings", "brokerage": "Brokerage", "retirement": "Retirement (401k/IRA)",
     "property": "Home / real estate", "vehicle": "Vehicle", "collectible": "Collectibles (cards, art…)",
