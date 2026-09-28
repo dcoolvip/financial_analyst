@@ -161,8 +161,10 @@ EPISODES = {   # key: (name, what happened, rows)
     "depression": ("Great Depression 1929–1945", "the worst crash on record: about −85% at the lowest point in 1932 "
                    "(with dividends reinvested it recovered within a few years; the price index alone took 25), prices "
                    "fell about 25% by 1933, rates near zero, a second crash in 1937, then the war years", _DEPRESSION),
-    "japan": ("Japan 1990–2019", "a bubble that burst and never came back: stocks down about 80% at the lowest, land "
-              "prices falling for 15 years, near-zero inflation and rates for decades", _JAPAN),
+    "japan": ("Japan-style stagnation (Japan 1990–2019)", "what if US markets did what Japan's did - this happened in "
+              "Japan, not the US (US stocks boomed in the 1990s). A bubble that burst and never came back: stocks down "
+              "about 80% at the lowest, including the global crashes of 2000-02 and 2008 on top, land prices falling "
+              "for 15 years, near-zero inflation and rates for decades", _JAPAN),
 }
 EPISODE_SOURCE = ("Yearly stock total returns, inflation, T-bill rates, home prices and dividend changes; 2000-2013 "
                   "from the history above, 1929-45, 1973-82 and Japan approximate")

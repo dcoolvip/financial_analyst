@@ -746,7 +746,7 @@ with tab_future:
             future_view = st.segmented_control("Future view", ["Net worth", "Own & owe"], default="Net worth",
                                                key="future_view", label_visibility="collapsed") or "Net worth"
             ep_tabs = {"none": "Normal", "lost_decade": "Lost decade", "crisis_2008": "2008 crisis",
-                       "stagflation": "Stagflation", "depression": "Depression", "japan": "Japan"}
+                       "stagflation": "Stagflation", "depression": "Depression", "japan": "Japan-style"}
             ep_key = st.segmented_control(
                 "Stress test: replay a real market period", list(ep_tabs), format_func=ep_tabs.get, default="none",
                 key="episode",
