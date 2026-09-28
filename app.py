@@ -748,7 +748,8 @@ with tab_future:
             ep_tabs = {"none": "Normal", "lost_decade": "Lost decade", "crisis_2008": "2008 crisis",
                        "stagflation": "Stagflation", "depression": "Depression", "japan": "Japan"}
             ep_key = st.segmented_control(
-                "Replay a real crash", list(ep_tabs), format_func=ep_tabs.get, default="none", key="episode",
+                "Stress test: replay a real market period", list(ep_tabs), format_func=ep_tabs.get, default="none",
+                key="episode",
                 help="Replays a real period year by year - stock returns (Apple swinging 1.25x as hard), inflation "
                      "(your costs and Social Security raises follow it), cash rates, home prices and dividend cuts - "
                      "then normal assumptions resume, with no built-in catch-up. Drawn as a dashed line.") or "none"
@@ -766,6 +767,27 @@ with tab_future:
                                         history=db.balance_history(conn), trend_overrides=trend_overrides())
                 crash_labels = {k: f"the {history.EPISODES[k][0]} replayed" for k in history.EPISODES}
                 crash = ep_key
+                start_idx = forecast.episode_years(dataclasses.replace(a, episode=ep_key, episode_start=ep_start),
+                                                   a.years)["start"] or 0
+                name, what, _ = history.EPISODES[ep_key]
+                f_ = history.episode_facts(ep_key)
+                back = (f"back to the old peak {f_['recovery_years']} years after the low" if f_["recovery_years"]
+                        else "never back to the old peak within the period")
+                begins = now_ts.year + start_idx
+                with st.container(border=True):
+                    st.markdown(
+                        f"**Replaying: {name}**. {what[0].upper() + what[1:]}.\n\n"
+                        f"- **From the data** (year-end figures, dividends included): stocks fell "
+                        f"{-f_['worst_fall']:.0%} at the worst, {back}; inflation averaged {f_['inflation']:.1%} a year; "
+                        f"home prices {f_['homes']:+.0%} over the period.\n"
+                        f"- **In your plan:** from {begins} "
+                        + ("(when you both retire)" if ep_start == "retire" else "(next year)")
+                        + f" for {f_['length']} years, to {begins + f_['length'] - 1}. Apple swings 1.25× as much as the "
+                          "market; your living costs, healthcare and Social Security raises follow the period's "
+                          "inflation; cash earns its rates; home values and dividends move as they did"
+                        + (". Pay, 401(k) and new stock stop for its first 2 years" if job_loss else "")
+                        + ". Afterwards, normal assumptions resume - no built-in catch-up.\n"
+                        f"- **On the chart:** the dashed line is your net worth with this period replayed.")
             if future_view == "Own & owe":
                 plot(charts.forecast_own_owe(nw.tail(24), fc.expected, real, mode, compact=PHONE))
                 e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]

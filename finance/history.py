@@ -151,16 +151,18 @@ def _from_yearly(first: int, last: int) -> list:
 
 
 EPISODES = {   # key: (name, what happened, rows)
-    "lost_decade": ("Lost decade 2000–2012", "dot-com bust then 2008: stocks roughly flat for 13 years with two "
-                    "~50% falls; homes boom then fall", _from_yearly(2000, 2012)),
-    "crisis_2008": ("Financial crisis 2007–2013", "stocks −37% in 2008, homes −27% over 2007–11, dividends cut "
-                    "about 20%, rates near 0%", _from_yearly(2007, 2013)),
-    "stagflation": ("Stagflation 1973–1982", "stocks −41% in 1973–74 while inflation ran 7–13% a year: costs "
-                    "rose fast as savings fell", _STAGFLATION),
-    "depression": ("Great Depression 1929–1945", "stocks −85% by 1932, prices fell ~25%, near-zero rates, a second "
-                   "crash in 1937; about 15 years to recover", _DEPRESSION),
-    "japan": ("Japan 1990–2019", "stocks −80% and land prices falling for 15 years, near-zero inflation and rates - "
-              "no full recovery in 30 years", _JAPAN),
+    "lost_decade": ("Lost decade 2000–2012", "the dot-com bust and then 2008: two falls of about 50% at their "
+                    "lowest points, stocks roughly flat for 13 years; home prices boomed, then fell", _from_yearly(2000, 2012)),
+    "crisis_2008": ("Financial crisis 2007–2013", "the housing bust and banking crisis: stocks −37% in 2008 (about "
+                    "−55% at the lowest point), home prices down about a quarter, dividends cut about 20%, rates cut to "
+                    "near 0%", _from_yearly(2007, 2013)),
+    "stagflation": ("Stagflation 1973–1982", "an oil shock and runaway inflation: stocks fell sharply in 1973–74 "
+                    "while prices rose 7–13% a year, so living costs climbed while savings shrank", _STAGFLATION),
+    "depression": ("Great Depression 1929–1945", "the worst crash on record: about −85% at the lowest point in 1932 "
+                   "(with dividends reinvested it recovered within a few years; the price index alone took 25), prices "
+                   "fell about 25% by 1933, rates near zero, a second crash in 1937, then the war years", _DEPRESSION),
+    "japan": ("Japan 1990–2019", "a bubble that burst and never came back: stocks down about 80% at the lowest, land "
+              "prices falling for 15 years, near-zero inflation and rates for decades", _JAPAN),
 }
 EPISODE_SOURCE = ("Yearly stock total returns, inflation, T-bill rates, home prices and dividend changes; 2000-2013 "
                   "from the history above, 1929-45, 1973-82 and Japan approximate")
@@ -170,3 +172,17 @@ def episode(key: str) -> pd.DataFrame:
     """The episode's years as fractions: stocks, inflation, cash, homes, dividends (change)."""
     rows = EPISODES[key][2]
     return pd.DataFrame(rows, columns=["year", "stocks", "inflation", "cash", "homes", "dividends"]).set_index("year") / 100
+
+
+def episode_facts(key: str) -> dict:
+    """Key numbers of an episode from its own yearly data: worst stock fall (peak to low, yearly figures), years
+    from the low back to the old peak (None if never within the episode), average inflation, total home change."""
+    e = episode(key)
+    level = np.concatenate([[1.0], np.cumprod(1 + e["stocks"].to_numpy())])
+    peak = np.maximum.accumulate(level)
+    low_i = int(np.argmin(level / peak))
+    back = next((i for i in range(low_i, len(level)) if level[i] >= peak[low_i]), None)
+    return {"years": f"{e.index[0]}–{e.index[-1]}", "length": len(e), "worst_fall": float(level[low_i] / peak[low_i] - 1),
+            "recovery_years": (back - low_i) if back is not None else None,
+            "inflation": float(np.prod(1 + e["inflation"]) ** (1 / len(e)) - 1),
+            "homes": float(np.prod(1 + e["homes"]) - 1), "stocks_total": float(level[-1] - 1)}
