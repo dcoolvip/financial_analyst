@@ -11,7 +11,7 @@ The gate owns everything security-related, because Streamlit can't do it properl
   * Login rate limiting, Origin checks on every POST, HSTS and anti-framing headers.
 Everything else - including Streamlit's WebSocket - is passed through only with a valid session.
 
-Run by "Dashboard (Wi-Fi).command":  python -m finance.gate --host dcool.home --ip <wifi ip>
+Run by "Dashboard.command":  python -m finance.gate --host dcool.home --ip <wifi ip>
 """
 from __future__ import annotations
 
@@ -674,7 +674,7 @@ def main() -> None:
     ap.add_argument("--key", default=None, help="default: <data folder>/tls/server.key")
     a = ap.parse_args()
     if not store.password_is_set():
-        raise SystemExit("No password set. Start via 'Dashboard (Wi-Fi).command'.")
+        raise SystemExit("No password set. Start via 'Dashboard.command'.")
     tls = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     tls.minimum_version = ssl.TLSVersion.TLSv1_2
     tls_dir = paths.data_dir() / "tls"

@@ -54,7 +54,7 @@ st.set_page_config(page_title="Financial Analyst", page_icon="📈", layout="wid
 # this app. Streamlit itself must then only be reachable from this Mac, never the network.
 GATED = os.environ.get("FINANCE_GATE") == "1"
 if GATED and st.get_option("server.address") not in ("127.0.0.1", "localhost"):
-    st.error("Behind the gate, Streamlit must listen on 127.0.0.1 only. Start with “Dashboard (Wi-Fi).command”.")
+    st.error("Behind the gate, Streamlit must listen on 127.0.0.1 only. Start with “Dashboard.command”.")
     st.stop()
 
 

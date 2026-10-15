@@ -7,7 +7,7 @@ from pathlib import Path
 from finance import paths
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = [ROOT / "Dashboard.command", ROOT / "Dashboard (Wi-Fi).command", *ROOT.glob("tools/*.sh"),
+SCRIPTS = [ROOT / "Dashboard.command", *ROOT.glob("tools/*.sh"),
            *ROOT.glob("tools/*.py")]
 
 
@@ -34,7 +34,7 @@ def test_scripts_never_use_in_repo_venv_or_data():
 
 
 def test_all_launchers_share_env_setup():
-    for f in (ROOT / "Dashboard.command", ROOT / "Dashboard (Wi-Fi).command", ROOT / "tools/make_tls.sh"):
+    for f in (ROOT / "Dashboard.command", ROOT / "tools/make_tls.sh"):
         assert "source tools/env.sh" in f.read_text(), f.name
     assert '$HOME/.venvs/financial-analyst' in (ROOT / "tools/env.sh").read_text()
     assert os.access(ROOT / "tools/make_tls.sh", os.X_OK)

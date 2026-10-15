@@ -10,12 +10,13 @@ source tools/env.sh      # creates ~/.venvs/financial-analyst and installs requi
 "$PY" -m streamlit run app.py
 ```
 
-Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder: it sets
+Open http://localhost:8501. Or just double-click **`Dashboard.command`** in Finder (below): it sets
 things up on first run, opens the browser, and stops when you close its Terminal window. Switch to **Demo data** in the sidebar to look around with a fake household.
 
 ## Other devices on your Wi-Fi (HTTPS, passkeys)
 
-Double-click **`Dashboard (Wi-Fi).command`** → `https://dcool.home:8501`.
+Double-click **`Dashboard.command`** → `https://dcool.home:8501`, on this Mac and on your phone. If it's
+already running (another Terminal window), it just opens the browser.
 
 ```
 phone/Mac ──HTTPS──▶ gate (Wi-Fi IP:8501) ──▶ Streamlit (127.0.0.1:8502, this Mac only)
@@ -32,13 +33,12 @@ AirDrop it → Settings → General → VPN & Device Management → Install → 
 Certificate Trust Settings → turn it on. The CA is name-constrained to `dcool.home` and the home subnet,
 so it can't vouch for any other site.
 
-Both launchers run under `finance/reloader.py` (like Flask's reloader): code, certificate and
+The launcher runs under `finance/reloader.py` (like Flask's reloader): code, certificate and
 `requirements.txt` changes are picked up automatically and crashes are retried, so there's no need to
-reopen the window after updates. Only edits to the `.command` files themselves need a relaunch.
+reopen the window after updates. Only edits to `Dashboard.command` itself need a relaunch.
 
 Check the whole chain end to end: `~/.venvs/financial-analyst/bin/python tools/selftest_gate.py`
 
-The regular `Dashboard.command` stays on `http://localhost`, and that traffic never leaves the Mac.
 
 ## Getting your data in (Bank of America)
 
