@@ -18,7 +18,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, portfolio, retirement
+from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, plaid, portfolio, retirement
 
 
 @st.cache_resource
@@ -33,7 +33,7 @@ def _reload_changed_modules() -> None:
     order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.apple_card, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon]
+             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon, plaid]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -1686,6 +1686,44 @@ with tab_add:
                 if all(x.file_id in done for x in files):          # every CSV imported: clear the uploader
                     st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
                 st.rerun()                                          # every tab reflects the import right away
+
+    with st.expander("🔌 Connect banks automatically (Plaid)"):
+        keys = plaid.load_keys()
+        if keys:
+            st.caption(f"Keys saved on this Mac (client ID {keys['client_id'][:6]}…, secret ••••{keys['secret'][-4:]}).")
+            b1, b2 = st.columns(2)
+            if b1.button("Check which of my banks Plaid can connect", type="primary"):
+                with st.spinner("Asking Plaid…"):
+                    try:
+                        plaid.check(plaid.institutions_to_check(accts["institution"]), keys)
+                    except plaid.PlaidError as e:
+                        st.error(f"Plaid said: {e}")
+            if b2.button("Remove the keys"):
+                plaid.forget_keys()
+                st.rerun()
+            if (last := plaid.last_check()) and last["rows"]:
+                res = pd.DataFrame(last["rows"])
+                res["Plaid can connect"] = res["oauth"].map(
+                    {False: "✅ Now", True: "🔒 Needs full production"}).fillna("❓ Not found on Plaid")
+                res["Has"] = res["products"].map(lambda ps: ", ".join(ps) or "-")
+                st.caption(f"Checked {datetime.fromtimestamp(last['checked']):%b %-d, %-I:%M %p}. "
+                           "“Needs full production” = the bank sends you to its own sign-in page (OAuth), which "
+                           "Limited Production access can't use.")
+                st.dataframe(res.rename(columns={"yours": "Your institution", "plaid_name": "On Plaid as"})
+                             [["Your institution", "On Plaid as", "Plaid can connect", "Has"]],
+                             hide_index=True, width="stretch")
+        else:
+            st.caption("Paste the keys from Plaid's dashboard (Developers → Keys). They're saved only on this Mac, "
+                       "in the private data folder - never in the code or the database.")
+            with st.form("plaid_keys", border=False):
+                k1, k2 = st.columns(2)
+                cid = k1.text_input("Client ID")
+                sec = k2.text_input("Production secret", type="password")
+                if st.form_submit_button("Save keys"):
+                    if cid.strip() and sec.strip():
+                        plaid.save_keys(cid, sec)
+                        st.rerun()
+                    st.error("Paste both the client ID and the secret.")
 
     cps = checkpoints.list_all(conn)
     if cps:

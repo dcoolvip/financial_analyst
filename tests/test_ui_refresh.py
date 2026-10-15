@@ -661,3 +661,23 @@ def test_future_summarizes_the_plan_under_money_in_and_out(env):
     assert f"Alex:** retires in {today.year - 50 + 65} at 65" in summary and "24% bracket" in summary
     assert "**Next 12 months:**" in summary                               # the old separate captions live here now
     assert not any(c.value.startswith("Next 12 months") for c in at.caption)
+
+
+def test_plaid_keys_screen_saves_checks_and_forgets(env, monkeypatch, tmp_path):
+    from finance import plaid
+    conn, _ = env
+    db.get_or_create_account(conn, "Golden 1 Mortgage", "Golden 1 Credit Union", "mortgage")
+    at = app()
+    [t for t in at.text_input if t.label == "Client ID"][0].input("cid123")
+    [t for t in at.text_input if t.label == "Production secret"][0].input("sekret9876")
+    [b for b in at.button if b.label == "Save keys"][0].click().run()
+    assert not at.exception
+    assert plaid.load_keys()["secret"] == "sekret9876"
+    assert any("••••9876" in c.value for c in at.caption) and not any("sekret9876" in c.value for c in at.caption)
+    monkeypatch.setattr(plaid, "search", lambda q, keys: [{"name": "Golden 1 Credit Union", "oauth": False,
+                                                          "products": ["transactions"]}])
+    click(at, "Check which of my banks Plaid can connect")
+    shown = at.dataframe[-1].value
+    assert list(shown["Plaid can connect"]) == ["✅ Now"] and list(shown["Your institution"]) == ["Golden 1 Credit Union"]
+    click(at, "Remove the keys")
+    assert plaid.load_keys() is None and [t for t in at.text_input if t.label == "Client ID"]
