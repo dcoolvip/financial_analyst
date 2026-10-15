@@ -26,8 +26,11 @@ def test_keys_are_private_to_this_user_and_removable(data):
 
 def test_check_sorts_oauth_from_direct_and_skips_hand_tracked_values(data, monkeypatch):
     sent = []
-    answers = {"Chase": [{"name": "Chase", "oauth": True, "products": ["transactions", "liabilities", "auth"]}],
-               "Golden 1": [{"name": "Golden 1 Credit Union", "oauth": False, "products": ["transactions"]}],
+    answers = {"Chase": [{"name": "Chase", "oauth": True, "products": ["transactions", "liabilities", "auth"]},
+                         {"name": "Austin Bank - Personal", "oauth": False, "products": []}],      # fuzzy noise
+               "Golden 1 Credit Union": [{"name": "Golden Plains Credit Union", "oauth": False, "products": []},
+                                         {"name": "Golden 1 Credit Union", "oauth": False,
+                                          "products": ["transactions"]}],
                "Nowhere Bank": []}
 
     def fake_post(endpoint, body, keys):
@@ -37,11 +40,12 @@ def test_check_sorts_oauth_from_direct_and_skips_hand_tracked_values(data, monke
     names = plaid.institutions_to_check(["Chase", "Golden 1 Credit Union", "Redfin estimate", "Physical",
                                          "Nowhere Bank", "Chase"])
     rows = plaid.check(names, {"client_id": "c", "secret": "s"})
-    assert [q for _, q, _ in sent] == ["Chase", "Golden 1", "Nowhere Bank"]       # once each, searched by Plaid's name
+    assert [q for _, q, _ in sent] == ["Chase", "Golden 1 Credit Union", "Nowhere Bank"]       # once each
     assert all(e == "/institutions/search" and c == ["US"] for e, _, c in sent)
     by = {r["yours"]: r for r in rows}
     assert by["Chase"]["oauth"] is True and by["Chase"]["products"] == ["transactions", "liabilities"]
     assert by["Golden 1 Credit Union"]["oauth"] is False
+    assert [r["plaid_name"] for r in rows if r["plaid_name"]] == ["Chase", "Golden 1 Credit Union"]   # no lookalikes
     assert by["Nowhere Bank"]["plaid_name"] is None
     assert plaid.last_check()["rows"] == rows                                       # kept for the screen
 

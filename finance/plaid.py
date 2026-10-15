@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -19,7 +20,6 @@ from . import paths
 
 HOSTS = {"production": "https://production.plaid.com", "sandbox": "https://sandbox.plaid.com"}
 NOT_ON_PLAID = {"Physical", "Pokemon dashboard", "Redfin estimate", "Hyundai"}   # values we track by hand
-SEARCH_NAMES = {"E*TRADE": "E*TRADE", "Merrill": "Merrill", "Golden 1 Credit Union": "Golden 1"}
 SHOWN_PER_SEARCH = 3
 
 
@@ -79,6 +79,12 @@ def search(query: str, keys: dict) -> list[dict]:
     return r.get("institutions", [])
 
 
+def _same_name(ours: str, theirs: str) -> bool:
+    """Plaid's search is fuzzy ("Chase" also finds "Austin Bank"): keep matches that contain our name's words."""
+    words = lambda t: set(re.findall(r"[a-z0-9*]+", t.lower()))
+    return words(ours) <= words(theirs)
+
+
 def institutions_to_check(names) -> list[str]:
     return sorted({n for n in names if n and n not in NOT_ON_PLAID})
 
@@ -88,7 +94,7 @@ def check(institutions: list[str], keys: dict) -> list[dict]:
     of the products the dashboard would use does Plaid offer there."""
     rows = []
     for name in institutions:
-        found = search(SEARCH_NAMES.get(name, name), keys)[:SHOWN_PER_SEARCH]
+        found = [i for i in search(name, keys) if _same_name(name, i.get("name", ""))][:SHOWN_PER_SEARCH]
         if not found:
             rows.append({"yours": name, "plaid_name": None, "oauth": None, "products": []})
         for inst in found:
