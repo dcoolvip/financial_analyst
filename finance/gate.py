@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import html
 import json
 import secrets
 import socket
 import ssl
+import sys
 import time
 import urllib.parse
 from collections import defaultdict, deque
@@ -628,13 +630,23 @@ async def route_connection(loop, conn: socket.socket, protocol_factory, tls: ssl
         await _redirect_plain_http(loop, conn, origin)
 
 
+PORT_BUSY = 75   # exit code: the port is taken (another copy is running) - the reloader waits quietly
+
+
 async def serve(app: web.Application, ip: str, port: int, tls: ssl.SSLContext, on_ready=None) -> None:
+    # Claim the port first: if another copy already has it, stop before opening anything that needs closing.
+    lsock = socket.socket(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM)
+    lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        lsock.bind((ip, port))
+    except OSError as e:
+        lsock.close()
+        if e.errno in (errno.EADDRINUSE, errno.EADDRNOTAVAIL):
+            raise PortBusy(port) from e
+        raise
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     loop = asyncio.get_running_loop()
-    lsock = socket.socket(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM)
-    lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    lsock.bind((ip, port))
     lsock.listen(128)
     lsock.setblocking(False)
     if on_ready:
@@ -646,6 +658,10 @@ async def serve(app: web.Application, ip: str, port: int, tls: ssl.SSLContext, o
     finally:
         lsock.close()
         await runner.cleanup()
+
+
+class PortBusy(OSError):
+    pass
 
 
 def main() -> None:
@@ -668,6 +684,10 @@ def main() -> None:
         asyncio.run(serve(app, a.ip, a.port, tls,
                           on_ready=lambda: print(f"Gate listening on https://{a.host}:{a.port} "
                                                  f"(http:// is redirected)", flush=True)))
+    except PortBusy:
+        print(f"Port {a.port} is already in use - the dashboard is probably already running from another "
+              f"Terminal window (https://{a.host}:{a.port}). This copy will wait.", flush=True)
+        sys.exit(PORT_BUSY)
     except KeyboardInterrupt:
         pass
 

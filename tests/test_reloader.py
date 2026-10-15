@@ -56,3 +56,24 @@ def test_requirements_change_installs_first(tmp_path):
     s.tick()
     assert calls == ["spawn", "install", "spawn"]
     s._stop()
+
+
+def test_port_taken_by_another_copy_waits_quietly(tmp_path, capsys):
+    """Regression: a second launcher's gate failed on 'Address already in use' and the reloader printed a traceback
+    every 5 seconds forever. Now: one message, then quiet retries every minute."""
+    from finance import reloader
+
+    class Busy:
+        returncode = reloader.PORT_BUSY
+        def poll(self):
+            return self.returncode
+    t = [0.0]
+    sup = reloader.Supervisor([], lambda: Busy(), clock=lambda: t[0])
+    sup.start()
+    assert sup.tick() == "busy"
+    t[0] += 30
+    assert sup.tick() is None                                  # not every 5 seconds
+    t[0] += 31
+    assert sup.tick() == "retried"
+    assert sup.tick() == "busy"
+    assert capsys.readouterr().out.count("port in use") == 1  # said once

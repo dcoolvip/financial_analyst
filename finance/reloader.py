@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Callable
 
 RETRY_AFTER_CRASH_S = 5
+PORT_BUSY = 75                 # the child says its port is taken (another copy running): wait quietly
+RETRY_WHEN_BUSY_S = 60
 
 
 def _log(msg: str) -> None:
@@ -32,6 +34,7 @@ class Supervisor:
         self.seen = self._snapshot()
         self.child: subprocess.Popen | None = None
         self.crashed_at: float | None = None
+        self.busy_logged = False
 
     def _snapshot(self) -> dict[Path, float]:
         return {p: p.stat().st_mtime for p in self.watch if p.exists()}
@@ -62,12 +65,20 @@ class Supervisor:
             self.start()
             return "reloaded"
         if self.child and self.child.poll() is not None:
+            busy = self.child.returncode == PORT_BUSY
             if self.crashed_at is None:
                 self.crashed_at = self.clock()
+                if busy:
+                    if not self.busy_logged:     # say it once, not every few seconds
+                        _log(f"port in use by another copy - checking again every {RETRY_WHEN_BUSY_S}s "
+                             "(you can close this window)")
+                        self.busy_logged = True
+                    return "busy"
+                self.busy_logged = False
                 _log(f"stopped (exit code {self.child.returncode}) - retrying in {RETRY_AFTER_CRASH_S}s "
                      "or as soon as a file changes")
                 return "crashed"
-            if self.clock() - self.crashed_at >= RETRY_AFTER_CRASH_S:
+            if self.clock() - self.crashed_at >= (RETRY_WHEN_BUSY_S if busy else RETRY_AFTER_CRASH_S):
                 self.start()
                 return "retried"
         return None

@@ -310,3 +310,31 @@ def test_https_on_shared_port_serves_gate(gate):
     _, app = gate
     out = _serve_one(app, tls_request=f"GET /login HTTP/1.1\r\nHost: {HOST}:{PORT}\r\nConnection: close\r\n\r\n".encode())
     assert out.startswith("HTTP/1.1 200") and "Sign in" in out and "Strict-Transport-Security" in out
+
+
+def test_port_already_in_use_fails_cleanly_without_opening_anything(monkeypatch):
+    """A second copy can't take the port: stop with PortBusy before the app (and its client session) starts."""
+    import asyncio
+    import errno
+    import socket as socket_mod
+    from finance import gate
+
+    class Taken:
+        def __init__(self, *a, **k): pass
+        def setsockopt(self, *a): pass
+        def bind(self, addr): raise OSError(errno.EADDRINUSE, "Address already in use")
+        def close(self): self.closed = True
+    started = []
+
+    class NoRunner:
+        def __init__(self, *a, **k): started.append(True)
+    loop = asyncio.new_event_loop()                            # made before the fake socket class goes in
+    monkeypatch.setattr(gate.socket, "socket", Taken)
+    monkeypatch.setattr(gate.web, "AppRunner", NoRunner)
+    try:
+        with pytest.raises(gate.PortBusy):
+            loop.run_until_complete(gate.serve(object(), "127.0.0.1", 8501, None))
+    finally:
+        monkeypatch.undo()
+        loop.close()
+    assert not started                                         # nothing opened, so nothing left unclosed

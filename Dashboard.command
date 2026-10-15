@@ -4,6 +4,13 @@
 cd "${0:A:h}"
 source tools/env.sh || exit 1   # sets PY (venv outside iCloud) and DATA
 trap 'kill $(jobs -p) 2>/dev/null' EXIT INT TERM
+# Already running (e.g. another Terminal window)? Then just open it - a second copy can't share the ports.
+if lsof -nP -iTCP:8501 -sTCP:LISTEN -t >/dev/null 2>&1; then
+  echo "The dashboard is already running - opening http://localhost:8501"
+  echo "(Started from another Terminal window. You can close this one.)"
+  open "http://localhost:8501"
+  exit 0
+fi
 "$PY" -m finance.reloader --watch .streamlit/config.toml requirements.txt -- \
   "$PY" -m streamlit run app.py --server.port 8501 &
 sleep 2 && open http://localhost:8501

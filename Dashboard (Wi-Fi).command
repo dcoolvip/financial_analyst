@@ -19,6 +19,14 @@ open(os.environ["PWFILE"], "w").write(salt.hex() + ":" + d.hex())'
   echo "Saved. (Run this file with --reset-password to change it.)"
 fi
 
+# Already running (e.g. another Terminal window)? Then just open it - a second copy can't share the ports.
+if lsof -nP -iTCP:8501 -sTCP:LISTEN -t >/dev/null 2>&1; then
+  echo "The dashboard is already running - opening https://dcool.home:8501"
+  echo "(Started from another Terminal window. You can close this one.)"
+  open "https://dcool.home:8501"
+  exit 0
+fi
+
 IP=$(ipconfig getifaddr en0 || ipconfig getifaddr en1)
 [[ -n "$IP" ]] || { echo "Not connected to Wi-Fi."; exit 1; }
 HOST=dcool.home
