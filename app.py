@@ -1728,6 +1728,8 @@ def render_etrade() -> None:
                     else:
                         etrade.sandbox_test(etrade.load(), c)
                     st.rerun()
+    for err in (st.session_state.get("etrade_report") or {}).get("errors", []):
+        st.error(f"E*TRADE: {err}")
     if not live and (test := etrade.load_test()):
         st.caption(f"Sandbox test {datetime.fromtimestamp(test['checked']):%b %-d, %-I:%M %p} - E*TRADE's made-up "
                    "accounts, shown only and never saved. Switch to a live key for your own.")

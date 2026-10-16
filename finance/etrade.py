@@ -185,14 +185,19 @@ def positions(keys: dict, c: dict, account_key: str) -> pd.DataFrame:
         ports = _as_list((r.get("PortfolioResponse") or {}).get("AccountPortfolio"))
         for p in ports:
             for x in _as_list(p.get("Position")):
-                sym = (x.get("Product") or {}).get("symbol") or x.get("symbolDescription")
+                sym = (x.get("Product") or {}).get("symbol") or x.get("symbolDescription") or "Unnamed position"
                 rows.append({"symbol": sym, "description": x.get("symbolDescription") or sym,
                              "quantity": x.get("quantity"), "price": (x.get("Quick") or {}).get("lastTrade"),
                              "value": float(x.get("marketValue") or 0), "cost_basis": x.get("totalCost")})
         pages = max([int(p.get("totalPages") or 1) for p in ports] or [1])
         if page >= pages:
-            return pd.DataFrame(rows, columns=["symbol", "description", "quantity", "price", "value", "cost_basis"])
+            break
         page += 1
+    df = pd.DataFrame(rows, columns=["symbol", "description", "quantity", "price", "value", "cost_basis"])
+    # one row per stock: E*TRADE lists each lot (bought at different times) separately
+    return df.groupby("symbol", as_index=False, sort=False).agg(
+        description=("description", "first"), quantity=("quantity", "sum"), price=("price", "first"),
+        value=("value", "sum"), cost_basis=("cost_basis", lambda c: c.sum(min_count=1)))
 
 
 def match_account(acct: dict, ours: pd.DataFrame) -> int | None:
@@ -236,6 +241,18 @@ def sandbox_test(keys: dict, c: dict) -> list[dict]:
     return out
 
 
+def error_path() -> Path:
+    return paths.data_dir() / "etrade_errors.log"
+
+
+def _log_error(acct: dict, e: Exception) -> None:
+    """Details for fixing the reader later - the traceback only, never keys or tokens."""
+    import traceback
+    with error_path().open("a") as f:
+        f.write(f"--- {datetime.now():%Y-%m-%d %H:%M} account ••{str(acct.get('accountId', ''))[-4:]}\n"
+                + "".join(traceback.format_exception(e)))
+
+
 def sync(conn, keys: dict) -> dict:
     """Live: balance and holdings for every approved E*TRADE account, into the matching dashboard account."""
     if keys.get("env") != "live":
@@ -269,6 +286,10 @@ def sync(conn, keys: dict) -> dict:
                 total = balance(keys, c, k, a.get("institutionType"))
             except ETradeError as e:
                 report["errors"].append(f"{a.get('accountDesc') or k}: {e}")
+                continue
+            except Exception as e:                      # an answer we didn't expect: keep going, keep the details
+                _log_error(a, e)
+                report["errors"].append(f"{a.get('accountDesc') or k}: couldn't read E*TRADE's answer ({e})")
                 continue
             if len(held):
                 db.replace_holdings(conn, aid, today, held)

@@ -215,3 +215,12 @@ def test_unlink_ends_the_connection_at_plaid(linked):
     plaid.remove_item("item1", plaid.load_keys())
     assert fake.calls[-1] == ("/item/remove", {"access_token": "access-1"})
     assert plaid.load_keys()["items"] == []
+
+
+def test_two_lots_of_one_stock_make_one_holding(linked):
+    conn, fake, ids = linked
+    fake.holdings["holdings"].append({"account_id": "pa_brk", "security_id": "s1", "quantity": 1,
+                                      "institution_price": 300.0, "institution_value": 300.0})
+    assert plaid.sync(conn, plaid.load_keys())["errors"] == []
+    assert conn.execute("SELECT symbol, quantity, value FROM holdings WHERE account_id = ?",
+                        (ids["brk"],)).fetchall() == [("AAPL", 4, 1200.0)]

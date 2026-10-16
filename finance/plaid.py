@@ -273,8 +273,11 @@ def sync(conn, keys: dict) -> dict:
                              "quantity": x.get("quantity"), "price": x.get("institution_price"),
                              "value": float(x.get("institution_value") or 0)}
                             for x in h["holdings"] if x["account_id"] == pid]
-                    if rows:
-                        db.replace_holdings(conn, aid, today, pd.DataFrame(rows))
+                    if rows:                    # one row per symbol, as the holdings table keeps them
+                        df = pd.DataFrame(rows).groupby("symbol", as_index=False, sort=False).agg(
+                            description=("description", "first"), quantity=("quantity", "sum"),
+                            price=("price", "first"), value=("value", "sum"))
+                        db.replace_holdings(conn, aid, today, df)
         _save_item(keys, item)
         keys = load_keys()
         for pid, (aid, a) in target.items():

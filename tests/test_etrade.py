@@ -148,3 +148,29 @@ def test_a_slow_answer_is_retried_once(monkeypatch):
     monkeypatch.setattr(etrade.urllib.request, "urlopen", slow_then_ok)
     assert etrade._get("/v1/accounts/list.json", {"consumer_key": "k", "consumer_secret": "s", "env": "sandbox"}) == b"fine"
     assert tries == [20, 30]
+
+
+def test_same_stock_in_several_lots_is_one_holding(data, fake, monkeypatch):
+    """Regression: E*TRADE lists a stock once per lot (e.g. AAPL bought at different times). The holdings table
+    keeps one row per symbol, so two AAPL rows crashed the sync right after the user matched the account."""
+    conn = db.connect(data / "finance.db")
+    md = db.get_or_create_account(conn, "MD eTrade Brokerage", "E*TRADE", "brokerage")
+    db.update_account_details(conn, md, last4="2204")
+    lot = lambda q, v, cost: {"symbolDescription": "AAPL", "quantity": q, "marketValue": v, "totalCost": cost,
+                              "Quick": {"lastTrade": 250.0}, "Product": {"symbol": "AAPL"}}
+    nameless = {"symbolDescription": None, "quantity": 1, "marketValue": 5.0, "Product": {}}
+
+    class Lots(FakeETrade):
+        def __call__(self, path, *a, **k):
+            if path.endswith("/portfolio.json"):
+                return json.dumps({"PortfolioResponse": {"AccountPortfolio": [{"totalPages": 1, "Position": [
+                    lot(4, 1000.0, 400.0), lot(6, 1500.0, 900.0), nameless]}]}}).encode()
+            return super().__call__(path, *a, **k)
+    monkeypatch.setattr(etrade, "_get", Lots())
+    etrade.save_keys("ck", "cs", "live")
+    url, tok, sec = etrade.start_approval(etrade.load())
+    etrade.finish_approval("AB12C", tok, sec, etrade.load())
+    r = etrade.sync(conn, etrade.load())
+    assert r["errors"] == []
+    assert conn.execute("SELECT symbol, quantity, value, cost_basis FROM holdings WHERE account_id = ? ORDER BY symbol",
+                        (md,)).fetchall() == [("AAPL", 10, 2500.0, 1300.0), ("Unnamed position", 1, 5.0, None)]
