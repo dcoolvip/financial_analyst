@@ -117,3 +117,34 @@ def test_live_sync_fills_the_matching_account_and_asks_about_the_rest(data, fake
     etrade.link_account(conn, "k_other", None)                                # "don't import this one"
     assert etrade.sync(conn, etrade.load())["unmatched"] == []
     assert not [c for c in fake.calls if c[0].startswith("/v1") and "orders" in c[0]]   # reads only
+
+
+def test_a_zero_balance_next_to_real_positions_uses_their_value(data, fake, monkeypatch):
+    """Seen in E*TRADE's sandbox: totalAccountValue 0 for accounts holding 7 positions. Never record $0 then."""
+    conn = db.connect(data / "finance.db")
+    md = db.get_or_create_account(conn, "MD eTrade Brokerage", "E*TRADE", "brokerage")
+    db.update_account_details(conn, md, last4="2204")
+    monkeypatch.setattr(etrade, "balance", lambda *a, **k: 0.0)
+    etrade.save_keys("ck", "cs", "live")
+    url, tok, sec = etrade.start_approval(etrade.load())
+    etrade.finish_approval("AB12C", tok, sec, etrade.load())
+    assert etrade.sync(conn, etrade.load())["accounts"][0]["balance"] == 1000.0     # the positions' value
+
+
+def test_a_slow_answer_is_retried_once(monkeypatch):
+    import urllib.error
+    tries = []
+
+    class Ok:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def read(self): return b"fine"
+
+    def slow_then_ok(req, timeout):
+        tries.append(timeout)
+        if len(tries) == 1:
+            raise urllib.error.URLError(TimeoutError("timed out"))
+        return Ok()
+    monkeypatch.setattr(etrade.urllib.request, "urlopen", slow_then_ok)
+    assert etrade._get("/v1/accounts/list.json", {"consumer_key": "k", "consumer_secret": "s", "env": "sandbox"}) == b"fine"
+    assert tries == [20, 30]

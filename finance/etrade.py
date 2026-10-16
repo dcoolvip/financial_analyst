@@ -99,8 +99,14 @@ def _get(path: str, keys: dict, token: str = "", token_secret: str = "", query: 
         "Authorization": _auth_header("GET", url, query, keys, token, token_secret, extra),
         "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return r.read()
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.read()
+        except urllib.error.URLError as e:
+            if isinstance(e, urllib.error.HTTPError) or "timed out" not in str(e.reason):
+                raise
+            with urllib.request.urlopen(req, timeout=30) as r:            # E*TRADE is sometimes slow: once more
+                return r.read()
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")[:300]
         if e.code == 401:
@@ -266,6 +272,8 @@ def sync(conn, keys: dict) -> dict:
                 continue
             if len(held):
                 db.replace_holdings(conn, aid, today, held)
+            if not total and len(held) and held["value"].sum() > 0:     # $0 next to real positions isn't the value
+                total = float(held["value"].sum())
             if total is not None:
                 db.upsert_balance(conn, aid, today, total, SOURCE)
             report["accounts"].append({"account_id": aid, "balance": total, "positions": len(held)})
