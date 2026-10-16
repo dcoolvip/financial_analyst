@@ -257,3 +257,44 @@ def test_ordinary_holdings_are_left_alone():
     h = pd.DataFrame([{"symbol": "VTI", "quantity": 10.0, "value": 3000.0}])
     assert plaid.owned_part(h, 3010.0).equals(h)          # cash or rounding can make the balance a bit higher
     assert plaid.owned_part(h, None).equals(h)
+
+
+def test_sync_can_refresh_just_one_bank(linked, monkeypatch):
+    """Regression: linking Wealthfront refreshed E*TRADE too, spending free-tier calls."""
+    conn, fake, ids = linked
+    plaid.add_item("public-tok-2", "Wealthfront", plaid.load_keys())
+    fake.calls.clear()
+    plaid.sync(conn, plaid.load_keys(), only={"item1"})
+    assert {c[1].get("access_token") for c in fake.calls} == {"access-1"}
+
+
+def test_open_questions_of_other_banks_survive_a_one_bank_sync(linked):
+    conn, fake, ids = linked
+    plaid.sync(conn, plaid.load_keys())
+    assert [u["plaid_account_id"] for u in plaid.unmatched(conn)] == ["pa_new"]
+    db.set_setting(conn, "plaid_unmatched", plaid.unmatched(conn) + [
+        {"plaid_account_id": "other", "item_id": "item2", "institution": "X", "name": "Y", "type": "depository"}])
+    plaid.sync(conn, plaid.load_keys(), only={"item1"})
+    assert sorted(u["plaid_account_id"] for u in plaid.unmatched(conn)) == ["other", "pa_new"]
+
+
+def test_cash_is_called_cash_and_cost_basis_is_kept(linked):
+    conn, fake, ids = linked
+    fake.holdings["holdings"][0]["cost_basis"] = 450.0
+    fake.holdings["holdings"].append({"account_id": "pa_brk", "security_id": "s2", "quantity": 51.1,
+                                      "institution_price": 1.0, "institution_value": 51.1})
+    fake.holdings["securities"].append({"security_id": "s2", "ticker_symbol": "CUR:USD", "name": "U S Dollar",
+                                        "type": "cash"})
+    next(a for a in fake.accounts if a["account_id"] == "pa_brk")["balances"]["current"] = 951.1
+    plaid.sync(conn, plaid.load_keys())
+    rows = conn.execute("SELECT symbol, value, cost_basis FROM holdings WHERE account_id = ? ORDER BY symbol",
+                        (ids["brk"],)).fetchall()
+    assert rows == [("AAPL", 900.0, 450.0), ("CASH", 51.1, None)]
+
+
+def test_next_refresh_is_a_month_after_each_banks_own_refresh():
+    item = {"synced": 1_000_000.0}
+    assert plaid.next_sync(item) == 1_000_000.0 + plaid.SYNC_EVERY_S
+    assert plaid.due_items({"items": [{"item_id": "a", **item}]}, now=1_000_000.0 + plaid.SYNC_EVERY_S) == {"a"}
+    assert plaid.due_items({"items": [{"item_id": "a", **item}]}, now=1_000_000.0 + 86400) == set()
+    assert plaid.due_items({"items": [{"item_id": "new"}]}) == {"new"}            # never refreshed: due now

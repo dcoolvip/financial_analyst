@@ -214,6 +214,14 @@ def _row(t: dict) -> dict:
             "fingerprint": f"plaid|{t['transaction_id']}", "bank_category": cat.replace("_", " ").title() or None}
 
 
+def _symbol(security: dict) -> str:
+    """Plaid names cash like 'CUR:USD'; the portfolio knows it as CASH."""
+    t = security.get("ticker_symbol") or ""
+    if security.get("type") == "cash" or t.startswith("CUR:"):
+        return "CASH"
+    return t or security.get("name") or "Unnamed position"
+
+
 def owned_part(holdings: pd.DataFrame, current) -> pd.DataFrame:
     """Stock plans (Morgan Stanley at Work) list vested + unvested shares in holdings, but the account's current
     value is only what's vested and yours. Scale the holdings down to that, so the portfolio matches net worth and
@@ -222,15 +230,18 @@ def owned_part(holdings: pd.DataFrame, current) -> pd.DataFrame:
     if not current or current <= 0 or total <= float(current) * 1.01:
         return holdings
     f = float(current) / total
-    return holdings.assign(quantity=holdings["quantity"] * f, value=holdings["value"] * f)
+    out = holdings.assign(quantity=holdings["quantity"] * f, value=holdings["value"] * f)
+    return out.assign(cost_basis=out["cost_basis"] * f) if "cost_basis" in out else out
 
 
-def sync(conn, keys: dict) -> dict:
-    """Balances, new transactions and holdings for every linked item. Returns what changed, plus the Plaid
-    accounts that still need to be matched to a dashboard account."""
+def sync(conn, keys: dict, only: set[str] | None = None) -> dict:
+    """Balances, new transactions and holdings for the linked items (`only` = just these item ids, so linking
+    one bank doesn't spend calls refreshing the others). Returns what changed, plus the Plaid accounts that
+    still need to be matched to a dashboard account."""
     ours, m, today = db.accounts(conn), mapping(conn), date.today()
     report = {"accounts": [], "unmatched": [], "errors": []}
-    for item in keys.get("items", []):
+    todo = [i for i in keys.get("items", []) if only is None or i["item_id"] in only]
+    for item in todo:
         try:
             accts = _post("/accounts/get", {"access_token": item["access_token"]}, keys)["accounts"]
         except PlaidError as e:
@@ -248,7 +259,8 @@ def sync(conn, keys: dict) -> dict:
             t = (m.get(a["account_id"]) or {}).get("account_id")
             if t is None:
                 if a["account_id"] not in m:
-                    report["unmatched"].append({"plaid_account_id": a["account_id"], "institution": item["institution"],
+                    report["unmatched"].append({"plaid_account_id": a["account_id"], "item_id": item["item_id"],
+                                                "institution": item["institution"],
                                                 "name": a.get("official_name") or a.get("name"), "mask": a.get("mask"),
                                                 "type": a.get("type"), "subtype": a.get("subtype")})
                 continue
@@ -292,15 +304,16 @@ def sync(conn, keys: dict) -> dict:
             else:
                 sec = {s["security_id"]: s for s in h["securities"]}
                 for pid, (aid, a) in target.items():
-                    rows = [{"symbol": sec[x["security_id"]].get("ticker_symbol") or sec[x["security_id"]].get("name"),
+                    rows = [{"symbol": _symbol(sec[x["security_id"]]),
                              "description": sec[x["security_id"]].get("name") or "",
                              "quantity": x.get("quantity"), "price": x.get("institution_price"),
-                             "value": float(x.get("institution_value") or 0)}
+                             "value": float(x.get("institution_value") or 0), "cost_basis": x.get("cost_basis")}
                             for x in h["holdings"] if x["account_id"] == pid]
                     if rows:                    # one row per symbol, as the holdings table keeps them
                         df = pd.DataFrame(rows).groupby("symbol", as_index=False, sort=False).agg(
                             description=("description", "first"), quantity=("quantity", "sum"),
-                            price=("price", "first"), value=("value", "sum"))
+                            price=("price", "first"), value=("value", "sum"),
+                            cost_basis=("cost_basis", lambda c: c.sum(min_count=1)))
                         owned = owned_part(df, a["balances"].get("current"))
                         db.replace_holdings(conn, aid, today, owned)
                         if owned is not df:      # the rest is unvested: keep it as today's grants bucket
@@ -314,13 +327,32 @@ def sync(conn, keys: dict) -> dict:
             report["accounts"].append({"account_id": aid, "institution": item["institution"],
                                        "added": counts[pid], "balance": a["balances"].get("current")})
     db.set_setting(conn, "plaid_last_sync", time.time())
-    db.set_setting(conn, "plaid_unmatched", report["unmatched"])     # still asked after a refresh
+    done = {i["item_id"] for i in todo}                               # keep other banks' open questions
+    kept = [u for u in db.get_setting(conn, "plaid_unmatched", []) or [] if u.get("item_id") not in done]
+    db.set_setting(conn, "plaid_unmatched", kept + report["unmatched"])   # still asked after a refresh
     return report
 
 
-def next_sync(conn) -> float | None:
-    last = db.get_setting(conn, "plaid_last_sync")
-    return float(last) + SYNC_EVERY_S if last else None
+RETRY_AFTER_S = 24 * 3600
+
+
+def next_sync(item: dict) -> float:
+    """Each bank refreshes a month after its own last refresh (a failed try is retried the next day)."""
+    nxt = (item.get("synced") or 0) + SYNC_EVERY_S
+    if item.get("error") and item.get("tried"):
+        nxt = max(nxt, item["tried"] + RETRY_AFTER_S) if item.get("synced") else item["tried"] + RETRY_AFTER_S
+    return nxt
+
+
+def due_items(keys: dict | None, now: float | None = None) -> set[str]:
+    now = now or time.time()
+    return {i["item_id"] for i in (keys or {}).get("items", []) if next_sync(i) <= now}
+
+
+def mark_tried(item_ids: set[str], error: str) -> None:
+    keys = load_keys() or {}
+    _write({**keys, "items": [{**i, "tried": time.time(), "error": error} if i["item_id"] in item_ids else i
+                              for i in keys.get("items", [])]})
 
 
 def refresh_status(conn, keys: dict | None) -> dict:
@@ -330,7 +362,7 @@ def refresh_status(conn, keys: dict | None) -> dict:
         for pid in item.get("accounts", []):
             if (aid := (m.get(pid) or {}).get("account_id")) is not None:
                 out[aid] = {"institution": item["institution"], "synced": item.get("synced"),
-                            "error": item.get("error")}
+                            "error": item.get("error"), "next": next_sync(item)}
     return out
 
 

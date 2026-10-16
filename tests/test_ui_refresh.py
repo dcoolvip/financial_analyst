@@ -754,7 +754,7 @@ def test_stock_plan_details_show_total_vested_and_unvested(env):
 
 
 
-def test_linked_banks_update_themselves_once_a_month(env, monkeypatch):
+def test_each_bank_updates_itself_once_a_month_and_only_when_due(env, monkeypatch):
     import time
     from finance import plaid
     from tests.test_plaid import FakePlaid
@@ -762,16 +762,17 @@ def test_linked_banks_update_themselves_once_a_month(env, monkeypatch):
     fake = FakePlaid()
     monkeypatch.setattr(plaid, "_post", fake)
     plaid.save_keys("cid", "sec")
-    plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())
-    syncs = lambda: sum(1 for c in fake.calls if c[0] == "/accounts/get")
-    db.set_setting(conn, "plaid_last_sync", time.time() - 10 * 24 * 3600)    # synced 10 days ago: leave it
-    app()
-    assert syncs() == 0
-    db.set_setting(conn, "plaid_last_sync", time.time() - 31 * 24 * 3600)    # a month ago: update on opening
+    keys = plaid.load_keys()
+    now = time.time()
+    plaid._write({**keys, "items": [
+        {"item_id": "fresh", "access_token": "a1", "institution": "Wealthfront", "synced": now - 10 * 86400},
+        {"item_id": "old", "access_token": "a2", "institution": "Barclays - Cards", "synced": now - 31 * 86400}]})
+    tokens = lambda: [c[1]["access_token"] for c in fake.calls if c[0] == "/accounts/get"]
     at = app()
-    assert syncs() == 1 and any("update on their own once a month" in c.value for c in at.caption)
-    app()                                                                     # and not again right away
-    assert syncs() == 1
+    assert tokens() == ["a2"]                                                 # only the bank whose month is up
+    assert any("updates on its own once a month" in c.value for c in at.caption)
+    app()
+    assert tokens() == ["a2"]                                                 # and not again right away
 
 
 def test_a_failed_monthly_update_never_stops_the_dashboard(env, monkeypatch):
@@ -780,10 +781,11 @@ def test_a_failed_monthly_update_never_stops_the_dashboard(env, monkeypatch):
     conn, _ = env
     plaid.save_keys("cid", "sec")
     plaid._write({**plaid.load_keys(), "items": [{"item_id": "i", "access_token": "a", "institution": "X"}]})
-    monkeypatch.setattr(plaid, "sync", lambda *a: (_ for _ in ()).throw(RuntimeError("no network")))
+    monkeypatch.setattr(plaid, "sync", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no network")))
     app()                                                                     # opens fine (app() checks no exception)
-    last = db.get_setting(conn, "plaid_last_sync")
-    assert time.time() - last > 28 * 24 * 3600                                # retried tomorrow, not in a month
+    item = plaid.load_keys()["items"][0]
+    assert item["error"] == "no network"
+    assert 23 * 3600 < plaid.next_sync(item) - time.time() <= 24 * 3600      # retried tomorrow, not in a month
 
 
 def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):

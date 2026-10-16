@@ -240,13 +240,11 @@ def kpi_row(items: list[tuple[str, str]]) -> None:
                 st.metric(label, value)
 
 
-PLAID_EVERY_S = plaid.SYNC_EVERY_S    # linked banks update themselves once a month (Sync now for anything sooner)
 
 
-def plaid_due() -> bool:
-    keys = plaid.load_keys()
-    return bool(source == "My data" and keys and keys.get("items")
-                and time.time() - float(db.get_setting(conn, "plaid_last_sync") or 0) > PLAID_EVERY_S)
+def plaid_due() -> set[str]:
+    """Linked banks whose own month is up (only these refresh, so no calls are spent on the others)."""
+    return plaid.due_items(plaid.load_keys()) if source == "My data" else set()
 
 
 def refresh_line(synced, nxt, error=None) -> str:
@@ -257,15 +255,15 @@ def refresh_line(synced, nxt, error=None) -> str:
     return " · ".join(parts) + (f"  \n⚠️ Last try failed: {error}" if error else "")
 
 
-if plaid_due():
+if due := plaid_due():
     with st.spinner("Monthly update from your linked banks…"):
         try:
-            r = plaid.sync(conn, plaid.load_keys())
+            r = plaid.sync(conn, plaid.load_keys(), only=due)
             st.session_state["flash"] = (f"Monthly update from your linked banks: "
                                          f"{sum(a['added'] for a in r['accounts'])} new transactions"
                                          + (f" ({len(r['errors'])} problem(s) - see Add data)" if r["errors"] else ""))
         except Exception as e:                       # never let a bank hiccup stop the dashboard from opening
-            db.set_setting(conn, "plaid_last_sync", time.time() - PLAID_EVERY_S + 24 * 3600)   # try again tomorrow
+            plaid.mark_tried(due, str(e))                                                       # try again tomorrow
             st.session_state["flash"] = f"Couldn't update your linked banks this time ({e}). Will retry tomorrow."
 
 accts = db.accounts(conn)
@@ -1309,7 +1307,7 @@ with tab_accounts:
         st.caption(" · ".join(x for x in (TYPE_LABELS.get(r["type"], r["type"]), r["bank"], r["notes"]) if x))
         if link := plaid.refresh_status(conn, plaid.load_keys()).get(aid):
             st.caption(f"🔌 Linked through Plaid ({link['institution']}). "
-                       + refresh_line(link["synced"], plaid.next_sync(conn), link["error"]))
+                       + refresh_line(link["synced"], link["next"], link["error"]))
         if h.empty:
             st.info("No values on record yet. Type one into the table above, or import a statement.")
         else:
@@ -1642,9 +1640,9 @@ def render_statement_review(pdf_files) -> None:
 _plaid_link = components.declare_component("plaid_link", path=str(paths.ROOT / "finance" / "plaid_link"))
 
 
-def plaid_sync(keys: dict) -> None:
+def plaid_sync(keys: dict, only: set[str] | None = None) -> None:
     with st.spinner("Reading your linked banks…"):
-        r = plaid.sync(conn, keys)
+        r = plaid.sync(conn, keys, only)
     names = dict(zip(accts["id"], accts["name"]))
     done = [f"{names.get(a['account_id'], '?')}: {a['added']} new" for a in r["accounts"]]
     st.session_state["plaid_report"] = r
@@ -1656,18 +1654,17 @@ def render_plaid_links(keys: dict) -> None:
     items = keys.get("items", [])
     names = dict(zip(accts["id"], accts["name"]))
     m = plaid.mapping(conn)
-    nxt = plaid.next_sync(conn)
     for it in items:
         mine = [names.get((m.get(pid) or {}).get("account_id")) for pid in it.get("accounts", [])]
         c1, c2 = st.columns([4, 1])
         c1.markdown(f"**{it['institution']}** → " + (", ".join(n for n in mine if n) or "not matched yet"))
-        c1.caption(refresh_line(it.get("synced"), nxt, it.get("error")))
+        c1.caption(refresh_line(it.get("synced"), plaid.next_sync(it), it.get("error")))
         if c2.button("Unlink", key=f"unlink_{it['item_id']}"):
             plaid.remove_item(it["item_id"], keys)
             st.rerun()
     if items:
-        st.caption("Linked banks update on their own once a month, the first time you open the dashboard after the "
-                   "planned date. **Sync now** updates them any time.")
+        st.caption("Each linked bank updates on its own once a month, the first time you open the dashboard after "
+                   "its planned date. **Sync now** updates all of them any time.")
     b1, b2 = st.columns(2)
     if b1.button("➕ Link a bank", type="primary"):
         try:
@@ -1684,11 +1681,11 @@ def render_plaid_links(keys: dict) -> None:
             st.session_state.pop("plaid_token")
             if got.get("public_token"):
                 try:
-                    plaid.add_item(got["public_token"], got.get("institution") or "Bank", keys)
+                    new = plaid.add_item(got["public_token"], got.get("institution") or "Bank", keys)
                 except plaid.PlaidError as e:
                     st.error(f"Plaid said: {e}")
                 else:
-                    plaid_sync(plaid.load_keys())
+                    plaid_sync(plaid.load_keys(), only={new["item_id"]})        # just the new bank
             st.rerun()
     for u in plaid.unmatched(conn):
         kinds = plaid.PLAID_KINDS.get(u["type"], [])
@@ -1721,7 +1718,7 @@ def render_plaid_links(keys: dict) -> None:
             aid = int(accts.loc[accts["name"] == pick, "id"].iloc[0])
         if aid is not None:
             plaid.link_account(conn, u["plaid_account_id"], aid, keys)
-            plaid_sync(plaid.load_keys())
+            plaid_sync(plaid.load_keys(), only={u["item_id"]} if u.get("item_id") else None)   # just that bank
             st.rerun()
 
 
