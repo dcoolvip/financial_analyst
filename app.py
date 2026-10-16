@@ -9,6 +9,7 @@ from datetime import date, datetime
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import finance.importers.base
 import finance.importers.bofa
@@ -1603,6 +1604,70 @@ def render_statement_review(pdf_files) -> None:
         st.rerun()
 
 
+_plaid_link = components.declare_component("plaid_link", path=str(paths.ROOT / "finance" / "plaid_link"))
+
+
+def plaid_sync(keys: dict) -> None:
+    with st.spinner("Reading your linked banks…"):
+        r = plaid.sync(conn, keys)
+    names = dict(zip(accts["id"], accts["name"]))
+    done = [f"{names.get(a['account_id'], '?')}: {a['added']} new" for a in r["accounts"]]
+    st.session_state["plaid_report"] = r
+    st.session_state["flash"] = ("Synced - " + ", ".join(done)) if done else "Synced - nothing to import yet"
+
+
+def render_plaid_links(keys: dict) -> None:
+    """Linked banks, a Link button that opens Plaid's own sign-in, Sync, and matching new accounts."""
+    items = keys.get("items", [])
+    names = dict(zip(accts["id"], accts["name"]))
+    m = plaid.mapping(conn)
+    for it in items:
+        mine = [names.get((m.get(pid) or {}).get("account_id")) for pid in it.get("accounts", [])]
+        c1, c2 = st.columns([4, 1])
+        c1.markdown(f"**{it['institution']}** → " + (", ".join(n for n in mine if n) or "not matched yet"))
+        if c2.button("Unlink", key=f"unlink_{it['item_id']}"):
+            plaid.remove_item(it["item_id"], keys)
+            st.rerun()
+    if last := db.get_setting(conn, "plaid_last_sync"):
+        st.caption(f"Last synced {datetime.fromtimestamp(last):%b %-d, %-I:%M %p}.")
+    b1, b2 = st.columns(2)
+    if b1.button("➕ Link a bank", type="primary"):
+        try:
+            st.session_state["plaid_token"] = plaid.link_token(keys)
+            st.session_state["plaid_open"] = True
+        except plaid.PlaidError as e:
+            st.error(f"Plaid said: {e}")
+    if items and b2.button("🔄 Sync now"):
+        plaid_sync(keys)
+        st.rerun()
+    if token := st.session_state.get("plaid_token"):
+        got = _plaid_link(token=token, key="plaid_link", default=None)
+        if got and got.get("token") == token:
+            st.session_state.pop("plaid_token")
+            if got.get("public_token"):
+                try:
+                    plaid.add_item(got["public_token"], got.get("institution") or "Bank", keys)
+                except plaid.PlaidError as e:
+                    st.error(f"Plaid said: {e}")
+                else:
+                    plaid_sync(plaid.load_keys())
+            st.rerun()
+    for u in (st.session_state.get("plaid_report") or {}).get("unmatched", []):
+        if u["plaid_account_id"] in plaid.mapping(conn):
+            continue
+        kinds = plaid.PLAID_KINDS.get(u["type"], [])
+        options = list(accts.loc[accts["type"].isin(kinds), "name"]) + ["Don't import this one"]
+        label = f"{u['institution']} · {u['name']}" + (f" ••{u['mask']}" if u.get("mask") else "")
+        pick = st.selectbox(f"Which of your accounts is **{label}**?", options, index=None,
+                            placeholder="Choose…", key=f"pmatch_{u['plaid_account_id']}")
+        if pick:
+            aid = None if pick == options[-1] else int(accts.loc[accts["name"] == pick, "id"].iloc[0])
+            plaid.link_account(conn, u["plaid_account_id"], aid, keys)
+            if aid is not None:
+                plaid_sync(plaid.load_keys())
+            st.rerun()
+
+
 with tab_add:
     st.markdown("#### Import a file")
     with st.expander("How to download your files"):
@@ -1687,12 +1752,14 @@ with tab_add:
                     st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
                 st.rerun()                                          # every tab reflects the import right away
 
-    with st.expander("🔌 Connect banks automatically (Plaid)"):
+    with st.expander("🔌 Connect banks automatically (Plaid)", expanded=bool(st.session_state.get("plaid_open"))):
         keys = plaid.load_keys()
         if keys:
+            render_plaid_links(keys)
+            st.divider()
             st.caption(f"Keys saved on this Mac (client ID {keys['client_id'][:6]}…, secret ••••{keys['secret'][-4:]}).")
             b1, b2 = st.columns(2)
-            if b1.button("Check which of my banks Plaid can connect", type="primary"):
+            if b1.button("Check which of my banks Plaid can connect"):
                 with st.spinner("Asking Plaid…"):
                     try:
                         plaid.check(plaid.institutions_to_check(accts["institution"]), keys)

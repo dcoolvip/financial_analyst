@@ -681,3 +681,31 @@ def test_plaid_keys_screen_saves_checks_and_forgets(env, monkeypatch, tmp_path):
     assert list(shown["Plaid can connect"]) == ["✅ Now"] and list(shown["Your institution"]) == ["Golden 1 Credit Union"]
     click(at, "Remove the keys")
     assert plaid.load_keys() is None and [t for t in at.text_input if t.label == "Client ID"]
+
+
+def test_plaid_link_sync_and_match_from_the_ui(env, monkeypatch):
+    from finance import plaid
+    from tests.test_plaid import FakePlaid, txn
+    conn, _ = env
+    card = db.get_or_create_account(conn, "Old Navy Card", "Barclays", "credit_card")
+    db.update_account_details(conn, card, last4="1974")
+    chk = db.get_or_create_account(conn, "Barclays Checking", "Barclays", "checking")
+    db.update_account_details(conn, chk, last4="1111")          # digits differ from Plaid's: must ask, not guess
+    fake = FakePlaid()
+    fake.accounts = [a for a in fake.accounts if a["account_id"] in ("pa_card", "pa_new")]
+    fake.pages = [{"added": [txn("t1", "pa_card", 25.0, "2026-09-03")], "modified": [], "removed": []}]
+    monkeypatch.setattr(plaid, "_post", fake)
+    plaid.save_keys("cid", "sec")
+    at = app()
+    click(at, "➕ Link a bank")                                   # opens Plaid's pop-up with a fresh link token
+    assert ("/link/token/create" in [c[0] for c in fake.calls])
+    plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())   # what the pop-up's success does
+    at.run()
+    click(at, "🔄 Sync now")
+    assert conn.execute("SELECT amount FROM transactions WHERE account_id = ?", (card,)).fetchall() == [(-25.0,)]
+    assert any("**Barclays - Cards** → Old Navy Card" in m.value for m in at.markdown)
+    q = [s for s in at.selectbox if "Mystery" in s.label]
+    assert q and q[0].options == ["Barclays Checking", "Don't import this one"]   # only accounts of the same kind
+    q[0].select("Barclays Checking").run()
+    assert not at.exception
+    assert plaid.mapping(conn)["pa_new"]["account_id"] == chk

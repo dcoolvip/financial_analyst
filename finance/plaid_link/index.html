@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- Plaid's own sign-in pop-up, inside the dashboard. Streamlit hands in a one-time link token; this hands back
+     the public token Plaid returns (swapped server-side for the real access token) - never any bank password. -->
+<html lang="en"><head><meta charset="utf-8">
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<style>body { margin: 0; font: 14px -apple-system, system-ui, sans-serif; color: #666; }</style>
+</head><body><div id="msg">Opening Plaid…</div>
+<script>
+const send = (type, data) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+const height = h => send("streamlit:setFrameHeight", { height: h });
+const reply = value => send("streamlit:setComponentValue", { value, dataType: "json" });
+let opened = null;
+
+function done(text) { document.getElementById("msg").textContent = text; height(28); }
+
+window.addEventListener("message", e => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  const token = e.data.args.token;
+  if (!token || token === opened) return;          // each link token opens Plaid once
+  opened = token;
+  height(680);
+  Plaid.create({
+    token,
+    onSuccess: (public_token, meta) => {
+      done("Linked " + meta.institution.name + " - reading it now…");
+      reply({ token, public_token, institution: meta.institution.name });
+    },
+    onExit: err => {
+      const why = err && (err.display_message || err.error_message);
+      done(why ? "Plaid: " + why : "Closed without linking.");
+      reply({ token, exit: true, error: why || null });
+    },
+  }).open();
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+height(28);
+</script></body></html>
