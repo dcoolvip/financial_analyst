@@ -260,7 +260,7 @@ def sync(conn, keys: dict) -> dict:
     if keys.get("env") != "live":
         raise ETradeError("This is a sandbox key - it returns test accounts, so nothing is saved")
     ours, m, today = db.accounts(conn), mapping(conn), date.today()
-    report = {"accounts": [], "unmatched": [], "needs_approval": 0, "errors": []}
+    report, seen = {"accounts": [], "unmatched": [], "needs_approval": 0, "errors": []}, []
     for c in keys.get("connections", []):
         try:
             if is_current(c):
@@ -272,6 +272,10 @@ def sync(conn, keys: dict) -> dict:
         except ETradeError as e:
             report["errors"].append(str(e))
             continue
+        seen.extend({"name": a.get("accountName") or a.get("accountDesc"), "desc": a.get("accountDesc"),
+                     "type": a.get("accountType"), "institution_type": a.get("institutionType"),
+                     "mode": a.get("accountMode"), "status": a.get("accountStatus"),
+                     "ends": str(a.get("accountId", ""))[-4:]} for a in accts)
         for a in accts:
             k = a["accountIdKey"]
             if k not in m and (aid := match_account(a, ours)) is not None:
@@ -301,7 +305,20 @@ def sync(conn, keys: dict) -> dict:
                 report["errors"].append(f"{a.get('accountDesc') or k} ••{str(a.get('accountId', ''))[-4:]}: E*TRADE "
                                         f"reported no positions and a $0 value - nothing saved. Is this the right account?")
                 continue
+            prev = conn.execute("SELECT balance FROM balances WHERE account_id = ? AND source != ? "
+                                "ORDER BY date DESC LIMIT 1", (aid, SOURCE)).fetchone()
+            if prev and prev[0] > 0 and total < prev[0] / 2:      # a sudden halving is far likelier the wrong account
+                report["errors"].append(
+                    f"{a.get('accountDesc') or k} ••{str(a.get('accountId', ''))[-4:]} is worth ${total:,.2f} on "
+                    f"E*TRADE, but {ours.loc[ours['id'] == aid, 'name'].iloc[0]} was last ${prev[0]:,.2f} - not saved. "
+                    "Is it matched to the right account?")
+                continue
             db.upsert_balance(conn, aid, today, total, SOURCE)
             report["accounts"].append({"account_id": aid, "balance": total, "positions": len(held)})
     db.set_setting(conn, "etrade_last_sync", time.time())
+    seen_path().write_text(json.dumps({"checked": time.time(), "accounts": seen}, indent=1))   # names only, no money
     return report
+
+
+def seen_path() -> Path:
+    return paths.data_dir() / "etrade_accounts.json"

@@ -199,3 +199,30 @@ def test_empty_portfolio_reply_means_no_positions_and_never_saves_zero(data, fak
     assert "nothing saved" in r["errors"][0] and "••2204" in r["errors"][0]
     assert conn.execute("SELECT date, balance FROM balances WHERE account_id = ?", (md,)).fetchall() == \
         [("2026-07-31", 2766780.13)]
+
+
+def test_matched_to_the_wrong_account_never_overwrites_a_much_bigger_balance(data, fake, monkeypatch):
+    """Regression: 3882 (a $0.70 account) was matched to MD eTrade Brokerage ($2.77M) and its $0.70 became the
+    newest balance, wiping $2.77M off net worth. A sudden halving is now reported, not saved."""
+    conn = db.connect(data / "finance.db")
+    md = db.get_or_create_account(conn, "MD eTrade Brokerage", "E*TRADE", "brokerage")
+    db.upsert_balance(conn, md, date(2026, 7, 31), 2766780.13, "statement.pdf")
+
+    class Tiny(FakeETrade):
+        def __call__(self, path, *a, **k):
+            if path.endswith("/portfolio.json"):
+                return b""
+            if path.endswith("/balance.json"):
+                return json.dumps({"BalanceResponse": {"Computed": {"RealTimeValues": {"totalAccountValue": 0.7}}}}).encode()
+            return super().__call__(path, *a, **k)
+    monkeypatch.setattr(etrade, "_get", Tiny())
+    etrade.save_keys("ck", "cs", "live")
+    url, tok, sec = etrade.start_approval(etrade.load())
+    etrade.finish_approval("AB12C", tok, sec, etrade.load())
+    etrade.link_account(conn, "k_md", md)                                     # the user's (wrong) pick
+    r = etrade.sync(conn, etrade.load())
+    assert any("$0.70" in e and "not saved" in e for e in r["errors"])
+    assert conn.execute("SELECT date, balance FROM balances WHERE account_id = ?", (md,)).fetchall() == \
+        [("2026-07-31", 2766780.13)]
+    seen = json.loads(etrade.seen_path().read_text())["accounts"]
+    assert [a["ends"] for a in seen] == ["2204", "0000"] and "balance" not in seen[0]    # names only, for checking
