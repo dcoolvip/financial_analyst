@@ -1656,15 +1656,36 @@ def render_plaid_links(keys: dict) -> None:
         if u["plaid_account_id"] in plaid.mapping(conn):
             continue
         kinds = plaid.PLAID_KINDS.get(u["type"], [])
-        options = list(accts.loc[accts["type"].isin(kinds), "name"]) + ["Don't import this one"]
+        new_acct, skip = "➕ New account…", "Don't import this one"
+        options = list(accts.loc[accts["type"].isin(kinds), "name"]) + [new_acct, skip]
         label = f"{u['institution']} · {u['name']}" + (f" ••{u['mask']}" if u.get("mask") else "")
         pick = st.selectbox(f"Which of your accounts is **{label}**?", options, index=None,
                             placeholder="Choose…", key=f"pmatch_{u['plaid_account_id']}")
-        if pick:
-            aid = None if pick == options[-1] else int(accts.loc[accts["name"] == pick, "id"].iloc[0])
+        aid = None
+        if pick == new_acct:
+            # same bank name as the accounts already there (e.g. "E*TRADE"), else Plaid's
+            bank = next((n for n in accts["institution"].unique() if plaid._same_name(n, u["institution"])),
+                        u["institution"])
+            n1, n2, n3 = st.columns([3, 2, 1], vertical_alignment="bottom")
+            name = n1.text_input("Account name", value=f"{bank} {u['name']}", key=f"pnew_{u['plaid_account_id']}")
+            sub = u.get("subtype") if u.get("subtype") in kinds else None
+            kind = n2.selectbox("Type", kinds, index=kinds.index(sub) if sub else 0, format_func=TYPE_LABELS.get,
+                                key=f"ptype_{u['plaid_account_id']}")
+            if not n3.button("Create", key=f"pmake_{u['plaid_account_id']}", disabled=not name.strip()):
+                continue
+            if name.strip() in set(accts["name"]):
+                st.error(f"There's already an account called {name.strip()}.")
+                continue
+            aid = db.get_or_create_account(conn, name.strip(), bank, kind)
+            db.update_account_details(conn, aid, last4=u.get("mask") or None)
+        elif pick == skip:
+            plaid.link_account(conn, u["plaid_account_id"], None, keys)
+            st.rerun()
+        elif pick:
+            aid = int(accts.loc[accts["name"] == pick, "id"].iloc[0])
+        if aid is not None:
             plaid.link_account(conn, u["plaid_account_id"], aid, keys)
-            if aid is not None:
-                plaid_sync(plaid.load_keys())
+            plaid_sync(plaid.load_keys())
             st.rerun()
 
 

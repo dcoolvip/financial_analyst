@@ -706,10 +706,37 @@ def test_plaid_link_sync_and_match_from_the_ui(env, monkeypatch):
     assert conn.execute("SELECT amount FROM transactions WHERE account_id = ?", (card,)).fetchall() == [(-25.0,)]
     assert any("**Barclays - Cards** → Old Navy Card" in m.value for m in at.markdown)
     q = [s for s in at.selectbox if "Mystery" in s.label]
-    assert q and q[0].options == ["Barclays Checking", "Don't import this one"]   # only accounts of the same kind
+    assert q and q[0].options == ["Barclays Checking", "➕ New account…", "Don't import this one"]  # same kind only
     q[0].select("Barclays Checking").run()
     assert not at.exception
     assert plaid.mapping(conn)["pa_new"]["account_id"] == chk
+
+
+def test_plaid_account_can_go_into_a_new_dashboard_account(env, monkeypatch):
+    from finance import plaid
+    from tests.test_plaid import FakePlaid, txn
+    conn, _ = env
+    md = db.get_or_create_account(conn, "MD eTrade Brokerage", "E*TRADE", "brokerage")
+    db.update_account_details(conn, md, last4="2204")                         # doesn't match ••3882: must ask
+    fake = FakePlaid()
+    fake.accounts = [{"account_id": "pa_div", "mask": "3882", "type": "investment", "subtype": "brokerage",
+                      "name": "Individual Brokerage", "balances": {"current": 0.7}}]
+    fake.holdings = {"holdings": [], "securities": []}
+    monkeypatch.setattr(plaid, "_post", fake)
+    plaid.save_keys("cid", "sec")
+    plaid.add_item("public-tok", "E*TRADE from Morgan Stanley", plaid.load_keys())
+    at = app()
+    click(at, "🔄 Sync now")
+    q = [s for s in at.selectbox if "Individual Brokerage" in s.label][0]
+    q.select("➕ New account…").run()
+    name = [t for t in at.text_input if t.label == "Account name"][-1]
+    assert name.value == "E*TRADE Individual Brokerage"                       # same bank name as the others
+    name.input("E*TRADE Dividend").run()
+    click(at, "Create")
+    row = conn.execute("SELECT id, institution, type, last4 FROM accounts WHERE name = 'E*TRADE Dividend'").fetchone()
+    assert row[1:] == ("E*TRADE", "brokerage", "3882")
+    assert plaid.mapping(conn)["pa_div"]["account_id"] == row[0]
+    assert conn.execute("SELECT balance FROM balances WHERE account_id = ?", (row[0],)).fetchone()[0] == 0.7
 
 
 def test_etrade_sandbox_flow_from_the_ui_saves_nothing(env, monkeypatch):
