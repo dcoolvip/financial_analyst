@@ -248,6 +248,9 @@ def test_stock_plan_holdings_count_only_the_vested_shares(linked):
     sym, qty, value = conn.execute("SELECT symbol, quantity, value FROM holdings WHERE account_id = ?",
                                    (ids["brk"],)).fetchone()
     assert sym == "AAPL" and round(value, 2) == 2825719.60 and round(qty) == 8264
+    g = db.latest_grants(conn)                                                 # the unvested bucket, kept too
+    assert list(g["symbol"]) == ["AAPL"] and round(g["value"].iloc[0], 2) == round(3338817.74 - 2825719.60, 2)
+    assert round(g["quantity"].iloc[0]) == round(9764.338 - 8263.8)
 
 
 def test_ordinary_holdings_are_left_alone():

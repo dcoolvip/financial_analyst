@@ -756,3 +756,16 @@ def test_etrade_sandbox_flow_from_the_ui_saves_nothing(env, monkeypatch):
     assert not at.exception
     assert any("made-up" in c.value for c in at.caption)
     assert conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0] == 0
+
+
+
+def test_stock_plan_details_show_total_vested_and_unvested(env):
+    conn, _ = env
+    sp = db.get_or_create_account(conn, "MD Stock Plan", "E*TRADE", "brokerage")
+    db.upsert_balance(conn, sp, "2026-10-15", 2825719.60, "Plaid")
+    db.replace_grants(conn, sp, "2026-10-15", [{"grant_id": "unvested AAPL", "type": "Unvested (all grants)",
+                                                "symbol": "AAPL", "quantity": 1500.5, "value": 515514.19}])
+    at = app()
+    [s for s in at.selectbox if s.label == "Show details for"][0].select("MD Stock Plan").run()
+    shown = {m.label: m.value for m in at.metric}
+    assert shown["Total"] == "$3.34M" and shown["Vested · in net worth"] == "$2.83M" and shown["Unvested"] == "$516K"

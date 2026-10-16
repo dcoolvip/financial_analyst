@@ -297,8 +297,13 @@ def sync(conn, keys: dict) -> dict:
                         df = pd.DataFrame(rows).groupby("symbol", as_index=False, sort=False).agg(
                             description=("description", "first"), quantity=("quantity", "sum"),
                             price=("price", "first"), value=("value", "sum"))
-                        df = owned_part(df, a["balances"].get("current"))
-                        db.replace_holdings(conn, aid, today, df)
+                        owned = owned_part(df, a["balances"].get("current"))
+                        db.replace_holdings(conn, aid, today, owned)
+                        if owned is not df:      # the rest is unvested: keep it as today's grants bucket
+                            db.replace_grants(conn, aid, today, [
+                                {"grant_id": f"unvested {r.symbol}", "type": "Unvested (all grants)",
+                                 "symbol": r.symbol, "quantity": r.quantity - o.quantity, "value": r.value - o.value}
+                                for r, o in zip(df.itertuples(), owned.itertuples())])
         _save_item(keys, item)
         keys = load_keys()
         for pid, (aid, a) in target.items():

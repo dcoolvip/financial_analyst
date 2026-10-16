@@ -389,8 +389,8 @@ with tab_overview:
                 items.append(("Unvested RSUs", money(grants["value"].sum())))
             kpi_row(items)
             if len(grants):
-                st.caption(f"Unvested RSUs ({len(grants)} grants, pre-tax estimate) aren't counted in net worth "
-                           "until they vest.")
+                st.caption("Unvested RSUs (pre-tax estimate) aren't counted in net worth until they vest. "
+                           "Each stock plan's total, vested and unvested is under Accounts → Account details.")
             for sym, share in pf["concentrated"]:
                 st.warning(f"**{sym}** is **{share:.0%}** of your investments. A single company that large "
                            "adds risk; many planners suggest keeping any one stock under 10%.", icon="⚠️")
@@ -1284,8 +1284,11 @@ with tab_accounts:
             first = h.iloc[0]
             since = (first["balance"] - r["balance"]) if debt else (r["balance"] - first["balance"])
             n_est = int(h["estimate"].sum())
-            kpi_row([("Owed now" if debt else "Value now", money(r["balance"])),
-                     ("Past year", signed(past_year.get(aid))),
+            unvested = db.latest_grants(conn).query("account == @pick")["value"].sum()
+            kpi_row(([("Total", money(r["balance"] + unvested)), ("Vested · in net worth", money(r["balance"])),
+                      ("Unvested", money(unvested))] if unvested and not debt else
+                     [("Owed now" if debt else "Value now", money(r["balance"]))]) +
+                    [("Past year", signed(past_year.get(aid))),
                      (f"Since {first['date']:%b %Y}", signed(since)),
                      ("Values on record", f"{len(h):,}" + (f" ({n_est} est.)" if n_est else ""))])
             plot(charts.account_history(h, mode, debt=debt, compact=PHONE))
