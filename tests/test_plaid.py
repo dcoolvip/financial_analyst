@@ -221,6 +221,7 @@ def test_two_lots_of_one_stock_make_one_holding(linked):
     conn, fake, ids = linked
     fake.holdings["holdings"].append({"account_id": "pa_brk", "security_id": "s1", "quantity": 1,
                                       "institution_price": 300.0, "institution_value": 300.0})
+    next(a for a in fake.accounts if a["account_id"] == "pa_brk")["balances"]["current"] = 1200.0
     assert plaid.sync(conn, plaid.load_keys())["errors"] == []
     assert conn.execute("SELECT symbol, quantity, value FROM holdings WHERE account_id = ?",
                         (ids["brk"],)).fetchall() == [("AAPL", 4, 1200.0)]
@@ -234,3 +235,22 @@ def test_an_investment_halving_on_plaid_is_reported_not_saved(linked):
     assert any("$900.00" in e and "not saved" in e for e in r["errors"])
     assert conn.execute("SELECT balance FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1",
                         (ids["brk"],)).fetchone()[0] == 2766780.13
+
+
+def test_stock_plan_holdings_count_only_the_vested_shares(linked):
+    """Regression: Morgan Stanley at Work via Plaid sent 9,764 AAPL ($3.34M, vested + unvested) with a current
+    value of $2,825,719.60 (vested only, matching the site's "Current Account Value"). Holdings must match."""
+    conn, fake, ids = linked
+    brk = next(a for a in fake.accounts if a["account_id"] == "pa_brk")
+    brk["balances"]["current"] = 2825719.60
+    fake.holdings["holdings"][0].update(quantity=9764.338, institution_price=341.94, institution_value=3338817.74)
+    plaid.sync(conn, plaid.load_keys())
+    sym, qty, value = conn.execute("SELECT symbol, quantity, value FROM holdings WHERE account_id = ?",
+                                   (ids["brk"],)).fetchone()
+    assert sym == "AAPL" and round(value, 2) == 2825719.60 and round(qty) == 8264
+
+
+def test_ordinary_holdings_are_left_alone():
+    h = pd.DataFrame([{"symbol": "VTI", "quantity": 10.0, "value": 3000.0}])
+    assert plaid.owned_part(h, 3010.0).equals(h)          # cash or rounding can make the balance a bit higher
+    assert plaid.owned_part(h, None).equals(h)

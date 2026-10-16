@@ -213,6 +213,17 @@ def _row(t: dict) -> dict:
             "fingerprint": f"plaid|{t['transaction_id']}", "bank_category": cat.replace("_", " ").title() or None}
 
 
+def owned_part(holdings: pd.DataFrame, current) -> pd.DataFrame:
+    """Stock plans (Morgan Stanley at Work) list vested + unvested shares in holdings, but the account's current
+    value is only what's vested and yours. Scale the holdings down to that, so the portfolio matches net worth and
+    unvested RSUs aren't counted twice (they're tracked as grants from the statements)."""
+    total = float(holdings["value"].sum())
+    if not current or current <= 0 or total <= float(current) * 1.01:
+        return holdings
+    f = float(current) / total
+    return holdings.assign(quantity=holdings["quantity"] * f, value=holdings["value"] * f)
+
+
 def sync(conn, keys: dict) -> dict:
     """Balances, new transactions and holdings for every linked item. Returns what changed, plus the Plaid
     accounts that still need to be matched to a dashboard account."""
@@ -286,6 +297,7 @@ def sync(conn, keys: dict) -> dict:
                         df = pd.DataFrame(rows).groupby("symbol", as_index=False, sort=False).agg(
                             description=("description", "first"), quantity=("quantity", "sum"),
                             price=("price", "first"), value=("value", "sum"))
+                        df = owned_part(df, a["balances"].get("current"))
                         db.replace_holdings(conn, aid, today, df)
         _save_item(keys, item)
         keys = load_keys()
