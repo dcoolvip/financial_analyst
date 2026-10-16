@@ -226,6 +226,14 @@ def owned_part(holdings: pd.DataFrame, current) -> pd.DataFrame:
     """Stock plans (Morgan Stanley at Work) list vested + unvested shares in holdings, but the account's current
     value is only what's vested and yours. Scale the holdings down to that, so the portfolio matches net worth and
     unvested RSUs aren't counted twice (they're tracked as grants from the statements)."""
+    if "vested_value" in holdings and holdings["vested_value"].notna().any():    # Plaid says exactly what's vested
+        vq = holdings["vested_quantity"].fillna(holdings["quantity"])
+        vv = holdings["vested_value"].fillna(holdings["value"])
+        if (vv < holdings["value"]).any():
+            f = (vv / holdings["value"]).where(holdings["value"] > 0, 1.0)
+            out = holdings.assign(quantity=vq, value=vv)
+            return out.assign(cost_basis=out["cost_basis"] * f) if "cost_basis" in out else out
+        return holdings
     total = float(holdings["value"].sum())
     if not current or current <= 0 or total <= float(current) * 1.01:
         return holdings
@@ -307,15 +315,18 @@ def sync(conn, keys: dict, only: set[str] | None = None) -> dict:
                     rows = [{"symbol": _symbol(sec[x["security_id"]]),
                              "description": sec[x["security_id"]].get("name") or "",
                              "quantity": x.get("quantity"), "price": x.get("institution_price"),
-                             "value": float(x.get("institution_value") or 0), "cost_basis": x.get("cost_basis")}
+                             "value": float(x.get("institution_value") or 0), "cost_basis": x.get("cost_basis"),
+                             "vested_quantity": x.get("vested_quantity"), "vested_value": x.get("vested_value")}
                             for x in h["holdings"] if x["account_id"] == pid]
                     if rows:                    # one row per symbol, as the holdings table keeps them
                         df = pd.DataFrame(rows).groupby("symbol", as_index=False, sort=False).agg(
                             description=("description", "first"), quantity=("quantity", "sum"),
                             price=("price", "first"), value=("value", "sum"),
-                            cost_basis=("cost_basis", lambda c: c.sum(min_count=1)))
+                            cost_basis=("cost_basis", lambda c: c.sum(min_count=1)),
+                            vested_quantity=("vested_quantity", lambda c: c.sum(min_count=1)),
+                            vested_value=("vested_value", lambda c: c.sum(min_count=1)))
                         owned = owned_part(df, a["balances"].get("current"))
-                        db.replace_holdings(conn, aid, today, owned)
+                        db.replace_holdings(conn, aid, today, owned.drop(columns=["vested_quantity", "vested_value"]))
                         if owned is not df:      # the rest is unvested: keep it as today's grants bucket
                             db.replace_grants(conn, aid, today, [
                                 {"grant_id": f"unvested {r.symbol}", "type": "Unvested (all grants)",

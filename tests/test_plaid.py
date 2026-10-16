@@ -298,3 +298,16 @@ def test_next_refresh_is_a_month_after_each_banks_own_refresh():
     assert plaid.due_items({"items": [{"item_id": "a", **item}]}, now=1_000_000.0 + plaid.SYNC_EVERY_S) == {"a"}
     assert plaid.due_items({"items": [{"item_id": "a", **item}]}, now=1_000_000.0 + 86400) == set()
     assert plaid.due_items({"items": [{"item_id": "new"}]}) == {"new"}            # never refreshed: due now
+
+
+def test_plaids_own_vested_figures_win_over_scaling(linked):
+    """Plaid's holdings can carry vested_quantity / vested_value (equity plans). Use them when present."""
+    conn, fake, ids = linked
+    fake.holdings["holdings"][0].update(quantity=10, institution_value=3000.0, cost_basis=1000.0,
+                                        vested_quantity=7, vested_value=2100.0)
+    next(a for a in fake.accounts if a["account_id"] == "pa_brk")["balances"]["current"] = 2150.0   # + some cash
+    plaid.sync(conn, plaid.load_keys())
+    assert conn.execute("SELECT quantity, value, cost_basis FROM holdings WHERE account_id = ?",
+                        (ids["brk"],)).fetchone() == (7, 2100.0, 700.0)
+    g = db.latest_grants(conn)
+    assert list(g["quantity"]) == [3] and list(g["value"]) == [900.0]
