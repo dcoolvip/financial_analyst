@@ -19,7 +19,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, plaid, portfolio, retirement
+from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, etrade, forecast, importers, insights, paths, plaid, portfolio, retirement
 
 
 @st.cache_resource
@@ -34,7 +34,7 @@ def _reload_changed_modules() -> None:
     order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.apple_card, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon, plaid]
+             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon, plaid, etrade]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -1668,6 +1668,91 @@ def render_plaid_links(keys: dict) -> None:
             st.rerun()
 
 
+def render_etrade() -> None:
+    """E*TRADE's own API: keys, approving access on etrade.com, and syncing balances + holdings."""
+    keys = etrade.load()
+    if not keys:
+        st.caption("Paste the consumer key and secret from E*TRADE's developer site. They're saved only on this Mac, "
+                   "in the private data folder.")
+        with st.form("etrade_keys", border=False):
+            k1, k2 = st.columns(2)
+            ck = k1.text_input("Consumer key")
+            cs = k2.text_input("Consumer secret", type="password")
+            env = st.radio("Key type", ["sandbox", "live"], horizontal=True,
+                           format_func={"sandbox": "Sandbox (E*TRADE's test data)", "live": "Live (my accounts)"}.get)
+            if st.form_submit_button("Save keys"):
+                if ck.strip() and cs.strip():
+                    etrade.save_keys(ck, cs, env)
+                    st.rerun()
+                st.error("Paste both the consumer key and the secret.")
+        return
+    live = keys.get("env") == "live"
+    names = dict(zip(accts["id"], accts["name"]))
+    m = etrade.mapping(conn)
+    for c in keys.get("connections", []):
+        mine = [names.get((m.get(k) or {}).get("account_id")) for k in c.get("accounts", [])]
+        state = "✅ approved today" if etrade.is_current(c) else "⏰ needs approving again (access ends at midnight ET)"
+        st.markdown(f"**E\\*TRADE login** → {', '.join(n for n in mine if n) or 'not matched yet'} · {state}")
+    if last := db.get_setting(conn, "etrade_last_sync"):
+        st.caption(f"Last synced {datetime.fromtimestamp(last):%b %-d, %-I:%M %p}.")
+    b1, b2 = st.columns(2)
+    if b1.button("✅ Approve access on etrade.com", type="primary"):
+        try:
+            st.session_state["etrade_req"] = etrade.start_approval(keys)
+        except etrade.ETradeError as e:
+            st.error(str(e))
+    if live and keys.get("connections") and b2.button("🔄 Sync E*TRADE"):
+        with st.spinner("Reading E*TRADE…"):
+            r = etrade.sync(conn, keys)
+        st.session_state["etrade_report"] = r
+        done = [f"{names.get(a['account_id'], '?')}: {money(a['balance'] or 0)}" for a in r["accounts"]]
+        st.session_state["flash"] = ("E*TRADE synced - " + ", ".join(done)) if done else (
+            "Couldn't sync E*TRADE - approve access again" if r["needs_approval"] else "E*TRADE: nothing to update")
+        st.rerun()
+    if req := st.session_state.get("etrade_req"):
+        url, token, secret = req
+        st.link_button("1. Open etrade.com and approve", url)
+        st.caption("Sign in there as usual (text code and all). E*TRADE then shows a short code - paste it here. "
+                   "Deepali can do the same with her login for her account.")
+        with st.form("etrade_code", border=False):
+            code = st.text_input("2. Code from E*TRADE")
+            if st.form_submit_button("Finish"):
+                try:
+                    c = etrade.finish_approval(code, token, secret, keys)
+                except etrade.ETradeError as e:
+                    st.error(f"{e}. Start again with the approve button - each code works once.")
+                else:
+                    st.session_state.pop("etrade_req")
+                    if live:
+                        st.session_state["etrade_report"] = etrade.sync(conn, etrade.load())
+                    else:
+                        etrade.sandbox_test(etrade.load(), c)
+                    st.rerun()
+    if not live and (test := etrade.load_test()):
+        st.caption(f"Sandbox test {datetime.fromtimestamp(test['checked']):%b %-d, %-I:%M %p} - E*TRADE's made-up "
+                   "accounts, shown only and never saved. Switch to a live key for your own.")
+        st.dataframe(pd.DataFrame(test["accounts"]), hide_index=True, width="stretch")
+    for u in (st.session_state.get("etrade_report") or {}).get("unmatched", []):
+        if u["key"] in etrade.mapping(conn):
+            continue
+        options = list(accts.loc[accts["type"].isin(["brokerage", "retirement"]), "name"]) + ["Don't import this one"]
+        pick = st.selectbox(f"Which of your accounts is **E\\*TRADE {u['name']} ••{u['ends']}**?", options, index=None,
+                            placeholder="Choose…", key=f"ematch_{u['key']}")
+        if pick:
+            etrade.link_account(conn, u["key"], None if pick == options[-1]
+                                else int(accts.loc[accts["name"] == pick, "id"].iloc[0]))
+            st.session_state["etrade_report"] = etrade.sync(conn, etrade.load())
+            st.rerun()
+    if st.button("Remove E*TRADE keys"):
+        for c in keys.get("connections", []):
+            try:
+                etrade.revoke(keys, c)
+            except etrade.ETradeError:
+                pass
+        etrade.forget()
+        st.rerun()
+
+
 with tab_add:
     st.markdown("#### Import a file")
     with st.expander("How to download your files"):
@@ -1791,6 +1876,9 @@ with tab_add:
                         plaid.save_keys(cid, sec)
                         st.rerun()
                     st.error("Paste both the client ID and the secret.")
+
+    with st.expander("📈 E*TRADE (direct, free)", expanded=bool(st.session_state.get("etrade_req"))):
+        render_etrade()
 
     cps = checkpoints.list_all(conn)
     if cps:

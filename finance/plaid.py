@@ -14,7 +14,6 @@ products are ever requested.
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 import urllib.error
@@ -52,12 +51,7 @@ def load_keys() -> dict | None:
 
 
 def _write(data: dict) -> None:
-    p = keys_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)     # private from the first byte
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f)
-    os.chmod(p, 0o600)
+    paths.write_private(keys_path(), data)
 
 
 def save_keys(client_id: str, secret: str, env: str = "production") -> None:

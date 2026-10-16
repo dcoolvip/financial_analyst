@@ -21,3 +21,13 @@ def data_dir() -> Path:
     if LEGACY_DIR.is_dir() and not DEFAULT_DIR.is_dir():
         return LEGACY_DIR
     return DEFAULT_DIR
+
+
+def write_private(path: Path, data: dict) -> None:
+    """Write JSON readable only by this Mac user (API keys, access tokens)."""
+    import json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)     # private from the first byte
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f)
+    os.chmod(path, 0o600)

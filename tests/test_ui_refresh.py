@@ -709,3 +709,22 @@ def test_plaid_link_sync_and_match_from_the_ui(env, monkeypatch):
     q[0].select("Barclays Checking").run()
     assert not at.exception
     assert plaid.mapping(conn)["pa_new"]["account_id"] == chk
+
+
+def test_etrade_sandbox_flow_from_the_ui_saves_nothing(env, monkeypatch):
+    from finance import etrade
+    from tests.test_etrade import FakeETrade
+    conn, _ = env
+    fake = FakeETrade()
+    monkeypatch.setattr(etrade, "_get", fake)
+    at = app()
+    [t for t in at.text_input if t.label == "Consumer key"][0].input("ck")
+    [t for t in at.text_input if t.label == "Consumer secret"][0].input("cs")
+    [b for b in at.button if b.label == "Save keys" and "etrade" in str(b.form_id)][0].click().run()
+    assert etrade.load()["env"] == "sandbox"                                  # sandbox is the default
+    click(at, "✅ Approve access on etrade.com")
+    [t for t in at.text_input if t.label == "2. Code from E*TRADE"][0].input("AB12C")
+    [b for b in at.button if b.label == "Finish"][0].click().run()
+    assert not at.exception
+    assert any("made-up" in c.value for c in at.caption)
+    assert conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0] == 0
