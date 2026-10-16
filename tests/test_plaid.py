@@ -224,3 +224,13 @@ def test_two_lots_of_one_stock_make_one_holding(linked):
     assert plaid.sync(conn, plaid.load_keys())["errors"] == []
     assert conn.execute("SELECT symbol, quantity, value FROM holdings WHERE account_id = ?",
                         (ids["brk"],)).fetchall() == [("AAPL", 4, 1200.0)]
+
+
+def test_an_investment_halving_on_plaid_is_reported_not_saved(linked):
+    """Same guard as E*TRADE: a stock plan matched to the wrong account must not wipe its balance."""
+    conn, fake, ids = linked
+    db.upsert_balance(conn, ids["brk"], date(2026, 7, 31), 2766780.13, "statement.pdf")
+    r = plaid.sync(conn, plaid.load_keys())                                   # Plaid says 900.00
+    assert any("$900.00" in e and "not saved" in e for e in r["errors"])
+    assert conn.execute("SELECT balance FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1",
+                        (ids["brk"],)).fetchone()[0] == 2766780.13

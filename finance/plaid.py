@@ -239,7 +239,13 @@ def sync(conn, keys: dict) -> dict:
                 continue
             target[a["account_id"]] = (t, a)
             bal = a["balances"].get("current")
-            if bal is not None:
+            prev = conn.execute("SELECT balance FROM balances WHERE account_id = ? AND source != ? "
+                                "ORDER BY date DESC LIMIT 1", (t, SOURCE)).fetchone()
+            if bal is not None and a["type"] == "investment" and prev and prev[0] > 0 and float(bal) < prev[0] / 2:
+                name = ours.loc[ours["id"] == t, "name"].iloc[0]      # investments don't halve overnight: wrong match?
+                report["errors"].append(f"{item['institution']} ••{a.get('mask')} is worth ${float(bal):,.2f} on Plaid, "
+                                        f"but {name} was last ${prev[0]:,.2f} - not saved. Is it the right account?")
+            elif bal is not None:
                 db.upsert_balance(conn, t, today, abs(float(bal)) if a["type"] in ("credit", "loan") else float(bal),
                                   SOURCE)
         counts = dict.fromkeys(target, 0)
