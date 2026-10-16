@@ -3,6 +3,7 @@ everywhere (other tabs, selectors, totals) in the same session - no manual refre
 
 Runs against a throwaway data folder; never touches real data and never calls the AI.
 """
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -768,7 +769,7 @@ def test_linked_banks_update_themselves_once_a_month(env, monkeypatch):
     assert syncs() == 0
     db.set_setting(conn, "plaid_last_sync", time.time() - 31 * 24 * 3600)    # a month ago: update on opening
     at = app()
-    assert syncs() == 1 and any("Updates on its own once a month" in c.value for c in at.caption)
+    assert syncs() == 1 and any("update on their own once a month" in c.value for c in at.caption)
     app()                                                                     # and not again right away
     assert syncs() == 1
 
@@ -783,3 +784,29 @@ def test_a_failed_monthly_update_never_stops_the_dashboard(env, monkeypatch):
     app()                                                                     # opens fine (app() checks no exception)
     last = db.get_setting(conn, "plaid_last_sync")
     assert time.time() - last > 28 * 24 * 3600                                # retried tomorrow, not in a month
+
+
+def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):
+    from finance import plaid
+    from tests.test_plaid import FakePlaid
+    conn, _ = env
+    card = db.get_or_create_account(conn, "Old Navy Card", "Barclays", "credit_card")
+    db.update_account_details(conn, card, last4="1974")
+    fake = FakePlaid()
+    fake.accounts = [a for a in fake.accounts if a["account_id"] == "pa_card"]
+    monkeypatch.setattr(plaid, "_post", fake)
+    plaid.save_keys("cid", "sec")
+    plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())
+    at = app()                                                                # first open: syncs (never synced)
+    synced = plaid.load_keys()["items"][0]["synced"]
+    nxt = datetime.fromtimestamp(synced + plaid.SYNC_EVERY_S)
+    line = f"Last refreshed {datetime.fromtimestamp(synced):%b %-d, %-I:%M %p} · next planned {nxt:%b %-d}"
+    assert any(line in c.value for c in at.caption)                           # in the Plaid section
+    [s for s in at.selectbox if s.label == "Show details for"][0].select("Old Navy Card").run()
+    assert any("Linked through Plaid (Barclays - Cards)" in c.value and line in c.value for c in at.caption)
+
+    def down(endpoint, body, keys):
+        raise plaid.PlaidError("ITEM_LOGIN_REQUIRED (ITEM_LOGIN_REQUIRED)")
+    monkeypatch.setattr(plaid, "_post", down)
+    click(at, "🔄 Sync now")
+    assert any("⚠️ Last try failed: ITEM_LOGIN_REQUIRED" in c.value and line in c.value for c in at.caption)

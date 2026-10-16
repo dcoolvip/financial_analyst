@@ -127,6 +127,7 @@ def last_check() -> dict | None:
 PLAID_KINDS = {"depository": ["checking", "savings"], "credit": ["credit_card"],
                "investment": ["brokerage", "retirement"], "loan": [t for t in db.LIABILITY_TYPES if t != "credit_card"]}
 SOURCE = "Plaid"
+SYNC_EVERY_S = 30 * 24 * 3600        # the dashboard syncs on its own once a month (when opened after that)
 
 
 def link_token(keys: dict) -> str:
@@ -234,8 +235,11 @@ def sync(conn, keys: dict) -> dict:
             accts = _post("/accounts/get", {"access_token": item["access_token"]}, keys)["accounts"]
         except PlaidError as e:
             report["errors"].append(f"{item['institution']}: {e}")
+            _save_item(keys, {**item, "error": str(e), "tried": time.time()})
+            keys = load_keys()
             continue
-        item = {**item, "accounts": [a["account_id"] for a in accts]}
+        item = {k: v for k, v in item.items() if k != "error"}
+        item.update(accounts=[a["account_id"] for a in accts], synced=time.time(), tried=time.time())
         target = {}
         for a in accts:
             if a["account_id"] not in m and (aid := match_account(a, item["institution"], ours)) is not None:
@@ -312,6 +316,22 @@ def sync(conn, keys: dict) -> dict:
     db.set_setting(conn, "plaid_last_sync", time.time())
     db.set_setting(conn, "plaid_unmatched", report["unmatched"])     # still asked after a refresh
     return report
+
+
+def next_sync(conn) -> float | None:
+    last = db.get_setting(conn, "plaid_last_sync")
+    return float(last) + SYNC_EVERY_S if last else None
+
+
+def refresh_status(conn, keys: dict | None) -> dict:
+    """For each dashboard account fed by Plaid: which bank login, when it last refreshed, any problem."""
+    m, out = mapping(conn), {}
+    for item in (keys or {}).get("items", []):
+        for pid in item.get("accounts", []):
+            if (aid := (m.get(pid) or {}).get("account_id")) is not None:
+                out[aid] = {"institution": item["institution"], "synced": item.get("synced"),
+                            "error": item.get("error")}
+    return out
 
 
 def unmatched(conn) -> list[dict]:
