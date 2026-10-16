@@ -92,8 +92,11 @@ def _same_name(ours: str, theirs: str) -> bool:
     return words(ours) <= words(theirs)
 
 
+ALSO_CHECK = ["Morgan Stanley"]      # where the stock plans actually sit (statements say "Morgan Stanley at Work")
+
+
 def institutions_to_check(names) -> list[str]:
-    return sorted({n for n in names if n and n not in NOT_ON_PLAID})
+    return sorted({n for n in names if n and n not in NOT_ON_PLAID} | set(ALSO_CHECK))
 
 
 def check(institutions: list[str], keys: dict) -> list[dict]:

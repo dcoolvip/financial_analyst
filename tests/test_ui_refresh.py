@@ -678,7 +678,8 @@ def test_plaid_keys_screen_saves_checks_and_forgets(env, monkeypatch, tmp_path):
                                                           "products": ["transactions"]}])
     click(at, "Check which of my banks Plaid can connect")
     shown = at.dataframe[-1].value
-    assert list(shown["Plaid can connect"]) == ["✅ Now"] and list(shown["Your institution"]) == ["Golden 1 Credit Union"]
+    assert dict(zip(shown["Your institution"], shown["Plaid can connect"])) == {
+        "Golden 1 Credit Union": "✅ Now", "Morgan Stanley": "❓ Not found on Plaid"}   # always checked: stock plans
     click(at, "Remove the keys")
     assert plaid.load_keys() is None and [t for t in at.text_input if t.label == "Client ID"]
 

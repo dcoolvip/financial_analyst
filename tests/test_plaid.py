@@ -33,7 +33,7 @@ def test_check_sorts_oauth_from_direct_and_skips_hand_tracked_values(data, monke
                "Golden 1 Credit Union": [{"name": "Golden Plains Credit Union", "oauth": False, "products": []},
                                          {"name": "Golden 1 Credit Union", "oauth": False,
                                           "products": ["transactions"]}],
-               "Nowhere Bank": []}
+               "Nowhere Bank": [], "Morgan Stanley": []}
 
     def fake_post(endpoint, body, keys):
         sent.append((endpoint, body["query"], body["country_codes"]))
@@ -42,7 +42,7 @@ def test_check_sorts_oauth_from_direct_and_skips_hand_tracked_values(data, monke
     names = plaid.institutions_to_check(["Chase", "Golden 1 Credit Union", "Redfin estimate", "Physical",
                                          "Nowhere Bank", "Chase"])
     rows = plaid.check(names, {"client_id": "c", "secret": "s"})
-    assert [q for _, q, _ in sent] == ["Chase", "Golden 1 Credit Union", "Nowhere Bank"]       # once each
+    assert [q for _, q, _ in sent] == ["Chase", "Golden 1 Credit Union", "Morgan Stanley", "Nowhere Bank"]  # once each
     assert all(e == "/institutions/search" and c == ["US"] for e, _, c in sent)
     by = {r["yours"]: r for r in rows}
     assert by["Chase"]["oauth"] is True and by["Chase"]["products"] == ["transactions", "liabilities"]
