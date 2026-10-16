@@ -174,3 +174,28 @@ def test_same_stock_in_several_lots_is_one_holding(data, fake, monkeypatch):
     assert r["errors"] == []
     assert conn.execute("SELECT symbol, quantity, value, cost_basis FROM holdings WHERE account_id = ? ORDER BY symbol",
                         (md,)).fetchall() == [("AAPL", 10, 2500.0, 1300.0), ("Unnamed position", 1, 5.0, None)]
+
+
+def test_empty_portfolio_reply_means_no_positions_and_never_saves_zero(data, fake, monkeypatch):
+    """Regression: E*TRADE answered the 3882 portfolio request with an empty body, which crashed the JSON reader.
+    Empty = nothing to list. And a $0 total with no positions is reported, never written over the real balance."""
+    conn = db.connect(data / "finance.db")
+    md = db.get_or_create_account(conn, "MD eTrade Brokerage", "E*TRADE", "brokerage")
+    db.update_account_details(conn, md, last4="2204")
+    db.upsert_balance(conn, md, date(2026, 7, 31), 2766780.13, "statement.pdf")
+
+    class Empty(FakeETrade):
+        def __call__(self, path, *a, **k):
+            if path.endswith("/portfolio.json"):
+                return b""
+            if path.endswith("/balance.json"):
+                return json.dumps({"BalanceResponse": {"Computed": {"RealTimeValues": {"totalAccountValue": 0}}}}).encode()
+            return super().__call__(path, *a, **k)
+    monkeypatch.setattr(etrade, "_get", Empty())
+    etrade.save_keys("ck", "cs", "live")
+    url, tok, sec = etrade.start_approval(etrade.load())
+    etrade.finish_approval("AB12C", tok, sec, etrade.load())
+    r = etrade.sync(conn, etrade.load())
+    assert "nothing saved" in r["errors"][0] and "••2204" in r["errors"][0]
+    assert conn.execute("SELECT date, balance FROM balances WHERE account_id = ?", (md,)).fetchall() == \
+        [("2026-07-31", 2766780.13)]

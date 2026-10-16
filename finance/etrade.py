@@ -144,7 +144,8 @@ def is_current(c: dict) -> bool:
 def _json(path: str, keys: dict, c: dict, query: dict | None = None) -> dict:
     if not is_current(c):
         raise NeedsApproval("E*TRADE access ends at midnight Eastern - approve again on etrade.com")
-    return json.loads(_get(path, keys, c["token"], c["secret"], query))
+    body = _get(path, keys, c["token"], c["secret"], query)
+    return json.loads(body) if body.strip() else {}       # E*TRADE answers "nothing to list" with an empty reply
 
 
 def renew(keys: dict, c: dict) -> None:
@@ -295,8 +296,11 @@ def sync(conn, keys: dict) -> dict:
                 db.replace_holdings(conn, aid, today, held)
             if not total and len(held) and held["value"].sum() > 0:     # $0 next to real positions isn't the value
                 total = float(held["value"].sum())
-            if total is not None:
-                db.upsert_balance(conn, aid, today, total, SOURCE)
+            if not total:                       # never put $0 over a real balance on E*TRADE's word alone
+                report["errors"].append(f"{a.get('accountDesc') or k} ••{str(a.get('accountId', ''))[-4:]}: E*TRADE "
+                                        f"reported no positions and a $0 value - nothing saved. Is this the right account?")
+                continue
+            db.upsert_balance(conn, aid, today, total, SOURCE)
             report["accounts"].append({"account_id": aid, "balance": total, "positions": len(held)})
     db.set_setting(conn, "etrade_last_sync", time.time())
     return report
