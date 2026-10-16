@@ -740,26 +740,6 @@ def test_plaid_account_can_go_into_a_new_dashboard_account(env, monkeypatch):
     assert conn.execute("SELECT balance FROM balances WHERE account_id = ?", (row[0],)).fetchone()[0] == 0.7
 
 
-def test_etrade_sandbox_flow_from_the_ui_saves_nothing(env, monkeypatch):
-    from finance import etrade
-    from tests.test_etrade import FakeETrade
-    conn, _ = env
-    fake = FakeETrade()
-    monkeypatch.setattr(etrade, "_get", fake)
-    at = app()
-    [t for t in at.text_input if t.label == "Consumer key"][0].input("ck")
-    [t for t in at.text_input if t.label == "Consumer secret"][0].input("cs")
-    [b for b in at.button if b.label == "Save keys" and "etrade" in str(b.form_id)][0].click().run()
-    assert etrade.load()["env"] == "sandbox"                                  # sandbox is the default
-    click(at, "✅ Approve access on etrade.com")
-    [t for t in at.text_input if t.label == "2. Code from E*TRADE"][0].input("AB12C")
-    [b for b in at.button if b.label == "Finish"][0].click().run()
-    assert not at.exception
-    assert any("made-up" in c.value for c in at.caption)
-    assert conn.execute("SELECT COUNT(*) FROM balances").fetchone()[0] == 0
-
-
-
 def test_stock_plan_details_show_total_vested_and_unvested(env):
     conn, _ = env
     sp = db.get_or_create_account(conn, "MD Stock Plan", "E*TRADE", "brokerage")
@@ -770,3 +750,36 @@ def test_stock_plan_details_show_total_vested_and_unvested(env):
     [s for s in at.selectbox if s.label == "Show details for"][0].select("MD Stock Plan").run()
     shown = {m.label: m.value for m in at.metric}
     assert shown["Total"] == "$3.34M" and shown["Vested · in net worth"] == "$2.83M" and shown["Unvested"] == "$516K"
+
+
+
+def test_linked_banks_update_themselves_once_a_month(env, monkeypatch):
+    import time
+    from finance import plaid
+    from tests.test_plaid import FakePlaid
+    conn, _ = env
+    fake = FakePlaid()
+    monkeypatch.setattr(plaid, "_post", fake)
+    plaid.save_keys("cid", "sec")
+    plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())
+    syncs = lambda: sum(1 for c in fake.calls if c[0] == "/accounts/get")
+    db.set_setting(conn, "plaid_last_sync", time.time() - 10 * 24 * 3600)    # synced 10 days ago: leave it
+    app()
+    assert syncs() == 0
+    db.set_setting(conn, "plaid_last_sync", time.time() - 31 * 24 * 3600)    # a month ago: update on opening
+    at = app()
+    assert syncs() == 1 and any("Updates on its own once a month" in c.value for c in at.caption)
+    app()                                                                     # and not again right away
+    assert syncs() == 1
+
+
+def test_a_failed_monthly_update_never_stops_the_dashboard(env, monkeypatch):
+    import time
+    from finance import plaid
+    conn, _ = env
+    plaid.save_keys("cid", "sec")
+    plaid._write({**plaid.load_keys(), "items": [{"item_id": "i", "access_token": "a", "institution": "X"}]})
+    monkeypatch.setattr(plaid, "sync", lambda *a: (_ for _ in ()).throw(RuntimeError("no network")))
+    app()                                                                     # opens fine (app() checks no exception)
+    last = db.get_setting(conn, "plaid_last_sync")
+    assert time.time() - last > 28 * 24 * 3600                                # retried tomorrow, not in a month
