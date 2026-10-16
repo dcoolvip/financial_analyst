@@ -182,7 +182,8 @@ def balance(keys: dict, c: dict, account_key: str, inst_type: str = "BROKERAGE")
 def positions(keys: dict, c: dict, account_key: str) -> pd.DataFrame:
     rows, page = [], 1
     while True:
-        r = _json(f"/v1/accounts/{account_key}/portfolio.json", keys, c, {"count": "100", "pageNumber": str(page)})
+        r = _json(f"/v1/accounts/{account_key}/portfolio.json", keys, c,       # E*TRADE's own page size
+                  {"pageNumber": str(page)} if page > 1 else None)
         ports = _as_list((r.get("PortfolioResponse") or {}).get("AccountPortfolio"))
         for p in ports:
             for x in _as_list(p.get("Position")):
