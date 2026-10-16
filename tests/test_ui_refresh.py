@@ -727,6 +727,7 @@ def test_plaid_account_can_go_into_a_new_dashboard_account(env, monkeypatch):
     plaid.add_item("public-tok", "E*TRADE from Morgan Stanley", plaid.load_keys())
     at = app()
     click(at, "🔄 Sync now")
+    at = app()                                                                # a refresh: still asked
     q = [s for s in at.selectbox if "Individual Brokerage" in s.label][0]
     q.select("➕ New account…").run()
     name = [t for t in at.text_input if t.label == "Account name"][-1]

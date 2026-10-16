@@ -310,4 +310,11 @@ def sync(conn, keys: dict) -> dict:
             report["accounts"].append({"account_id": aid, "institution": item["institution"],
                                        "added": counts[pid], "balance": a["balances"].get("current")})
     db.set_setting(conn, "plaid_last_sync", time.time())
+    db.set_setting(conn, "plaid_unmatched", report["unmatched"])     # still asked after a refresh
     return report
+
+
+def unmatched(conn) -> list[dict]:
+    """Plaid accounts from the last sync still waiting for "which of your accounts is this?"."""
+    m = mapping(conn)
+    return [u for u in db.get_setting(conn, "plaid_unmatched", []) or [] if u["plaid_account_id"] not in m]

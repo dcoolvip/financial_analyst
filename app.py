@@ -1655,9 +1655,7 @@ def render_plaid_links(keys: dict) -> None:
                 else:
                     plaid_sync(plaid.load_keys())
             st.rerun()
-    for u in (st.session_state.get("plaid_report") or {}).get("unmatched", []):
-        if u["plaid_account_id"] in plaid.mapping(conn):
-            continue
+    for u in plaid.unmatched(conn):
         kinds = plaid.PLAID_KINDS.get(u["type"], [])
         new_acct, skip = "➕ New account…", "Don't import this one"
         options = list(accts.loc[accts["type"].isin(kinds), "name"]) + [new_acct, skip]
