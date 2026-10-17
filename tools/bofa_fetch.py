@@ -226,6 +226,24 @@ def matches_tile(info: dict, s: statements.Statement) -> str | None:
     return None
 
 
+def check_downloads(new: list) -> list[tuple]:
+    """Each download with the reason it must not be imported (None = fine). Tiles with digits or a kind in their
+    name are checked against the PDF; and no two tiles may bring down the same document (a nickname tile like
+    "DCOOLVIP" says nothing about its account, so that's the check that covers it)."""
+    parsed = [(key, path, info, statements.parse_pdf(path.read_bytes())) for key, path, info in new]
+    out, claimed = [], {}
+    for key, path, info, s in sorted(parsed, key=lambda x: bool(matches_tile(x[2], x[3])) or not
+                                     re.search(r"\d{4}\s*$", x[2]["label"])):     # tiles that prove themselves first
+        why = matches_tile(info, s)
+        doc = (s.kind, s.last4, s.as_of)
+        if not why and doc in claimed:
+            why = f"it's the same document as the {mask_digits(claimed[doc])} one"
+        if not why:
+            claimed[doc] = info["label"]
+        out.append((key, path, info, why))
+    return sorted(out, key=lambda x: x[1].name)
+
+
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path, dict]]:
     page.goto(STATEMENTS)
     page.wait_for_timeout(4000)
@@ -295,8 +313,7 @@ def main(dry_run: bool = False) -> None:
     if not dry_run:
         checkpoints.create(conn, f"Before the BofA pull ({len(new)} statements)")
     lines, done = [], set()
-    for key, path, info in sorted(new, key=lambda x: x[1].name):
-        why = matches_tile(info, statements.parse_pdf(path.read_bytes()))
+    for key, path, info, why in check_downloads(new):
         if why:                       # the wrong document came down: never import it; try again next time
             lines.append(f"{info['title']} - {mask_digits(info['label'])}: downloaded the wrong document ({why}) - "
                          "not imported")

@@ -156,3 +156,23 @@ def test_a_download_must_be_the_statement_on_the_tile():
     assert bf.matches_tile({"title": "September Statement", "label": "DCOOLVIP"},
                            Statement(kind="deposit", last4="0522")) is None   # a nickname: nothing to contradict
     assert bf.matches_tile(card_tile, savings) is not None
+
+
+
+def test_no_two_tiles_may_bring_down_the_same_document(tmp_path, monkeypatch):
+    """The DCOOLVIP (nickname) tile's PDF was the mortgage too; with no digits to check, the duplicate is what gives
+    it away - the Mortgage tile proves the document is its own, so the nickname tile's copy is rejected."""
+    from finance.importers.statements import Statement
+    mortgage = Statement(kind="loan", institution="Bank of America", last4="6784")
+    mortgage.as_of = date(2026, 10, 5)
+    monkeypatch.setattr(bf.statements, "parse_pdf", lambda b: mortgage)
+    files = {}
+    for name in ("2026-09-21_DCOOLVIP.pdf", "2026-10-05_Mortgage_6784.pdf"):
+        files[name] = tmp_path / name
+        files[name].write_bytes(b"%PDF")
+    new = [("DCOOLVIP|2026-09-21", files["2026-09-21_DCOOLVIP.pdf"], {"title": "September Statement", "label": "DCOOLVIP"}),
+           ("Mortgage - 6784|2026-10-05", files["2026-10-05_Mortgage_6784.pdf"],
+            {"title": "October Statement", "label": "Mortgage - 6784"})]
+    verdict = {info["label"]: why for _, _, info, why in bf.check_downloads(new)}
+    assert verdict["Mortgage - 6784"] is None
+    assert "same document as the Mortgage - #### one" in verdict["DCOOLVIP"]
