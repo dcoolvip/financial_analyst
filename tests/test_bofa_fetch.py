@@ -126,9 +126,11 @@ def test_no_two_tiles_may_bring_down_the_same_document(tmp_path, monkeypatch):
 
 def test_a_shortened_name_on_the_tile_still_finds_its_download_link():
     """Regression: the card tile reads 'Customized Cash Re...'; its link has the full name, so it was skipped."""
-    card = {"title": "September Statement", "label": "Customized Cash Re..."}
+    card = {"title": "September Statement", "label": "Customized Cash Re... - 1013"}     # as on the tile
     link = "Download PDF\nfor September Statement for Customized Cash Rewards Visa Signature - 1013"
     assert bf.link_pattern(card).search(link)
+    assert not bf.link_pattern(card).search("Download PDF for September Statement for Customized Cash Rewards - 9999")
+    assert bf.link_pattern({"title": "September Statement", "label": "Customized Cash Re..."}).search(link)
     savings = {"title": "September Statement", "label": "Advantage Savings - 9897"}
     assert bf.link_pattern(savings).search("Download PDF for September Statement for Advantage Savings - 9897")
     assert not bf.link_pattern(savings).search("Download PDF for September Statement for DCOOLVIP")

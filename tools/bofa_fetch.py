@@ -126,12 +126,12 @@ def sign_in(page) -> bool:
 
 
 def link_pattern(info: dict) -> re.Pattern:
-    """The tile's own "Download PDF for <title> for <account>" link. Long names are cut short on the tile
-    ("Customized Cash Re...") but not in the link, so a shortened name matches on its beginning."""
-    label = info["label"].strip()
-    short = label.endswith(("...", "…"))
-    name = re.escape(label.rstrip(".…").strip())
-    return re.compile(rf"for\s+{re.escape(info['title'])}\s+for\s+{name}" + ("" if short else r"\s*$"), re.I)
+    """The tile's own "Download PDF for <title> for <account>" link. Long names are cut short on the tile, with
+    the "..." anywhere ("Customized Cash Re... - 1013") but not in the link: the pieces around it must match."""
+    pieces = [re.escape(p.strip()) for p in re.split(r"\.\.\.|…", info["label"].strip())]
+    name = r".*?".join(p for p in pieces if p)
+    return re.compile(rf"for\s+{re.escape(info['title'])}\s+for\s+{name}" + (r"\s*$" if len(pieces) == 1 else ""),
+                      re.I)
 
 
 def mask_digits(s: str) -> str:
@@ -187,9 +187,14 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path, dict]
         # this statement's own link: "Download PDF for September Statement for Advantage Savings - 1234"
         link = page.locator("#downloadPDFLink").filter(has_text=link_pattern(info)).first
         try:
-            link.wait_for(state="visible", timeout=15_000)
+            link.wait_for(state="visible", timeout=10_000)
         except Exception:
-            print(f"No download link for {info['title']} - {mask_digits(info['label'])} - skipped", flush=True)
+            shown = page.locator("#downloadPDFLink >> visible=true")    # else: the one link this tile showed
+            link = shown.first if shown.count() == 1 else None
+        if link is None:
+            texts = [mask_digits(" ".join(t.split()))[:90] for t in page.locator("#downloadPDFLink").all_inner_texts()]
+            print(f"No download link for {info['title']} - {mask_digits(info['label'])} - skipped. "
+                  f"Download links on the page: {texts}", flush=True)
             page.keyboard.press("Escape")
             continue
         with page.expect_download(timeout=60_000) as dl:
