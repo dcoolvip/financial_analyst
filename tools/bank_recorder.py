@@ -128,13 +128,23 @@ def main(bank: str) -> None:
         print("Signed in - recording. Click through to one account's Download as usual, download the file, "
               "then close the window.", flush=True)
         deadline = time.time() + WAIT_FOR_DONE_S
-        while ctx.pages and time.time() < deadline:
-            time.sleep(1)
         try:
-            ctx.close()
-        except Exception:
-            pass
+            while ctx.pages and time.time() < deadline:
+                try:                      # wait *through Playwright*, so clicks, downloads and closing get seen
+                    ctx.pages[-1].wait_for_timeout(500)
+                except Exception:         # that page just closed - look at the ones left
+                    pass
+        except KeyboardInterrupt:
+            print("Stopped - saving what was recorded.")
+        finally:
+            _save(out_dir, bank, steps)
+            try:
+                ctx.close()
+            except Exception:
+                pass
 
+
+def _save(out_dir: Path, bank: str, steps: list) -> None:
     rec = out_dir / f"{bank}_recording.json"
     rec.write_text(json.dumps({"bank": bank, "recorded": time.time(), "steps": steps}, indent=1))
     print(f"Recorded {len(steps)} steps (labels only, digits masked) to {rec}")
