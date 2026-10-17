@@ -101,6 +101,13 @@ class FakeSignInPage:
         self.signed_in, self.url = False, None
 
     def goto(self, url): self.url = url
+    def get_by_role(self, role, name=None):
+        page = self
+        class LogIn:
+            first = property(lambda s: s)
+            def or_(s, other): return s
+            def click(s, timeout=None): page.url = bf.SIGN_IN                # "Log In" opens the sign-in page
+        return LogIn()
     def get_by_text(self, pattern):
         page = self
         class T:
@@ -114,7 +121,7 @@ class FakeSignInPage:
 def test_chromes_saved_password_is_used_as_is_click_then_enter():
     page = FakeSignInPage(autofilled=True)
     assert bf.sign_in(page, None) is True                                 # no Keychain login needed
-    assert page.url == bf.HOME
+    assert page.url in (bf.HOME, bf.SIGN_IN)
     assert page.pwd.value == "" and page.pwd.clicked and page.pwd.pressed == ["Enter"]   # never typed over
 
 
@@ -132,3 +139,20 @@ def test_with_neither_it_asks_you_to_sign_in_in_the_window(monkeypatch):
     page = FakeSignInPage(autofilled=False)
     assert bf.sign_in(page, None) is False and page.pwd.pressed == []
     assert any("sign in in the Chrome window" in t for t in told)
+
+
+
+def test_a_download_must_be_the_statement_on_the_tile():
+    """Regression: every tile's download came back as the mortgage statement (first link on the page)."""
+    from finance.importers.statements import Statement
+    mortgage = Statement(kind="loan", institution="Bank of America", last4="6784")
+    savings_tile = {"title": "September Statement", "label": "Advantage Savings - 9897"}
+    card_tile = {"title": "September Statement", "label": "Customized Cash Rewards Visa Signature - 1013"}
+    assert "ending 6784, not 9897" in bf.matches_tile(savings_tile, mortgage)
+    assert bf.matches_tile({"title": "October Statement", "label": "Mortgage - 6784"}, mortgage) is None
+    assert "not credit card" in bf.matches_tile({"title": "x", "label": "Customized Cash Rewards"}, mortgage)
+    savings = Statement(kind="deposit", institution="Bank of America", last4="9897")
+    assert bf.matches_tile(savings_tile, savings) is None
+    assert bf.matches_tile({"title": "September Statement", "label": "DCOOLVIP"},
+                           Statement(kind="deposit", last4="0522")) is None   # a nickname: nothing to contradict
+    assert bf.matches_tile(card_tile, savings) is not None

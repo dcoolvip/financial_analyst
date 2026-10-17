@@ -29,7 +29,9 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_pull, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
-HOME = "https://www.bankofamerica.com/"     # its sign-in boxes are where Chrome fills in your login
+HOME = "https://www.bankofamerica.com/"     # no sign-in boxes here: its "Log In" opens the sign-in page
+SIGN_IN = ("https://secure.bankofamerica.com/myaccounts/signin/signIn.go?returnSiteIndicator=GAIMW&langPref=en-us"
+           "&request_locale=en-us&capturemode=N&newuser=false&bcIP=F")   # where "Log In" leads (as you saw it)
 STATEMENTS = "https://secure.bankofamerica.com/statements-documents/home/"
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 NEEDS_YOU = re.compile(r"(verification code|one-time code|authorization code|text message|verify (it'?s )?you"
@@ -167,7 +169,15 @@ def sign_in(page, login: tuple[str, str] | None) -> bool:
     page.goto(HOME)
     if page.get_by_text(SIGNED_IN).first.is_visible():           # still signed in from before
         return True
-    frame, pwd = _visible_password(page)
+    try:                                                         # BofA's "Log In" opens its sign-in page
+        page.get_by_role("link", name=re.compile(r"^\s*log ?in\s*$", re.I)).or_(
+            page.get_by_role("button", name=re.compile(r"^\s*log ?in\s*$", re.I))).first.click(timeout=10_000)
+    except Exception:
+        page.goto(SIGN_IN)
+    frame, pwd = _visible_password(page, timeout_s=15)
+    if not pwd:                                                  # the link moved: go to the sign-in page itself
+        page.goto(SIGN_IN)
+        frame, pwd = _visible_password(page, timeout_s=15)
     page.wait_for_timeout(AUTOFILL_WAIT_MS)                      # give Chrome a moment to fill them in
     if not pwd:
         print(f"No visible password box at {page.url.split('?')[0]}. Boxes seen: {_fields_seen(page)}", flush=True)
@@ -197,7 +207,26 @@ def sign_in(page, login: tuple[str, str] | None) -> bool:
     return False
 
 
-def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
+def mask_digits(s: str) -> str:
+    return re.sub(r"\d", "#", s)
+
+
+LABEL_KINDS = [(r"mortgage|home loan|heloc", "loan"), (r"cash rewards|card|visa|mastercard|travel rewards", "credit_card"),
+               (r"savings|checking|banking", "deposit")]
+
+
+def matches_tile(info: dict, s: statements.Statement) -> str | None:
+    """Is this PDF really the statement on the tile we clicked? None if yes, else why not."""
+    digits = re.findall(r"(\d{4})\s*$", info["label"])
+    if digits and s.last4 and s.last4 != digits[0]:
+        return f"it's for an account ending {s.last4}, not {digits[0]}"
+    for pattern, kind in LABEL_KINDS:
+        if re.search(pattern, info["label"], re.I) and s.kind != kind:
+            return f"it reads as a {s.kind.replace('_', ' ')} statement, not {kind.replace('_', ' ')}"
+    return None
+
+
+def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path, dict]]:
     page.goto(STATEMENTS)
     page.wait_for_timeout(4000)
     got = []
@@ -210,14 +239,21 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
         if not info or tile_key(info) in seen:
             continue
         tile.click()
-        link = page.locator("#downloadPDFLink").first
-        link.wait_for(state="visible", timeout=15_000)
+        # this statement's own link: "Download PDF for September Statement for Advantage Savings - 1234"
+        link = page.locator("#downloadPDFLink").filter(has_text=re.compile(
+            rf"for\s+{re.escape(info['title'])}\s+for\s+{re.escape(info['label'])}", re.I)).first
+        try:
+            link.wait_for(state="visible", timeout=15_000)
+        except Exception:
+            print(f"No download link for {info['title']} - {mask_digits(info['label'])} - skipped", flush=True)
+            page.keyboard.press("Escape")
+            continue
         with page.expect_download(timeout=60_000) as dl:
             link.click()
         slug = re.sub(r"[^A-Za-z0-9]+", "_", info["label"]).strip("_")
         path = out / f"{info['date'].isoformat()}_{slug}.pdf"
         dl.value.save_as(path)
-        got.append((tile_key(info), path))
+        got.append((tile_key(info), path, info))
         page.keyboard.press("Escape")                        # close the statement panel before the next tile
         page.wait_for_timeout(1000)
     return got
@@ -258,9 +294,17 @@ def main(dry_run: bool = False) -> None:
     conn = db.connect(db_path)
     if not dry_run:
         checkpoints.create(conn, f"Before the BofA pull ({len(new)} statements)")
-    lines = [import_statement(conn, path) for _, path in sorted(new, key=lambda x: x[1].name)]
+    lines, done = [], set()
+    for key, path, info in sorted(new, key=lambda x: x[1].name):
+        why = matches_tile(info, statements.parse_pdf(path.read_bytes()))
+        if why:                       # the wrong document came down: never import it; try again next time
+            lines.append(f"{info['title']} - {mask_digits(info['label'])}: downloaded the wrong document ({why}) - "
+                         "not imported")
+            continue
+        lines.append(import_statement(conn, path))
+        done.add(key)
     if not dry_run:
-        fetched_path().write_text(json.dumps(sorted(seen | {k for k, _ in new}), indent=1))
+        fetched_path().write_text(json.dumps(sorted(seen | done), indent=1))
     with (base / "bofa_runs.log").open("a") as log:          # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))
