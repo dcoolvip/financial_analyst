@@ -311,9 +311,28 @@ for key in ("flash", "ai_flash"):                 # confirmation from the previo
     if msg := st.session_state.pop(key, None):
         st.toast(msg, icon="⚠️" if msg.startswith("Couldn't") else "✅")
 
+# Where you are (tab, open sections) lives in the page address, so a browser refresh comes back to the same place.
+TAB_SLUGS = ["overview", "future", "money", "accounts", "add"]
+TAB_LABELS = (["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
+              ["Overview", "Future", "Money in & out", "Accounts", "Add data"])
+
+
+def remember(param: str, value: str | None) -> None:
+    if value:
+        st.query_params[param] = value
+    elif param in st.query_params:
+        del st.query_params[param]
+
+
+def _tab_changed() -> None:
+    label = st.session_state.get("main_tab")
+    remember("tab", TAB_SLUGS[TAB_LABELS.index(label)] if label in TAB_LABELS and label != TAB_LABELS[0] else None)
+
+
+_tab = st.query_params.get("tab")
 tab_overview, tab_future, tab_flow, tab_accounts, tab_add = st.tabs(
-    ["Overview", "Future", "Money", "Accounts", "Add"] if PHONE else
-    ["Overview", "Future", "Money in & out", "Accounts", "Add data"])
+    TAB_LABELS, key="main_tab", on_change=_tab_changed,
+    default=TAB_LABELS[TAB_SLUGS.index(_tab)] if _tab in TAB_SLUGS else None)
 
 
 # --- overview -----------------------------------------------------------------
@@ -1870,8 +1889,16 @@ def render_connected() -> None:
         for_unknown = [u for u in plaid.unmatched(conn) if not u.get("item_id")]
         if keys and for_unknown:
             plaid_matching(keys, None)
-    with st.expander("➕ Connect a bank", expanded=bool(st.session_state.get("plaid_token")) or not (items or bofa_on)):
-        how = st.radio("How", ["Through Plaid", "Browser pull"], horizontal=True, label_visibility="collapsed",
+    hows = {"plaid": "Through Plaid", "browser": "Browser pull"}
+    with st.expander("➕ Connect a bank", key="connect_open",
+                     expanded=bool(st.session_state.get("plaid_token")) or not (items or bofa_on)
+                     or "connect" in st.query_params,
+                     on_change=lambda: remember("connect", st.query_params.get("connect", "plaid")
+                                                if st.session_state.get("connect_open") else None)):
+        how = st.radio("How", list(hows.values()), horizontal=True, label_visibility="collapsed", key="connect_how",
+                       index=list(hows).index(st.query_params.get("connect")) if st.query_params.get("connect") in hows else 0,
+                       on_change=lambda: remember("connect", next(k for k, v in hows.items()
+                                                                  if v == st.session_state.get("connect_how"))),
                        captions=["Wealthfront, E*TRADE / Morgan Stanley, Barclays… (Plaid's own sign-in)",
                                  "Signs in with Chrome's saved password and downloads statements"])
         if how == "Through Plaid":

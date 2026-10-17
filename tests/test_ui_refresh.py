@@ -900,3 +900,24 @@ def test_amex_can_be_recorded_from_the_dashboard(env, monkeypatch, tmp_path):
     assert any("**American Express** · not set up yet" in m.value for m in at.markdown)
     click(at, "⏺ Record American Express")
     assert recorded == ["amex"]
+
+
+def test_a_refresh_comes_back_to_the_same_place(env):
+    """The tab and the open Connect a bank / Browser pull choice are kept in the page address."""
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert at.query_params.get("connect") in ("browser", ["browser"])
+    fresh = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)        # a browser refresh: a new session
+    fresh.query_params["tab"] = "add"
+    fresh.query_params["connect"] = "browser"
+    fresh.run()
+    assert not fresh.exception
+    assert [r for r in fresh.radio if r.label == "How"][0].value == "Browser pull"
+
+    def tab_container(node):
+        for c in (node.children.values() if isinstance(getattr(node, "children", None), dict) else []):
+            if getattr(c, "type", "") == "tab_container":
+                return c
+            if (found := tab_container(c)) is not None:
+                return found
+    assert tab_container(fresh.main).proto.tab_container.default_tab_index == 4      # opens on "Add data"
