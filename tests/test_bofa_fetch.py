@@ -196,3 +196,28 @@ def test_chase_download_arriving_from_a_pop_up_tab_is_caught(tmp_path):
     path = cf._save(main, lambda: ctx.pages.append(ctx.popup), tmp_path)        # clicking opens the pop-up
     assert path.name == "20261006-statements-2349-.pdf" and path.exists()
     assert ctx.popup.clicked and ctx.popup.closed and not main.closed            # Submit in the pop-up; tab tidied
+
+
+
+def test_chase_download_watcher_gives_playwright_a_real_function():
+    """Regression: handing Playwright list.append crashed the pull right after Chrome opened."""
+    import inspect
+    spec = importlib.util.spec_from_file_location("chase_fetch3", Path(__file__).parent.parent / "tools/chase_fetch.py")
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+    handlers = []
+
+    class Page:
+        def on(self, event, f):
+            assert inspect.isfunction(f), "Playwright wraps handlers by setting attributes: needs a Python function"
+            handlers.append((event, f))
+
+    class Ctx:
+        pages = [Page()]
+        def on(self, event, f): handlers.append((event, f))
+    cf.DOWNLOADS.clear()
+    cf.watch_downloads(Ctx())
+    [f for e, f in handlers if e == "download"][0]("a download")
+    assert cf.DOWNLOADS == ["a download"]
+    [f for e, f in handlers if e == "page"][0](Page())                           # a new tab gets watched too
+    assert sum(1 for e, _ in handlers if e == "download") == 2

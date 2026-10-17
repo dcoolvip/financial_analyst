@@ -141,8 +141,11 @@ DOWNLOADS: list = []          # every download in any tab or pop-up (Chase deliv
 
 
 def watch_downloads(ctx) -> None:
+    def got(download):                 # a plain function: Playwright can't take a built-in like list.append
+        DOWNLOADS.append(download)
+
     def hook(p):
-        p.on("download", DOWNLOADS.append)
+        p.on("download", got)
     for p in ctx.pages:
         hook(p)
     ctx.on("page", hook)
