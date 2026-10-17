@@ -112,7 +112,10 @@ def merge_statement_transactions(conn, account_id: int, s: "statements.Statement
         new.append({"date": t["date"], "description": t["description"], "amount": t["amount"],
                     "fingerprint": f"stmt|{key[0]}|{key[1]:.2f}|{nth[key]}"})
     added = db.insert_transactions(conn, account_id, pd.DataFrame(new), filename) if new else 0
-    left = sum(n for (d, _), n in have.items() if p_lo.isoformat() <= d <= p_hi.isoformat())   # its own period only
+    from datetime import timedelta
+    # cards: purchases made in the last few days often post after the closing date (they're on the next statement)
+    last = p_hi - timedelta(days=4) if s.kind == "credit_card" else p_hi
+    left = sum(n for (d, _), n in have.items() if p_lo.isoformat() <= d <= last.isoformat())   # its own period only
     return {"period": (p_lo, p_hi), "on_statement": len(s.transactions), "already_there": len(s.transactions) - len(new),
             "added": added, "only_in_dashboard": left}
 

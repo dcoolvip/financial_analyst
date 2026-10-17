@@ -694,3 +694,20 @@ def test_chase_checking_rows_are_proven_by_the_running_balance(monkeypatch):
     monkeypatch.setattr(chase_pdf, "_rows", lambda pdf: rows[:-1] + ["Ending Balance $2,100.00"])
     assert "Ending Balance" in chase_pdf.deposit_transactions(b"", date(2026, 9, 16))[1][0]
     assert chase_pdf.last4_from_filename("20260916-statements-2738-.pdf") == "2738"
+
+
+
+def test_a_card_purchase_from_the_last_days_isnt_flagged_as_missing(tmp_path):
+    """Sapphire, Aug 7 - Sep 6: two purchases from Sep 5-6 posted after closing (they're on the next statement),
+    so 'in the dashboard but not on the statement' was a false alarm."""
+    from finance import db
+    from finance.importers import merge_statement_transactions
+    from finance.importers.statements import Statement
+    conn = db.connect(tmp_path / "f.db")
+    acct = db.get_or_create_account(conn, "Sapphire", "Chase", "credit_card")
+    db.insert_transactions(conn, acct, pd.DataFrame([
+        {"date": date(2026, 9, 5), "description": "JACK IN THE BOX", "amount": -12.0, "fingerprint": "c1"},
+        {"date": date(2026, 8, 20), "description": "NOT ON IT", "amount": -3.0, "fingerprint": "c2"}]), "chase.csv")
+    s = Statement(kind="credit_card", period=(date(2026, 8, 7), date(2026, 9, 6)),
+                  transactions=[{"date": date(2026, 8, 10), "description": "SHOP", "amount": -10.0}])
+    assert merge_statement_transactions(conn, acct, s, "stmt.pdf")["only_in_dashboard"] == 1     # only the Aug 20 one
