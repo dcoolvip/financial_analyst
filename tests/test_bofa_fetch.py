@@ -155,3 +155,44 @@ def test_chase_takes_recent_unfetched_statements_and_matches_by_file_digits(tmp_
     db.get_or_create_account(conn, "Other Card", "Chase", "credit_card")
     assert cf.match_account(conn, "2349") == a and cf.match_account(conn, "9999") is None
     assert "not a statement" in cf.import_statement(conn, tmp_path / "20261006-tax-form-2349-.pdf")
+
+
+def test_chase_download_arriving_from_a_pop_up_tab_is_caught(tmp_path):
+    """Regression: the pull only watched the main tab; Chase's Submit + file come through a new tab, so every
+    statement timed out. Now Submit is found in any tab and the download is caught from any tab."""
+    spec = importlib.util.spec_from_file_location("chase_fetch2", Path(__file__).parent.parent / "tools/chase_fetch.py")
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+
+    class Dl:
+        suggested_filename = "20261006-statements-2349-.pdf"
+        def save_as(self, path): Path(path).write_bytes(b"%PDF")
+
+    class Submit:
+        def __init__(self, tab): self.tab = tab
+        def filter(self, visible): return self
+        @property
+        def first(self): return self
+        def count(self): return 1 if self.tab.has_submit else 0
+        def click(self): self.tab.clicked = True
+
+    class Tab:
+        def __init__(self, ctx, has_submit=False):
+            self.context, self.has_submit, self.clicked, self.closed = ctx, has_submit, False, False
+            self.keyboard = type("K", (), {"press": lambda s, k: None})()
+        def locator(self, sel): return Submit(self)
+        def wait_for_timeout(self, ms):
+            if self.context.popup.clicked and not cf.DOWNLOADS:
+                cf.DOWNLOADS.append(Dl())                        # the pop-up tab delivers the file
+        def close(self): self.closed = True
+
+    class Ctx:
+        pass
+    ctx = Ctx()
+    main, ctx.popup = Tab(ctx), None
+    ctx.popup = Tab(ctx, has_submit=True)
+    ctx.pages = [main]
+    cf.DOWNLOADS.clear()
+    path = cf._save(main, lambda: ctx.pages.append(ctx.popup), tmp_path)        # clicking opens the pop-up
+    assert path.name == "20261006-statements-2349-.pdf" and path.exists()
+    assert ctx.popup.clicked and ctx.popup.closed and not main.closed            # Submit in the pop-up; tab tidied

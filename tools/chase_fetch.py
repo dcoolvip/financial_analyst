@@ -137,28 +137,68 @@ def sign_in(page) -> bool:
     return False
 
 
+DOWNLOADS: list = []          # every download in any tab or pop-up (Chase delivers files through new tabs)
+
+
+def watch_downloads(ctx) -> None:
+    def hook(p):
+        p.on("download", DOWNLOADS.append)
+    for p in ctx.pages:
+        hook(p)
+    ctx.on("page", hook)
+
+
+def _visible_submit(page):
+    """Chase's Submit, in whichever tab or pop-up it shows up in."""
+    for p in page.context.pages:
+        try:
+            b = p.locator("input[type=submit], button:has-text('Submit')").filter(visible=True).first
+            if b.count():
+                return b
+        except Exception:
+            pass
+    return None
+
+
 def _save(page, click, out: Path) -> Path | None:
-    """Click, confirm Chase's Submit, and save the download under Chase's own file name."""
-    with page.expect_download(timeout=30_000) as dl:
-        click()
-        submit = page.locator("input[type=submit], button:has-text('Submit')").filter(visible=True).first
-        submit.wait_for(state="visible", timeout=10_000)
-        submit.click()
-    path = out / dl.value.suggested_filename
-    dl.value.save_as(path)
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(1000)
+    """Click, confirm Chase's Submit, catch the download from any tab, save it under Chase's own file name."""
+    main, before = page, len(DOWNLOADS)
+    click()
+    deadline, submitted = time.time() + 30, False
+    while time.time() < deadline and len(DOWNLOADS) == before:
+        if not submitted and (b := _visible_submit(page)) is not None:
+            b.click()
+            submitted = True
+        main.wait_for_timeout(500)                   # waiting through Playwright: downloads and new tabs get seen
+    if len(DOWNLOADS) == before:
+        raise TimeoutError("no download came" + ("" if submitted else " (no Submit button appeared)"))
+    dl = DOWNLOADS[before]
+    path = out / dl.suggested_filename
+    dl.save_as(path)
+    for p in list(main.context.pages):               # close the tabs Chase opened for it
+        if p is not main:
+            try:
+                p.close()
+            except Exception:
+                pass
+    main.keyboard.press("Escape")
+    main.wait_for_timeout(1000)
     return path
 
 
 def _shown_buttons(page) -> str:
-    """What could be clicked on screen right then (labels only, digits masked) - for fixing, not guessing."""
-    try:
-        labels = page.locator("button, input[type=submit], [role=menuitem], [role=button]").filter(
-            visible=True).evaluate_all("els => els.slice(0, 40).map(e => (e.innerText || e.value || "").trim())")
-        return "On screen: " + str([mask_digits(" ".join(l.split()))[:40] for l in labels if l][:25])
-    except Exception:
-        return ""
+    """What could be clicked on screen right then, in every tab (labels only, digits masked)."""
+    labels = []
+    for p in page.context.pages:
+        try:
+            for el in p.locator("button, input[type=submit], [role=menuitem], a[id*='download']").filter(
+                    visible=True).all()[:30]:
+                t = " ".join((el.inner_text(timeout=1000) or el.get_attribute("value") or "").split())
+                if t:
+                    labels.append(mask_digits(t)[:40])
+        except Exception as e:
+            labels.append(f"({e.__class__.__name__})")
+    return f"On screen in {len(page.context.pages)} tab(s): {labels[:25]}"
 
 
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
@@ -194,7 +234,7 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
         try:
             got.append((text, _save(page, click, out)))
         except Exception as e:
-            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}. {_shown_buttons(page)}", flush=True)
+            print(f"Couldn't download {mask_digits(text)}: {e}. {_shown_buttons(page)}", flush=True)
             page.keyboard.press("Escape")
     for i in range(card_rows.count()):
         row = card_rows.nth(i)
@@ -205,7 +245,7 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
         try:
             got.append((text, _save(page, row.click, out)))
         except Exception as e:
-            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}. {_shown_buttons(page)}", flush=True)
+            print(f"Couldn't download {mask_digits(text)}: {e}. {_shown_buttons(page)}", flush=True)
             page.keyboard.press("Escape")
     if not got:
         rows = [mask_digits(" ".join(t.split()))[:80] for t in (bank_rows.all_inner_texts() + card_rows.all_inner_texts())]
@@ -226,6 +266,7 @@ def main(dry_run: bool = False) -> None:
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
                                                     accept_downloads=True, viewport=None)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        watch_downloads(ctx)
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to Chase within 10 minutes - nothing downloaded.")
