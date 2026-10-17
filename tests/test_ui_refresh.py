@@ -835,7 +835,9 @@ def test_bofa_pull_from_the_dashboard(env, monkeypatch, tmp_path):
     monkeypatch.setattr(bank_pull, "scheduled", lambda: schedule["on"])
     monkeypatch.setattr(bank_pull, "set_schedule", lambda on: schedule.update(on=on) or "Scheduled.")
     at = app()
-    assert [b for b in at.button if b.label == "▶️ Pull now"][0].disabled            # no login yet
+    assert not [b for b in at.button if b.label == "▶️ Pull now"][0].disabled        # Chrome's saved password is enough
+    assert not [t for t in at.text_input if t.label == "BofA user ID"]               # the login form is optional
+    [t for t in at.toggle if t.label == "Chrome doesn't remember my BofA password"][0].set_value(True).run()
     [t for t in at.text_input if t.label == "BofA user ID"][0].input("jane.sample")
     [t for t in at.text_input if t.label == "BofA password"][0].input("s3cret")
     [b for b in at.button if b.label == "Save to Keychain"][0].click().run()

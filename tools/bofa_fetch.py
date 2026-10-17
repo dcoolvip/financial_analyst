@@ -3,9 +3,9 @@
     ~/.venvs/financial-analyst/bin/python tools/bofa_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/bofa_fetch.py --dry-run  # download + check, import into a copy
 
-Signs in with the BofA user ID and password kept in the macOS Keychain (service "FinancialAnalyst BofA"; added
-once with tools/bofa_setup.sh - never stored in the code or the dashboard). If BofA asks for a text code, a
-notification asks you to finish in the Chrome window. Then it opens Statements & Documents, downloads every
+Signs in with the password Chrome saved for BofA in this profile (it just presses Enter once Chrome fills the
+boxes). If Chrome doesn't, it uses a login saved in the macOS Keychain (optional, "FinancialAnalyst BofA"),
+else asks you to sign in in the window. If BofA asks for a text code, a notification asks you to finish there. Then it opens Statements & Documents, downloads every
 statement it hasn't fetched before, checks each one against its own printed totals, and imports it: balance,
 plus transactions that aren't already in the dashboard. A notification says what happened.
 
@@ -45,12 +45,9 @@ def notify(text: str) -> None:
                    check=False, capture_output=True)
 
 
-def keychain_login() -> tuple[str, str]:
-    """(user ID, password) from the Keychain (saved in the dashboard, or with tools/bofa_setup.sh)."""
-    login = bank_pull.keychain_login()
-    if not login:
-        raise SystemExit("No BofA login in the Keychain yet - save it in the dashboard (Add data) first.")
-    return login
+def keychain_login() -> tuple[str, str] | None:
+    """(user ID, password) from the Keychain, if saved there - only needed when Chrome doesn't fill them in."""
+    return bank_pull.keychain_login()
 
 
 # --- which statement tiles are new ------------------------------------------------------------------------------
@@ -139,20 +136,39 @@ def _fields_seen(page) -> str:
         `${e.id || '-'}/${e.name || '-'}/${e.type}/${e.offsetParent ? 'shown' : 'hidden'}`)"""))
 
 
-def sign_in(page, user: str, password: str) -> bool:
+AUTOFILL_WAIT_MS = 2500
+
+
+def _autofilled(box) -> bool:
+    """Chrome filled this box from its saved passwords (checked without reading what's in it)."""
+    try:
+        return bool(box.evaluate("e => e.matches(':-webkit-autofill') || e.matches(':autofill')"))
+    except Exception:
+        return False
+
+
+def sign_in(page, login: tuple[str, str] | None) -> bool:
+    """Sign in with Chrome's saved password if it fills the boxes (just press Enter), else the Keychain login,
+    else ask you to sign in in the window."""
     page.goto(SIGN_IN)
     if page.get_by_text(SIGNED_IN).first.is_visible():           # still signed in from before
         return True
     uid = _visible(page, USER_FIELDS)
     pwd = _visible(page, ["input[type=password]"], timeout_s=5)
+    page.wait_for_timeout(AUTOFILL_WAIT_MS)                      # give Chrome a moment to fill them in
     if not uid or not pwd:
         print("Sign-in boxes not found. Boxes on the page: " + _fields_seen(page), flush=True)
         notify("Couldn't find BofA's sign-in boxes - sign in yourself in the Chrome window; the pull continues.")
-    else:
-        if not (uid.input_value() or "").strip():                # "Save User ID" / Chrome may have filled it in
-            uid.fill(user)
-        pwd.fill(password)
+    elif _autofilled(pwd):
+        pwd.click()                     # Chrome releases a saved password to the page only after a real click
         pwd.press("Enter")
+    elif login:
+        if not (uid.input_value() or "").strip():                # "Save User ID" may have filled it in
+            uid.fill(login[0])
+        pwd.fill(login[1])
+        pwd.press("Enter")
+    else:
+        notify("Chrome didn't fill in your BofA password - sign in in the Chrome window; the pull continues.")
     told, deadline = False, time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
         try:
@@ -196,7 +212,7 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
 def main(dry_run: bool = False) -> None:
     from playwright.sync_api import sync_playwright
 
-    user, password = keychain_login()
+    login = keychain_login()
     base = paths.data_dir() / "bank_fetch"
     profile, out = base / "chrome-profile" / "bofa", base / "downloads" / "bofa"
     for d in (profile, out):
@@ -208,7 +224,7 @@ def main(dry_run: bool = False) -> None:
                                                     accept_downloads=True, viewport=None)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
-            if not sign_in(page, user, password):
+            if not sign_in(page, login):
                 notify("Couldn't sign in to BofA within 10 minutes - nothing downloaded.")
                 return
             new = download_new(page, out, seen)

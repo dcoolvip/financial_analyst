@@ -1745,17 +1745,19 @@ def bofa_status() -> None:
 
 def render_bofa_pull() -> None:
     user = bank_pull.saved_user()
-    st.caption("Signs in to BofA in a Chrome window on this Mac, downloads statements it hasn't seen, checks each "
-               "against its printed totals and imports it - balance plus any transactions not already here.")
+    st.caption("Signs in to BofA in a Chrome window on this Mac - with the password Chrome saved for BofA - "
+               "downloads statements it hasn't seen, checks each against its printed totals and imports it: balance "
+               "plus any transactions not already here.")
     if user:
         c1, c2 = st.columns([3, 1])
         c1.markdown(f"Login saved in your Mac's Keychain (user ID {user[:2]}•••).")
         if c2.button("Remove login"):
             bank_pull.forget_login()
             st.rerun()
-    if not user or st.toggle("Change the saved login", key="bofa_change"):
+    if st.toggle("Change the saved login" if user else "Chrome doesn't remember my BofA password", key="bofa_change"):
         with st.form("bofa_login", border=False):
-            st.caption("Saved only in your Mac's Keychain - not in the dashboard's files or the code.")
+            st.caption("Only needed if Chrome doesn't fill in your BofA password. Saved only in your Mac's Keychain - "
+                       "not in the dashboard's files or the code.")
             k1, k2 = st.columns(2)
             uid = k1.text_input("BofA user ID", value=user or "")
             pw = k2.text_input("BofA password", type="password")
@@ -1767,10 +1769,10 @@ def render_bofa_pull() -> None:
                 st.error("Enter both the user ID and the password.")
     busy = bank_pull.running()
     b1, b2 = st.columns(2)
-    if b1.button("▶️ Pull now", type="primary", disabled=not user or busy):
+    if b1.button("▶️ Pull now", type="primary", disabled=busy):
         bank_pull.start()
         st.rerun()
-    if b2.button("🧪 Test run (imports into a copy)", disabled=not user or busy,
+    if b2.button("🧪 Test run (imports into a copy)", disabled=busy,
                  help="Everything a real pull does, but the import goes into a throwaway copy of your data."):
         bank_pull.start(dry_run=True)
         st.rerun()
@@ -1782,7 +1784,7 @@ def render_bofa_pull() -> None:
     elif not busy and (out := bank_pull.output().strip()):
         st.caption("Last pull didn't finish: " + out.splitlines()[-1][:200])
     on = st.toggle(f"Pull automatically on the {bank_pull.SCHEDULE_DAY}th of each month, {bank_pull.SCHEDULE_HOUR} AM",
-                   value=bank_pull.scheduled(), disabled=not user)
+                   value=bank_pull.scheduled())
     if on != bank_pull.scheduled():
         try:
             st.session_state["flash"] = bank_pull.set_schedule(on)

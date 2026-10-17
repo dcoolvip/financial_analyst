@@ -50,7 +50,7 @@ def test_an_unclear_statement_is_left_for_you_not_guessed(conn, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
 
 
-def test_login_comes_from_the_keychain_item(monkeypatch):
+def test_login_comes_from_the_keychain_item_if_saved(monkeypatch):
     def fake(cmd, **kw):
         if cmd[-1] == "-w":
             return subprocess.CompletedProcess(cmd, 0, "s3cret pass\n", "")
@@ -59,13 +59,12 @@ def test_login_comes_from_the_keychain_item(monkeypatch):
     assert bf.keychain_login() == ("jane.sample", "s3cret pass")
     monkeypatch.setattr(bf.bank_pull.subprocess, "run",
                         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 44, "", "not found"))
-    with pytest.raises(SystemExit, match="save it in the dashboard"):
-        bf.keychain_login()
+    assert bf.keychain_login() is None                                     # optional: Chrome may fill it in
 
 
 class FakeBox:
-    def __init__(self, value=""):
-        self.value, self.pressed = value, []
+    def __init__(self, value="", autofilled=False):
+        self.value, self.autofilled, self.pressed, self.clicked = value, autofilled, [], False
 
     def count(self): return 1
     @property
@@ -73,6 +72,8 @@ class FakeBox:
     def input_value(self): return self.value
     def fill(self, v): self.value = v
     def press(self, key): self.pressed.append(key)
+    def click(self): self.clicked = True
+    def evaluate(self, js): return self.autofilled
 
 
 class Nothing:
@@ -84,8 +85,8 @@ class Nothing:
 
 class FakeSignInPage:
     """BofA's sign-in page: a hidden copy of the user ID box plus the visible one, the user ID already saved."""
-    def __init__(self):
-        self.uid, self.pwd, self.signed_in, self.url = FakeBox("*****1234"), FakeBox(), False, None
+    def __init__(self, autofilled=False):
+        self.uid, self.pwd, self.signed_in, self.url = FakeBox("*****1234"), FakeBox(autofilled=autofilled), False, None
 
     def goto(self, url): self.url = url
     def locator(self, sel):
@@ -103,9 +104,24 @@ class FakeSignInPage:
     def eval_on_selector_all(self, sel, js): return []
 
 
-def test_sign_in_uses_the_visible_boxes_keeps_a_saved_user_id_and_presses_enter():
-    page = FakeSignInPage()
-    assert bf.sign_in(page, "jane.sample", "s3cret") is True
+def test_chromes_saved_password_is_used_as_is_click_then_enter():
+    page = FakeSignInPage(autofilled=True)
+    assert bf.sign_in(page, None) is True                                 # no Keychain login needed
     assert page.url == bf.SIGN_IN
+    assert page.pwd.value == "" and page.pwd.clicked and page.pwd.pressed == ["Enter"]   # never typed over
+
+
+def test_without_chrome_autofill_the_keychain_login_is_typed_keeping_a_saved_user_id():
+    page = FakeSignInPage(autofilled=False)
+    assert bf.sign_in(page, ("jane.sample", "s3cret")) is True
     assert page.uid.value == "*****1234"                                 # saved user ID left alone
     assert page.pwd.value == "s3cret" and page.pwd.pressed == ["Enter"]
+
+
+def test_with_neither_it_asks_you_to_sign_in_in_the_window(monkeypatch):
+    told = []
+    monkeypatch.setattr(bf, "notify", told.append)
+    monkeypatch.setattr(bf, "WAIT_FOR_SIGN_IN_S", 0)
+    page = FakeSignInPage(autofilled=False)
+    assert bf.sign_in(page, None) is False and page.pwd.pressed == []
+    assert any("sign in in the Chrome window" in t for t in told)
