@@ -50,72 +50,27 @@ def test_an_unclear_statement_is_left_for_you_not_guessed(conn, tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
 
 
-def test_login_comes_from_the_keychain_item_if_saved(monkeypatch):
-    def fake(cmd, **kw):
-        if cmd[-1] == "-w":
-            return subprocess.CompletedProcess(cmd, 0, "s3cret pass\n", "")
-        return subprocess.CompletedProcess(cmd, 0, 'keychain: "x"\n    "acct"<blob>="jane.sample"\n', "")
-    monkeypatch.setattr(bf.bank_pull.subprocess, "run", fake)
-    assert bf.keychain_login() == ("jane.sample", "s3cret pass")
-    monkeypatch.setattr(bf.bank_pull.subprocess, "run",
-                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 44, "", "not found"))
-    assert bf.keychain_login() is None                                     # optional: Chrome may fill it in
-
-
 class FakeBox:
-    """Like Chrome: a saved password is filled in, but the page only gets it once the box is clicked."""
-    def __init__(self, value="", autofilled=False, gone=False):
-        self.value, self.autofilled, self.pressed, self.clicked, self.gone = value, autofilled, [], False, gone
-        self.page = None
-
-    def _check(self):
-        if self.gone:
-            raise TimeoutError("the box is gone - the page moved on")
-    def count(self): return 1
+    def __init__(self): self.clicked, self.pressed = False, []
     @property
     def first(self): return self
-    def input_value(self, timeout=None):
-        self._check()
-        return "(saved)" if self.autofilled and self.clicked else self.value
-    def fill(self, v, timeout=None): self._check(); self.value = v
-    def press(self, key, timeout=None): self._check(); self.pressed.append(key)
-    def click(self, timeout=None): self._check(); self.clicked = True
-    def evaluate(self, js): return False                              # :autofill didn't match (as on BofA)
-    def locator(self, sel): return Nothing()                            # no enclosing <form> in this fake
+    def click(self): self.clicked = True
+    def press(self, key): self.pressed.append(key)
 
 
-class Nothing:
-    def count(self): return 0
-    @property
-    def first(self): return self
-    def is_visible(self): return False
-    def evaluate_all(self, js): return []
-
-
-class FakeFrame:
-    def __init__(self, boxes): self.boxes = boxes
-    def locator(self, sel):
-        if sel == "input[type=password] >> visible=true": return self.boxes.get("pwd", Nothing())
-        if sel.startswith("input[type=text] >> visible=true"): return self.boxes.get("uid", Nothing())
-        return Nothing()
-
-
-class FakeSignInPage:
-    """BofA's home page: the sign-in boxes sit in an embedded frame, the user ID already saved."""
-    def __init__(self, autofilled=False):
-        self.uid, self.pwd = FakeBox("*****1234"), FakeBox(autofilled=autofilled)
-        self.pwd.page = self
-        self.frames = [FakeFrame({}), FakeFrame({"uid": self.uid, "pwd": self.pwd})]   # not in the main frame
-        self.signed_in, self.url = False, None
-
+class FakeBofA:
+    """Home page with a Log In link; Chrome has filled the sign-in boxes; Enter signs you in."""
+    def __init__(self): self.url, self.login, self.pwd, self.signed_in = None, FakeBox(), FakeBox(), False
     def goto(self, url): self.url = url
     def get_by_role(self, role, name=None):
-        page = self
-        class LogIn:
-            first = property(lambda s: s)
+        login = self.login
+        class L:
+            first = property(lambda s: login)
             def or_(s, other): return s
-            def click(s, timeout=None): page.url = bf.SIGN_IN                # "Log In" opens the sign-in page
-        return LogIn()
+        return L()
+    def locator(self, sel):
+        assert sel == "input[type=password] >> visible=true"
+        return self.pwd
     def get_by_text(self, pattern):
         page = self
         class T:
@@ -123,44 +78,13 @@ class FakeSignInPage:
             def is_visible(s): return page.signed_in and bool(pattern.search("Log Out"))
         return T()
     def wait_for_timeout(self, ms):
-        if self.pwd.pressed: self.signed_in = True                       # Enter was pressed: BofA signs in
+        if self.pwd.pressed: self.signed_in = True
 
 
-def test_chromes_saved_password_is_used_as_is_click_then_enter():
-    page = FakeSignInPage(autofilled=True)
-    assert bf.sign_in(page, None) is True                                 # no Keychain login needed
-    assert page.url in (bf.HOME, bf.SIGN_IN)
-    assert page.pwd.value == "" and page.pwd.clicked and page.pwd.pressed == ["Enter"]   # never typed over
-
-
-def test_if_you_sign_in_yourself_mid_way_the_pull_carries_on(monkeypatch):
-    """Regression: you clicked Log In while the script was typing the Keychain password; the box vanished, the
-    script waited 30 s on it and crashed - never reaching Statements."""
-    page = FakeSignInPage(autofilled=False)
-    page.pwd.gone = True                                                 # BofA already moved to your accounts
-    waits = []
-    def wait(ms):
-        waits.append(ms)
-        page.signed_in = len(waits) > 3                                  # ...and shows "Log Out" shortly after
-    page.wait_for_timeout = wait
-    assert bf.sign_in(page, ("jane.sample", "s3cret")) is True
-
-
-def test_without_chrome_autofill_the_keychain_login_is_typed_keeping_a_saved_user_id():
-    page = FakeSignInPage(autofilled=False)
-    assert bf.sign_in(page, ("jane.sample", "s3cret")) is True
-    assert page.uid.value == "*****1234"                                 # saved user ID left alone
-    assert page.pwd.value == "s3cret" and page.pwd.pressed == ["Enter"]
-
-
-def test_with_neither_it_asks_you_to_sign_in_in_the_window(monkeypatch):
-    told = []
-    monkeypatch.setattr(bf, "notify", told.append)
-    monkeypatch.setattr(bf, "WAIT_FOR_SIGN_IN_S", 0)
-    page = FakeSignInPage(autofilled=False)
-    assert bf.sign_in(page, None) is False and page.pwd.pressed == []
-    assert any("sign in in the Chrome window" in t for t in told)
-
+def test_sign_in_is_log_in_then_enter_on_chromes_saved_password():
+    page = FakeBofA()
+    assert bf.sign_in(page) is True
+    assert page.url == bf.HOME and page.login.clicked and page.pwd.clicked and page.pwd.pressed == ["Enter"]
 
 
 def test_a_download_must_be_the_statement_on_the_tile():

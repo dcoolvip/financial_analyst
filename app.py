@@ -1744,29 +1744,9 @@ def bofa_status() -> None:
 
 
 def render_bofa_pull() -> None:
-    user = bank_pull.saved_user()
-    st.caption("Signs in to BofA in a Chrome window on this Mac - with the password Chrome saved for BofA - "
-               "downloads statements it hasn't seen, checks each against its printed totals and imports it: balance "
-               "plus any transactions not already here.")
-    if user:
-        c1, c2 = st.columns([3, 1])
-        c1.markdown(f"Login saved in your Mac's Keychain (user ID {user[:2]}•••).")
-        if c2.button("Remove login"):
-            bank_pull.forget_login()
-            st.rerun()
-    if st.toggle("Change the saved login" if user else "Chrome doesn't remember my BofA password", key="bofa_change"):
-        with st.form("bofa_login", border=False):
-            st.caption("Only needed if Chrome doesn't fill in your BofA password. Saved only in your Mac's Keychain - "
-                       "not in the dashboard's files or the code.")
-            k1, k2 = st.columns(2)
-            uid = k1.text_input("BofA user ID", value=user or "")
-            pw = k2.text_input("BofA password", type="password")
-            if st.form_submit_button("Save to Keychain"):
-                if uid.strip() and pw:
-                    bank_pull.save_login(uid, pw)
-                    st.session_state.pop("bofa_change", None)
-                    st.rerun()
-                st.error("Enter both the user ID and the password.")
+    st.caption("Signs in to BofA in a Chrome window on this Mac with the password Chrome saved, downloads "
+               "statements it hasn't seen, checks each against its printed totals and imports it: balance plus any "
+               "transactions not already here.")
     busy = bank_pull.running()
     b1, b2 = st.columns(2)
     if b1.button("▶️ Pull now", type="primary", disabled=busy):

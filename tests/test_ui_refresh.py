@@ -30,7 +30,6 @@ class Upload:
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("FINANCE_NO_AI", "1")
-    monkeypatch.setenv("FINANCE_BOFA_KEYCHAIN", f"FinancialAnalyst test {tmp_path.name}")   # never the real login
     uploads = {"files": [], "keys": []}
 
     def fake_uploader(*_a, key=None, **_k):
@@ -818,31 +817,12 @@ def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):
 
 def test_bofa_pull_from_the_dashboard(env, monkeypatch, tmp_path):
     from finance import bank_pull
-    keychain, started, schedule = {}, [], {"on": False}
-
-    def fake_run(cmd, **kw):
-        import subprocess
-        if cmd[1] == "add-generic-password":
-            assert cmd[cmd.index("-s") + 1].startswith("FinancialAnalyst test")     # the test's own Keychain name
-            keychain.update(user=cmd[cmd.index("-a") + 1], pw=cmd[cmd.index("-w") + 1])
-            return subprocess.CompletedProcess(cmd, 0, "", "")
-        if cmd[1] == "find-generic-password" and keychain:
-            out = keychain["pw"] + "\n" if cmd[-1] == "-w" else f'    "acct"<blob>="{keychain["user"]}"\n'
-            return subprocess.CompletedProcess(cmd, 0, out, "")
-        return subprocess.CompletedProcess(cmd, 44, "", "not found")
-    monkeypatch.setattr(bank_pull.subprocess, "run", fake_run)
+    started, schedule = [], {"on": False}
     monkeypatch.setattr(bank_pull, "start", lambda dry_run=False: started.append(dry_run))
     monkeypatch.setattr(bank_pull, "scheduled", lambda: schedule["on"])
     monkeypatch.setattr(bank_pull, "set_schedule", lambda on: schedule.update(on=on) or "Scheduled.")
     at = app()
-    assert not [b for b in at.button if b.label == "▶️ Pull now"][0].disabled        # Chrome's saved password is enough
-    assert not [t for t in at.text_input if t.label == "BofA user ID"]               # the login form is optional
-    [t for t in at.toggle if t.label == "Chrome doesn't remember my BofA password"][0].set_value(True).run()
-    [t for t in at.text_input if t.label == "BofA user ID"][0].input("jane.sample")
-    [t for t in at.text_input if t.label == "BofA password"][0].input("s3cret")
-    [b for b in at.button if b.label == "Save to Keychain"][0].click().run()
-    assert keychain == {"user": "jane.sample", "pw": "s3cret"}
-    assert any("user ID ja•••" in m.value for m in at.markdown) and not any("s3cret" in m.value for m in at.markdown)
+    assert not [t for t in at.text_input if "BofA" in t.label]                       # no login to type in
     click(at, "🧪 Test run (imports into a copy)")
     click(at, "▶️ Pull now")
     assert started == [True, False]

@@ -3,9 +3,8 @@
     ~/.venvs/financial-analyst/bin/python tools/bofa_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/bofa_fetch.py --dry-run  # download + check, import into a copy
 
-Signs in with the password Chrome saved for BofA in this profile (it just presses Enter once Chrome fills the
-boxes). If Chrome doesn't, it uses a login saved in the macOS Keychain (optional, "FinancialAnalyst BofA"),
-else asks you to sign in in the window. If BofA asks for a text code, a notification asks you to finish there. Then it opens Statements & Documents, downloads every
+Signs in with the password Chrome saved for BofA in this profile: clicks Log In, then Enter. If BofA asks for a
+text code, type it in the window. Then it opens Statements & Documents, downloads every
 statement it hasn't fetched before, checks each one against its own printed totals, and imports it: balance,
 plus transactions that aren't already in the dashboard. A notification says what happened.
 
@@ -26,16 +25,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from finance import bank_pull, checkpoints, db, paths  # noqa: E402
+from finance import checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
-HOME = "https://www.bankofamerica.com/"     # no sign-in boxes here: its "Log In" opens the sign-in page
-SIGN_IN = ("https://secure.bankofamerica.com/myaccounts/signin/signIn.go?returnSiteIndicator=GAIMW&langPref=en-us"
-           "&request_locale=en-us&capturemode=N&newuser=false&bcIP=F")   # where "Log In" leads (as you saw it)
+HOME = "https://www.bankofamerica.com/"
 STATEMENTS = "https://secure.bankofamerica.com/statements-documents/home/"
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
-NEEDS_YOU = re.compile(r"(verification code|one-time code|authorization code|text message|verify (it'?s )?you"
-                       r"|security code|we sent)", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 MAX_PER_RUN = 24
 INSTITUTION = "Bank of America"
@@ -45,11 +40,6 @@ def notify(text: str) -> None:
     print(text, flush=True)
     subprocess.run(["osascript", "-e", f"display notification {json.dumps(text)} with title \"Bank of America pull\""],
                    check=False, capture_output=True)
-
-
-def keychain_login() -> tuple[str, str] | None:
-    """(user ID, password) from the Keychain, if saved there - only needed when Chrome doesn't fill them in."""
-    return bank_pull.keychain_login()
 
 
 # --- which statement tiles are new ------------------------------------------------------------------------------
@@ -117,106 +107,20 @@ def import_statement(conn, pdf: Path) -> str:
 
 # --- the browser part -------------------------------------------------------------------------------------------
 
-AUTOFILL_WAIT_MS = 2500
-
-
-def _visible_password(page, timeout_s: float = 30):
-    """Whatever password box is on screen - in the page or any frame inside it (no guessing at BofA's names)."""
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        for frame in page.frames:
-            try:
-                box = frame.locator("input[type=password] >> visible=true").first
-                if box.count():
-                    return frame, box
-            except Exception:
-                pass
-        page.wait_for_timeout(500)
-    return None, None
-
-
-def _user_box(frame, pwd):
-    """The visible text box in the same form as the password box (the user ID)."""
-    form = pwd.locator("xpath=ancestor::form[1]")
-    scope = form if form.count() else frame
-    box = scope.locator("input[type=text] >> visible=true, input[type=email] >> visible=true").first
-    return box if box.count() else None
-
-
-def _fields_seen(page) -> str:
-    """Every input box in the page and its frames (frame, id, name, type, shown or not) - never their contents."""
-    seen = []
-    for i, frame in enumerate(page.frames):
-        try:
-            seen += [f"f{i}:" + x for x in frame.locator("input").evaluate_all("""els => els.slice(0, 30).map(e =>
-                `${e.id || '-'}/${e.name || '-'}/${e.type}/${e.offsetParent ? 'shown' : 'hidden'}`)""")]
-        except Exception:
-            pass
-    return "; ".join(seen)
-
-
-def _autofilled(box) -> bool:
-    """Chrome filled this box from its saved passwords (checked without reading what's in it)."""
-    try:
-        return bool(box.evaluate("e => e.matches(':-webkit-autofill') || e.matches(':autofill')"))
-    except Exception:
-        return False
-
-
-QUICK_MS = 5000
-
-
-def _submit(frame, pwd, login) -> None:
-    """Chrome's saved password first: click into the box (that's when Chrome hands it to the page) and press
-    Enter if it's filled. Else type the Keychain login. Else ask you. Every step gives up quickly, never stalls."""
-    pwd.click(timeout=QUICK_MS)
-    pwd.page.wait_for_timeout(700)
-    if (pwd.input_value(timeout=QUICK_MS) or "") or _autofilled(pwd):
-        pwd.press("Enter", timeout=QUICK_MS)
-    elif login:
-        uid = _user_box(frame, pwd)
-        if uid is not None and not (uid.input_value(timeout=QUICK_MS) or "").strip():   # "Save User ID" may fill it
-            uid.fill(login[0], timeout=QUICK_MS)
-        pwd.fill(login[1], timeout=QUICK_MS)
-        pwd.press("Enter", timeout=QUICK_MS)
-    else:
-        notify("Chrome didn't fill in your BofA password - sign in in the Chrome window; the pull continues.")
-
-
-def sign_in(page, login: tuple[str, str] | None) -> bool:
-    """Sign in on BofA's home page: with Chrome's saved password if it fills the boxes (click + Enter), else the
-    Keychain login, else ask you to sign in in the window."""
+def sign_in(page) -> bool:
+    """BofA home -> Log In -> click the password box Chrome has filled in -> Enter. Then wait until you're signed
+    in (type the text code in the window if BofA asks for one)."""
     page.goto(HOME)
-    if page.get_by_text(SIGNED_IN).first.is_visible():           # still signed in from before
-        return True
-    try:                                                         # BofA's "Log In" opens its sign-in page
-        page.get_by_role("link", name=re.compile(r"^\s*log ?in\s*$", re.I)).or_(
-            page.get_by_role("button", name=re.compile(r"^\s*log ?in\s*$", re.I))).first.click(timeout=10_000)
-    except Exception:
-        page.goto(SIGN_IN)
-    frame, pwd = _visible_password(page, timeout_s=15)
-    if not pwd:                                                  # the link moved: go to the sign-in page itself
-        page.goto(SIGN_IN)
-        frame, pwd = _visible_password(page, timeout_s=15)
-    page.wait_for_timeout(AUTOFILL_WAIT_MS)                      # give Chrome a moment to fill them in
-    if not pwd:
-        print(f"No visible password box at {page.url.split('?')[0]}. Boxes seen: {_fields_seen(page)}", flush=True)
-        notify("Couldn't find BofA's sign-in boxes - sign in yourself in the Chrome window; the pull continues.")
-    else:
-        try:
-            _submit(frame, pwd, login)
-        except Exception as e:          # you signed in yourself, or the page moved on: just wait for "signed in"
-            print(f"Sign-in step didn't finish ({e.__class__.__name__}) - waiting for you to be signed in.", flush=True)
-    told, deadline = False, time.time() + WAIT_FOR_SIGN_IN_S
+    page.get_by_role("link", name=re.compile(r"^\s*log ?in\s*$", re.I)).or_(
+        page.get_by_role("button", name=re.compile(r"^\s*log ?in\s*$", re.I))).first.click()
+    pwd = page.locator("input[type=password] >> visible=true").first
+    pwd.click()
+    page.wait_for_timeout(1000)
+    pwd.press("Enter")
+    deadline = time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
-        try:
-            if page.get_by_text(SIGNED_IN).first.is_visible():
-                return True
-            if not told and page.get_by_text(NEEDS_YOU).first.is_visible():
-                notify("BofA wants a code - finish signing in in the Chrome window.")
-                told = True
-        except Exception:
-            pass
+        if page.get_by_text(SIGNED_IN).first.is_visible():
+            return True
         page.wait_for_timeout(2000)
     return False
 
@@ -294,7 +198,6 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path, dict]
 def main(dry_run: bool = False) -> None:
     from playwright.sync_api import sync_playwright
 
-    login = keychain_login()
     base = paths.data_dir() / "bank_fetch"
     profile, out = base / "chrome-profile" / "bofa", base / "downloads" / "bofa"
     for d in (profile, out):
@@ -306,7 +209,7 @@ def main(dry_run: bool = False) -> None:
                                                     accept_downloads=True, viewport=None)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
-            if not sign_in(page, login):
+            if not sign_in(page):
                 notify("Couldn't sign in to BofA within 10 minutes - nothing downloaded.")
                 return
             new = download_new(page, out, seen)
