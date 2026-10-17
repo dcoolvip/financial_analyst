@@ -136,11 +136,13 @@ def _institution(text: str) -> str:
     m = re.search(r"\b(?:The\s+)?((?:[A-Z][\w&.'-]*|\d+)(?:\s+(?:[A-Z][\w&.'-]*|\d+)){0,4}\s+Credit Union)\b", text)
     if m:                                                    # e.g. "The Golden 1 Credit Union"
         return m.group(1)
-    for name in ("Robinhood", "Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi", "Capital One", "American Express",
-                 "Discover", "U.S. Bank", "Fidelity", "Schwab", "Vanguard", "Rocket Mortgage", "Mr. Cooper"):
-        if name.lower() in text.lower():
-            return name
-    return ""
+    # The issuer's name comes first (letterhead); other banks show up later, in transfers ("ROBINHOOD ...").
+    names = ("Robinhood", "Wealthfront", "E*TRADE", "Merrill", "Bank of America", "Chase", "Wells Fargo", "Citi",
+             "Capital One", "American Express", "Discover", "U.S. Bank", "Fidelity", "Schwab", "Vanguard",
+             "Rocket Mortgage", "Mr. Cooper")
+    low = text.lower()
+    found = [(low.find(n.lower()), i, n) for i, n in enumerate(names) if n.lower() in low]
+    return min(found)[2] if found else ""
 
 
 def _last4(text: str) -> str | None:

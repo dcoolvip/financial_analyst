@@ -456,3 +456,12 @@ def test_fidelity_401k_statement():
     pf = portfolio.summarize(pd.DataFrame(s.holdings).assign(account="401k"))
     assert pf["by_class"]["Stocks"] == pytest.approx(40_000 * 0.73 + 120_000 * 0.82)   # split by the fund's mix
     assert not pf["concentrated"]                                                   # a fund isn't one company
+
+
+
+def test_a_transfer_to_another_bank_doesnt_change_whose_statement_it_is():
+    """Regression: a BofA savings statement with one 'ROBINHOOD' transfer line was read as a Robinhood statement."""
+    from finance.importers.statements import _institution
+    text = ("Bank of America, N.A.  P.O. Box 15284  Your Advantage Savings\n" + "filler\n" * 50
+            + "10/01 Online Banking transfer to ROBINHOOD SECURITIES -500.00\n")
+    assert _institution(text) == "Bank of America"
