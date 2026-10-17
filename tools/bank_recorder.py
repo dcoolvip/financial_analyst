@@ -28,6 +28,7 @@ from finance import paths  # noqa: E402
 
 BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/",
          "amex": "https://www.americanexpress.com/"}
+PLAIN_CHROME = {"amex"}      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60
@@ -90,8 +91,11 @@ def main(bank: str, label: str = "statements") -> None:
             steps.append({"t": round(time.time(), 1), **_clean(step)})
 
     with sync_playwright() as pw:
+        plain = {"ignore_default_args": ["--enable-automation"],          # some banks (Amex) stall the sign-in of a
+                 "args": ["--disable-blink-features=AutomationControlled"]}  # browser that says it's script-driven
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None)
+                                                    accept_downloads=True, viewport=None,
+                                                    **(plain if bank in PLAIN_CHROME else {}))
         ctx.expose_binding("__record", record)
         ctx.add_init_script(RECORDER_JS)
 
