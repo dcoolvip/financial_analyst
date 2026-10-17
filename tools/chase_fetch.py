@@ -3,7 +3,8 @@
     ~/.venvs/financial-analyst/bin/python tools/chase_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/chase_fetch.py --dry-run  # download + check, import into a copy
 
-Signs in with the password Chrome saved for Chase in this profile (click into the password box, Enter); if Chase
+Signs in with the password Chrome saved for Chase in this profile (click the password box, pick the saved password
+from Chrome's drop-down, Enter); if Chase
 asks for a code, type it in the window. Opens Statements & documents and downloads every statement from the last
 45 days it hasn't fetched before - bank accounts via "save document" -> Save as PDF -> Submit, cards via
 "Saves document" -> Submit (the route recorded in tools/bank_recorder.py). Chase names each file after the
@@ -119,14 +120,18 @@ def _password_box(page, timeout_s: float = 30):
 
 
 def sign_in(page) -> bool:
-    """Open Chase -> click the password box Chrome filled in -> Enter. Then wait until you're signed in."""
+    """Open Chase -> click the password box -> pick Chrome's saved password from its drop-down -> Enter. Then wait
+    until you're signed in."""
     page.goto(DASHBOARD)
     pwd = _password_box(page)
     if pwd is not None:
         try:
-            pwd.click()
+            pwd.click()                   # Chrome shows the saved Chase password in a drop-down here...
             page.wait_for_timeout(1000)
-            pwd.press("Enter")
+            page.keyboard.press("ArrowDown")      # ...highlight it,
+            page.keyboard.press("Enter")          # choose it,
+            page.wait_for_timeout(1000)
+            pwd.press("Enter")                    # and sign in
         except Exception:
             pass                          # you signed in yourself / the page moved on: just wait below
     deadline = time.time() + WAIT_FOR_SIGN_IN_S
