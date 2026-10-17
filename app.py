@@ -1728,8 +1728,9 @@ def browser_row(bank: str) -> None:
     mine = list(accts.loc[(accts["institution"] == institution) & accts["type"].isin(STATEMENT_TYPES), "name"])
     last = bank_pull.last_results(real_only=True, bank=bank)
     when = f"Updated {datetime.strptime(last[0], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
-    nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" if bank_pull.scheduled()
-           else "no monthly update scheduled")
+    before = [BROWSER_BANKS[b][0] for b in list(BROWSER_BANKS)[:list(BROWSER_BANKS).index(bank)] if bank_pull.set_up(b)]
+    nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" + (f", after {before[-1]}" if before else "")
+           if bank_pull.scheduled() else "no monthly update scheduled")      # one bank at a time, in this order
     problems = [l for l in (last[1] if last else []) if any(w in l for w in PROBLEM)]
     status = f"{when} · {nxt}" + (f"  \n⚠️ {problems[0]}" if problems else "")
     update, gear = connection_row("🏦", shown, mine, status, bank)

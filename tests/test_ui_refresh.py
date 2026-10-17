@@ -876,3 +876,15 @@ def test_chase_connects_with_a_test_run_then_gets_its_own_row(env, monkeypatch, 
     assert "Chase Checking" in row and "Chase Sapphire Reserve" in row and "Updated Oct 28" in row
     [b for b in at.button if b.key == "update_chase"][0].click().run()
     assert started[-1] == ("chase", False)
+
+
+def test_with_the_schedule_on_chase_says_it_runs_after_bank_of_america(env, monkeypatch, tmp_path):
+    from finance import bank_pull
+    monkeypatch.setattr(bank_pull, "scheduled", lambda: True)
+    monkeypatch.setattr(bank_pull, "schedule_is_current", lambda: True)
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    for bank in ("bofa", "chase"):
+        (tmp_path / "bank_fetch" / f"{bank}_runs.log").write_text("--- 2026-10-17 12:00\n")
+    at = app()
+    rows = {m.value.split("**")[1]: m.value for m in at.markdown if m.value.startswith("🏦 **")}
+    assert ", after Bank of America" in rows["Chase"] and "after" not in rows["Bank of America"]
