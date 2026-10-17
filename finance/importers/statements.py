@@ -44,6 +44,10 @@ class Statement:
     importable: bool = True          # False for documents with nothing to save (e.g. trade confirmations)
     name_hint: str = ""              # e.g. the property address on a mortgage, to name a new account
     tax_sources: dict = field(default_factory=dict)   # retirement plans: balance by tax type (pre-tax, Roth, ...)
+    # Bank statements that list their transactions (Bank of America checking/savings):
+    transactions: list[dict] = field(default_factory=list)   # date, description, amount (money in > 0)
+    period: tuple[date, date] | None = None                  # what the statement covers
+    totals_ok: bool | None = None    # every block added up to the statement's own printed total
 
     @property
     def extras(self) -> str:
@@ -56,6 +60,9 @@ class Statement:
             parts.append(f"{len(self.holdings)} positions")
         if self.grants:
             parts.append(f"{len(self.grants)} unvested grants")
+        if self.transactions:
+            parts.append(f"{len(self.transactions)} transactions"
+                         + (" (all totals check out)" if self.totals_ok else " (totals don't match - not imported)"))
         if self.tax_sources:
             roth = self.tax_sources.get("roth", 0)
             pre = sum(v for k, v in self.tax_sources.items() if k != "roth")
@@ -234,6 +241,87 @@ def _parse_deposit(s: Statement, t: str) -> None:
     if s.as_of is None:                                          # "Aug 1, 2026 - Aug 31, 2026"
         s.as_of = _period_end(t)
     _opening_balance(s, t)
+    if s.institution == "Bank of America":
+        _bofa_transactions(s, t)
+
+
+# Bank of America lists transactions in blocks, each closed by its own "Total ..." line, e.g.
+#   Deposits and other additions / Date Description Amount / 08/24/26 MSPBNA DES:ACH ... (wraps) / 1,234.56
+#   Total deposits and other additions $12,345.67
+# Amounts carry their sign (subtractions are negative). Checks: "08/31/26 220 -50.00" (date, check #, amount).
+_BOFA_BLOCK = re.compile(r"^(deposits and other additions|atm and debit card subtractions|other subtractions|"
+                         r"withdrawals and other subtractions|checks|service fees)(\s*-\s*continued)?$", re.I)
+_BOFA_SKIP = re.compile(r"^(date description amount|date check # amount|continued on the next page|page \d+ of \d+)$"
+                        r"|!\s+account #", re.I)
+_TOKEN_MONEY = re.compile(r"^-?\$?[\d,]+\.\d{2}$")
+_BOFA_ITEM = re.compile(r"^(\d{2}/\d{2}/\d{2})\s+(.*)$")
+_BOFA_CHECK = re.compile(r"(\d{2}/\d{2}/\d{2})\s+(\d+)\*?\s+(-?[\d,]+\.\d{2})")
+
+
+def _bofa_transactions(s: Statement, t: str) -> None:
+    """Every transaction on a BofA deposit statement, checked block by block against the printed totals - so a
+    line the reader missed can never go unnoticed (the statement is then not imported, and says why)."""
+    m = re.search(rf"for {_DATE_LONG} to {_DATE_LONG}", t)
+    if m:
+        s.period = (_parse_date(m.group(1)), _parse_date(m.group(2)))
+    items, block, block_sum, problems, cur = [], None, 0.0, [], None
+
+    def close_item():
+        nonlocal cur, block_sum
+        if cur:
+            if cur["amount"] is None:
+                problems.append(f"no amount found for a {block or 'transaction'} line dated {cur['date']:%b %-d}")
+            else:
+                items.append(cur)
+                block_sum += cur["amount"]
+            cur = None
+
+    for raw in t.splitlines():
+        line = " ".join(raw.split())
+        if not line or _BOFA_SKIP.search(line):
+            continue
+        low = line.lower()
+        if (h := _BOFA_BLOCK.match(low)):
+            close_item()
+            if not h.group(2) or block is None:          # a new block (a "- continued" header keeps the same one)
+                block, block_sum = h.group(1), 0.0
+            continue
+        if block is None:
+            continue
+        if low.startswith("total "):
+            close_item()
+            toks = line.split()
+            if _TOKEN_MONEY.match(toks[-1]):                 # "Total # of checks 1" isn't a money total
+                printed = _money(toks[-1])
+                if abs(printed - block_sum) > 0.005:
+                    problems.append(f"{block}: read ${block_sum:,.2f} but the statement's total is ${printed:,.2f}")
+                block, block_sum = None, 0.0
+            continue
+        if block == "checks":
+            for d, num, amt in _BOFA_CHECK.findall(line):
+                items.append({"date": datetime.strptime(d, "%m/%d/%y").date(), "description": f"Check {num}",
+                              "amount": _money(amt)})
+                block_sum += _money(amt)
+            continue
+        if (it := _BOFA_ITEM.match(line)):
+            close_item()
+            cur = {"date": datetime.strptime(it.group(1), "%m/%d/%y").date(), "parts": [], "amount": None}
+            rest = it.group(2)
+        elif cur and cur["amount"] is None:
+            rest = line
+        else:
+            continue
+        toks = rest.split()
+        if toks and _TOKEN_MONEY.match(toks[-1]):
+            cur["amount"] = _money(toks[-1])
+            toks = toks[:-1]
+        cur["parts"] += toks
+    close_item()
+    s.transactions = [{"date": i["date"], "amount": i["amount"],
+                       "description": i.get("description") or " ".join(i["parts"])} for i in items]
+    s.totals_ok = bool(s.transactions) and not problems
+    if problems:
+        s.notes.append("Transactions not imported - " + "; ".join(problems[:3]))
 
 
 def _parse_card(s: Statement, t: str) -> None:

@@ -83,6 +83,35 @@ def apply_statement(conn, s: "statements.Statement", account_id: int, filename: 
     db.update_account_details(conn, account_id, last4=s.last4,
                               rate=s.rate if latest and s.kind in ("loan", "credit_card") else None,
                               payment=s.payment if latest and s.kind == "loan" else None)
+    if s.transactions:
+        if not s.totals_ok:
+            return {"error": "transactions not imported: they don't add up to the statement's own totals"}
+        return merge_statement_transactions(conn, account_id, s, filename)
+    return {}
 
 
-__all__ = ["apply_statement", "statements", "suggest_csv_account", "last4_from_filename", "KIND_ACCOUNT_TYPES", "ParsedFile", "UnrecognizedFile", "apply", "parse_file"]
+def merge_statement_transactions(conn, account_id: int, s: "statements.Statement", filename: str) -> dict:
+    """Add a statement's transactions without doubling any already there (from a CSV or an earlier import):
+    within the statement's period, each (date, amount) on the statement is matched to one already in the
+    dashboard; only the unmatched ones are added. Re-importing the same statement adds nothing."""
+    from collections import Counter
+    import pandas as pd
+    lo, hi = s.period or (min(t["date"] for t in s.transactions), max(t["date"] for t in s.transactions))
+    have = Counter((d, round(a, 2)) for d, a in conn.execute(
+        "SELECT date, amount FROM transactions WHERE account_id = ? AND date BETWEEN ? AND ?",
+        (account_id, lo.isoformat(), hi.isoformat())))
+    nth, new = Counter(), []
+    for t in s.transactions:
+        key = (t["date"].isoformat(), round(t["amount"], 2))
+        if have[key] > 0:
+            have[key] -= 1
+            continue
+        nth[key] += 1
+        new.append({"date": t["date"], "description": t["description"], "amount": t["amount"],
+                    "fingerprint": f"stmt|{key[0]}|{key[1]:.2f}|{nth[key]}"})
+    added = db.insert_transactions(conn, account_id, pd.DataFrame(new), filename) if new else 0
+    return {"period": (lo, hi), "on_statement": len(s.transactions), "already_there": len(s.transactions) - len(new),
+            "added": added, "only_in_dashboard": sum(have.values())}
+
+
+__all__ = ["apply_statement", "merge_statement_transactions", "statements", "suggest_csv_account", "last4_from_filename", "KIND_ACCOUNT_TYPES", "ParsedFile", "UnrecognizedFile", "apply", "parse_file"]

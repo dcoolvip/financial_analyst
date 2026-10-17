@@ -1623,6 +1623,7 @@ def render_statement_review(pdf_files) -> None:
                 ids[r.row_id] = int(accts.loc[accts["name"] == r.account, "id"].iloc[0])
         chosen = chosen.assign(acct=chosen["row_id"].map(ids))
         newest = set(chosen.sort_values("date").groupby("acct").tail(1)["row_id"])
+        notes = []
         for r in chosen.itertuples():
             orig = parsed[r.row_id][1]
             s = statements.Statement(
@@ -1630,9 +1631,15 @@ def render_statement_review(pdf_files) -> None:
                 as_of=pd.Timestamp(r.date).date(), balance=float(r.balance),
                 rate=float(r.rate) / 100 if pd.notna(r.rate) else None,
                 payment=float(r.payment) if pd.notna(r.payment) else None,
-                history=orig.history, holdings=orig.holdings, grants=orig.grants, tax_sources=orig.tax_sources)
-            apply_statement(conn, s, ids[r.row_id], r.file, latest=r.row_id in newest)
-        st.session_state["flash"] = f"Saved {len(chosen)} statement(s)"
+                history=orig.history, holdings=orig.holdings, grants=orig.grants, tax_sources=orig.tax_sources,
+                transactions=orig.transactions, period=orig.period, totals_ok=orig.totals_ok)
+            res = apply_statement(conn, s, ids[r.row_id], r.file, latest=r.row_id in newest)
+            if res.get("on_statement"):
+                notes.append(f"{r.file}: {res['on_statement']} transactions, {res['already_there']} already there, "
+                             f"{res['added']} added")
+            elif res.get("error"):
+                notes.append(f"{r.file}: {res['error']}")
+        st.session_state["flash"] = f"Saved {len(chosen)} statement(s)" + ("  \n" + "  \n".join(notes) if notes else "")
         st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1   # empty the uploader
         st.rerun()
 

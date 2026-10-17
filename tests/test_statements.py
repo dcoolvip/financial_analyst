@@ -1,5 +1,6 @@
 from datetime import date
 
+import pandas as pd
 import pytest
 
 from finance.importers.statements import parse_pdf, parse_text
@@ -465,3 +466,110 @@ def test_a_transfer_to_another_bank_doesnt_change_whose_statement_it_is():
     text = ("Bank of America, N.A.  P.O. Box 15284  Your Advantage Savings\n" + "filler\n" * 50
             + "10/01 Online Banking transfer to ROBINHOOD SECURITIES -500.00\n")
     assert _institution(text) == "Bank of America"
+
+
+# --- Bank of America statement transactions (made-up statement text) --------------------------------------------
+
+BOFA_STMT = """Bank of America, N.A.
+Your Adv Plus Banking
+for August 22, 2026 to September 21, 2026
+Account number: 0000 1111 0522
+Beginning balance on August 22, 2026 $1,000.00
+Deposits and other additions 3,100.00
+Withdrawals and other subtractions -1,170.00
+Ending balance on September 21, 2026 $2,930.00
+Deposits and other additions
+Date Description Amount
+08/24/26 MSPBNA DES:ACH TRNSFR ID:00000000001 INDN:XXXXXX CO ID:0000000000
+PPD
+1,000.00
+08/29/26 APPLE INC. DES:PAYROLL ID:000000 INDN:Jane Sample CO ID:0000000000 PPD 2,099.50
+09/21/26 Interest Earned 0.50
+Total deposits and other additions $3,100.00
+Withdrawals and other subtractions
+ATM and debit card subtractions
+Date Description Amount
+09/02/26 PMNT SENT 0902 APPLE CASH SENT MONEY CA -100.00
+Total ATM and debit card subtractions -$100.00
+Other subtractions
+Date Description Amount
+08/31/26 VENMO DES:PAYMENT ID:0000000000000 INDN:JANE SAMPLE CO
+ID:0000000000 WEB
+-20.00
+continued on the next page
+JANE SAMPLE ! Account # 0000 1111 0522 ! August 22, 2026 to September 21, 2026
+Page 2 of 4
+Withdrawals and other subtractions - continued
+Other subtractions - continued
+Date Description Amount
+08/31/26 VENMO DES:PAYMENT ID:0000000000000 INDN:JANE SAMPLE CO
+ID:0000000000 WEB
+-20.00
+09/01/26 DOVENMUEHLE MTG DES:MORTG PYMT ID:0000000000 INDN:Jane Sample CO
+ID:0000000000 WEB
+-1,000.00
+Total other subtractions -$1,040.00
+Checks
+Date Check # Amount
+08/31/26 220 -30.00
+Total checks -$30.00
+Total # of checks 1
+Daily ledger balances
+08/24 2,000.00 08/29 4,099.50
+"""
+
+
+def test_bofa_statement_transactions_are_read_and_add_up():
+    from finance.importers.statements import parse_text
+    s = parse_text(BOFA_STMT)
+    assert s.institution == "Bank of America" and s.totals_ok is True
+    assert s.period == (date(2026, 8, 22), date(2026, 9, 21))
+    got = [(t["date"].isoformat(), t["amount"], t["description"][:22]) for t in s.transactions]
+    assert got == [("2026-08-24", 1000.0, "MSPBNA DES:ACH TRNSFR "), ("2026-08-29", 2099.5, "APPLE INC. DES:PAYROLL"),
+                   ("2026-09-21", 0.5, "Interest Earned"), ("2026-09-02", -100.0, "PMNT SENT 0902 APPLE C"),
+                   ("2026-08-31", -20.0, "VENMO DES:PAYMENT ID:0"), ("2026-08-31", -20.0, "VENMO DES:PAYMENT ID:0"),
+                   ("2026-09-01", -1000.0, "DOVENMUEHLE MTG DES:MO"), ("2026-08-31", -30.0, "Check 220")]
+    assert "page" not in s.transactions[5]["description"].lower()       # the page break isn't in a description
+    assert "8 transactions (all totals check out)" in s.extras
+
+
+def test_bofa_statement_with_a_missed_line_is_not_imported():
+    from finance.importers.statements import parse_text
+    s = parse_text(BOFA_STMT.replace("09/21/26 Interest Earned 0.50\n", ""))      # reader "misses" a line
+    assert s.totals_ok is False
+    assert any("deposits and other additions: read $3,099.50 but the statement's total is $3,100.00" in n
+               for n in s.notes)
+
+
+def test_statement_transactions_merge_without_doubles(tmp_path):
+    from finance import db
+    from finance.importers import apply_statement
+    from finance.importers.statements import parse_text
+    conn = db.connect(tmp_path / "f.db")
+    acct = db.get_or_create_account(conn, "Checking", "Bank of America", "checking")
+    csv = pd.DataFrame([  # an earlier CSV import already had part of the month, incl. one of the two $20 Venmos
+        {"date": date(2026, 8, 24), "description": "MSPBNA DES:ACH TRNSFR", "amount": 1000.0, "fingerprint": "c1"},
+        {"date": date(2026, 8, 31), "description": "VENMO DES:PAYMENT", "amount": -20.0, "fingerprint": "c2"},
+        {"date": date(2026, 9, 3), "description": "SOMETHING NOT ON IT", "amount": -5.0, "fingerprint": "c3"}])
+    db.insert_transactions(conn, acct, csv, "stmt.csv")
+    s = parse_text(BOFA_STMT)
+    r = apply_statement(conn, s, acct, "eStmt_2026-09-21.pdf")
+    assert (r["on_statement"], r["already_there"], r["added"], r["only_in_dashboard"]) == (8, 2, 6, 1)
+    venmos = conn.execute("SELECT COUNT(*) FROM transactions WHERE date = '2026-08-31' AND amount = -20").fetchone()[0]
+    assert venmos == 2                                                         # both, not one and not three
+    again = apply_statement(conn, parse_text(BOFA_STMT), acct, "eStmt_2026-09-21.pdf")
+    assert (again["already_there"], again["added"]) == (8, 0)                  # importing twice adds nothing
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 9
+
+
+def test_mismatched_statement_imports_its_balance_but_no_transactions(tmp_path):
+    from finance import db
+    from finance.importers import apply_statement
+    from finance.importers.statements import parse_text
+    conn = db.connect(tmp_path / "f.db")
+    acct = db.get_or_create_account(conn, "Checking", "Bank of America", "checking")
+    r = apply_statement(conn, parse_text(BOFA_STMT.replace("Total checks -$30.00", "Total checks -$35.00")), acct, "x.pdf")
+    assert "don't add up" in r["error"]
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
+    assert conn.execute("SELECT balance FROM balances WHERE account_id = ? AND date = '2026-09-21'",
+                        (acct,)).fetchone()[0] == 2930.0                       # the ending balance still saved
