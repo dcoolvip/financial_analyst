@@ -1709,7 +1709,8 @@ def bofa_status() -> None:
         st.session_state["bofa_was_running"] = True
 
 
-BOFA_STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc"]
+BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chase", "Chase")}   # key: (shown, institution)
+STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 
 
@@ -1721,42 +1722,41 @@ def connection_row(icon: str, bank: str, mine: list[str], status: str, key: str)
     return update, c3.popover("⚙️", help="Settings for this connection")
 
 
-def bofa_row() -> None:
-    mine = list(accts.loc[(accts["institution"] == "Bank of America") & accts["type"].isin(BOFA_STATEMENT_TYPES),
-                          "name"])
-    last = bank_pull.last_results(real_only=True)
+def browser_row(bank: str) -> None:
+    """A bank updated by a browser pull (Chrome signs in with its saved password and downloads statements)."""
+    shown, institution = BROWSER_BANKS[bank]
+    mine = list(accts.loc[(accts["institution"] == institution) & accts["type"].isin(STATEMENT_TYPES), "name"])
+    last = bank_pull.last_results(real_only=True, bank=bank)
     when = f"Updated {datetime.strptime(last[0], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
     nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" if bank_pull.scheduled()
            else "no monthly update scheduled")
     problems = [l for l in (last[1] if last else []) if any(w in l for w in PROBLEM)]
     status = f"{when} · {nxt}" + (f"  \n⚠️ {problems[0]}" if problems else "")
-    update, gear = connection_row("🏦", "Bank of America", mine, status, "bofa")
+    update, gear = connection_row("🏦", shown, mine, status, bank)
     if update:
-        bank_pull.start()
+        bank_pull.start(bank=bank)
         st.rerun()
     with gear:
-        st.caption("Signs in to BofA in a Chrome window on this Mac with the password Chrome saved, downloads "
-                   "statements it hasn't seen, checks each against its printed totals and imports it: balance plus "
-                   "any transactions not already here.")
-        if st.button("🧪 Test run (imports into a copy)", disabled=bank_pull.running(),
+        st.caption(f"Signs in to {shown} in a Chrome window on this Mac with the password Chrome saved, downloads "
+                   "statements it hasn't seen, checks each one adds up and imports it: balance plus any transactions "
+                   "not already here.")
+        if st.button("🧪 Test run (imports into a copy)", key=f"test_{bank}", disabled=bank_pull.running(),
                      help="Everything an update does, but the import goes into a throwaway copy of your data."):
-            bank_pull.start(dry_run=True)
+            bank_pull.start(dry_run=True, bank=bank)
             st.rerun()
         on = st.toggle(f"Update automatically on the {bank_pull.SCHEDULE_DAY}th of each month, "
-                       f"{bank_pull.SCHEDULE_HOUR} AM", value=bank_pull.scheduled())
+                       f"{bank_pull.SCHEDULE_HOUR} AM", value=bank_pull.scheduled(), key=f"sched_{bank}",
+                       help="One schedule for every bank updated this way.")
         if on != bank_pull.scheduled():
             try:
                 st.session_state["flash"] = bank_pull.set_schedule(on)
             except RuntimeError as e:
                 st.error(str(e))
             st.rerun()
-        if (latest := bank_pull.last_results()):
+        if (latest := bank_pull.last_results(bank=bank)):
             st.markdown(f"**Last update** · {latest[0]}")
             for line in latest[1]:
                 st.markdown(f"- {line}")
-        elif out := bank_pull.output().strip():
-            st.caption("Last update didn't finish: " + out.splitlines()[-1][:200])
-    bofa_status()
 
 
 def plaid_row(it: dict, keys: dict) -> None:
@@ -1840,7 +1840,13 @@ def render_connected() -> None:
     """Every bank that updates on its own, in one list - whatever connects it (Plaid or a browser pull)."""
     keys = plaid.load_keys()
     items = (keys or {}).get("items", [])
-    bofa_on = bank_pull.set_up()
+    browser = [b for b in BROWSER_BANKS if bank_pull.set_up(b)]
+    bofa_on = bool(browser)
+    if bank_pull.scheduled() and not bank_pull.schedule_is_current():   # older schedule ran BofA only: now every bank
+        try:
+            bank_pull.set_schedule(True)
+        except RuntimeError:
+            pass
     h1, h2 = st.columns([6, 1.5], vertical_alignment="bottom")
     h1.markdown("#### Connected accounts", help="Banks that update themselves. Plaid banks update once a month "
                 "when you open the dashboard; Bank of America on its monthly date.")
@@ -1848,13 +1854,15 @@ def render_connected() -> None:
         if items:
             plaid_sync(keys)
         if bofa_on:
-            bank_pull.start()
+            bank_pull.start(bank="all")
         st.rerun()
     with st.container(border=True):
         if not items and not bofa_on:
             st.caption("Nothing connected yet.")
-        if bofa_on:
-            bofa_row()
+        for b in browser:
+            browser_row(b)
+        if browser:
+            bofa_status()
         for it in items:
             plaid_row(it, keys)
         for_unknown = [u for u in plaid.unmatched(conn) if not u.get("item_id")]
@@ -1870,21 +1878,18 @@ def render_connected() -> None:
             else:
                 plaid_keys_form()
         else:
-            st.caption("Bank of America is set up this way" if bofa_on else
-                       "Bank of America works this way: run a test first (it imports into a copy of your data).")
-            if not bofa_on and st.button("🧪 Test run for Bank of America", disabled=bank_pull.running()):
-                bank_pull.start(dry_run=True)
-                st.rerun()
+            for b, (shown, _) in BROWSER_BANKS.items():
+                if bank_pull.set_up(b):
+                    st.markdown(f"**{shown}** · connected (in the list above)")
+                    continue
+                st.markdown(f"**{shown}** · not connected yet")
+                if st.button(f"🧪 Test run for {shown}", key=f"connect_{b}", disabled=bank_pull.running(),
+                             help="Signs in with Chrome's saved password and imports into a throwaway copy of your "
+                                  "data. Once a test has run, the bank shows in the list above."):
+                    bank_pull.start(dry_run=True, bank=b)
+                    st.rerun()
             bofa_status()
-            chase = bank_pull.recording("chase")
-            st.markdown("**Chase** · " + (f"recorded {datetime.fromtimestamp(chase['recorded']):%b %-d} - being set up"
-                                          if chase else "not set up yet"))
-            st.caption("A Chrome window opens on Chase: sign in, go to **Statements & documents** and download one "
-                       "statement, then close the window. Only the labels of what you click are kept (digits masked) "
-                       "- never what you type.")
-            if st.button("⏺ Record Chase", disabled=bank_pull.running()):
-                bank_pull.start_recording("chase")
-                st.rerun()
+            st.caption("Other banks (Amex, …) can be added the same way - ask for the one you want next.")
     if keys:
         with st.expander("⚙️ Plaid settings"):
             plaid_settings(keys)

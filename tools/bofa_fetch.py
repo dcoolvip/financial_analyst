@@ -262,6 +262,6 @@ if __name__ == "__main__":
     try:
         main(dry_run="--dry-run" in sys.argv)
     finally:                                   # the dashboard shows "running" until this pull's pid file is gone
-        pid = paths.data_dir() / "bank_fetch" / "bofa_pull.pid"
+        pid = paths.data_dir() / "bank_fetch" / "bank_pull.pid"
         if pid.exists() and pid.read_text().strip() == str(os.getpid()):
             pid.unlink()

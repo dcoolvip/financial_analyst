@@ -1,6 +1,6 @@
-"""The automatic Bank of America pull, as the dashboard drives it: starting a pull (it runs
-tools/bofa_fetch.py in the background - Chrome opens on this Mac), its status and results, and the monthly
-schedule (launchd, via tools/bofa_schedule.sh).
+"""The automatic bank pulls (Bank of America, Chase), as the dashboard drives them: starting one (it runs
+tools/<bank>_fetch.py in the background - Chrome opens on this Mac), status and results, and the monthly schedule
+(launchd, via tools/bofa_schedule.sh, running tools/monthly_pull.py: every set-up bank in turn).
 """
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ from pathlib import Path
 
 from . import paths
 
-LABEL = "com.financialanalyst.bofa-monthly"
+LABEL = "com.financialanalyst.bofa-monthly"     # (kept: it's the job macOS already knows; it now runs every bank)
+BANKS = {"bofa": "Bank of America", "chase": "Chase"}     # tools/<key>_fetch.py each
 SCHEDULE_DAY, SCHEDULE_HOUR = 28, 9
 
 
@@ -25,7 +26,7 @@ def _dir() -> Path:
 # --- a pull running in the background ---------------------------------------------------------------------------
 
 def _pid_file() -> Path:
-    return _dir() / "bofa_pull.pid"
+    return _dir() / "bank_pull.pid"
 
 
 def run_log() -> Path:
@@ -41,12 +42,13 @@ def running() -> bool:
         return False
 
 
-def start(dry_run: bool = False) -> None:
+def start(dry_run: bool = False, bank: str = "bofa") -> None:
+    """Start a pull in the background: one bank (tools/<bank>_fetch.py), or bank="all" for every set-up bank."""
     if os.environ.get("FINANCE_NO_BANK_PULL"):
         raise RuntimeError("Bank pulls are switched off here (tests)")
     if running():
         return
-    script = paths.ROOT / "tools" / "bofa_fetch.py"
+    script = paths.ROOT / "tools" / ("monthly_pull.py" if bank == "all" else f"{bank}_fetch.py")
     with run_log().open("w") as out:
         p = subprocess.Popen([sys.executable, str(script)] + (["--dry-run"] if dry_run else []),
                              cwd=paths.ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
@@ -83,10 +85,10 @@ def output() -> str:
         return ""
 
 
-def last_results(real_only: bool = False) -> tuple[str, list[str]] | None:
-    """The newest entry of bofa_runs.log: (when, one line per statement). real_only skips test runs."""
+def last_results(real_only: bool = False, bank: str = "bofa") -> tuple[str, list[str]] | None:
+    """The newest entry of <bank>_runs.log: (when, one line per statement). real_only skips test runs."""
     try:
-        text = (_dir() / "bofa_runs.log").read_text()
+        text = (_dir() / f"{bank}_runs.log").read_text()
     except FileNotFoundError:
         return None
     runs = [r for r in text.split("--- ") if r.strip() and not (real_only and "(dry run)" in r.splitlines()[0])]
@@ -96,9 +98,10 @@ def last_results(real_only: bool = False) -> tuple[str, list[str]] | None:
     return head, lines
 
 
-def set_up() -> bool:
-    """Bank of America is connected: it has been updated (or tested) at least once, or it's scheduled."""
-    return (_dir() / "bofa_runs.log").exists() or (_dir() / "bofa_fetched.json").exists() or scheduled()
+def set_up(bank: str = "bofa") -> bool:
+    """The bank is connected: it has been updated (or tested) at least once (BofA: or the schedule is on)."""
+    return ((_dir() / f"{bank}_runs.log").exists() or (_dir() / f"{bank}_fetched.json").exists()
+            or (bank == "bofa" and scheduled()))
 
 
 # --- the monthly schedule ---------------------------------------------------------------------------------------
@@ -110,6 +113,14 @@ def plist() -> Path:
 
 def scheduled() -> bool:
     return plist().exists()
+
+
+def schedule_is_current() -> bool:
+    """The schedule runs the all-banks monthly pull (older ones ran only Bank of America's)."""
+    try:
+        return "monthly_pull.py" in plist().read_text()
+    except FileNotFoundError:
+        return True
 
 
 def set_schedule(on: bool) -> str:

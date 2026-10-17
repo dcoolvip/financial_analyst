@@ -136,3 +136,22 @@ def test_a_shortened_name_on_the_tile_still_finds_its_download_link():
     assert not bf.link_pattern(savings).search("Download PDF for September Statement for DCOOLVIP")
     assert not bf.link_pattern({"title": "September Statement", "label": "Mortgage - 67"}).search(
         "Download PDF for September Statement for Mortgage - 6784")              # a full name must match fully
+
+
+def test_chase_takes_recent_unfetched_statements_and_matches_by_file_digits(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("chase_fetch", Path(__file__).parent.parent / "tools/chase_fetch.py")
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+    today = date(2026, 10, 28)
+    link = "Oct 06, 2026 Statement SAPPHIRE RESERVE (...2349) Saves document"
+    assert cf.link_date(link) == date(2026, 10, 6)
+    assert cf.wanted(link, set(), today)
+    assert not cf.wanted(link, {link}, today)                                   # already fetched
+    assert not cf.wanted("Jun 06, 2026 Statement SAPPHIRE RESERVE (...2349) Saves document", set(), today)   # too old
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    a = db.get_or_create_account(conn, "Chase Sapphire Reserve", "Chase", "credit_card")
+    db.update_account_details(conn, a, last4="2349")
+    db.get_or_create_account(conn, "Other Card", "Chase", "credit_card")
+    assert cf.match_account(conn, "2349") == a and cf.match_account(conn, "9999") is None
+    assert "not a statement" in cf.import_statement(conn, tmp_path / "20261006-tax-form-2349-.pdf")

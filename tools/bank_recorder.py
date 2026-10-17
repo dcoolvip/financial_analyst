@@ -155,7 +155,7 @@ def _save(out_dir: Path, name: str, steps: list) -> None:
 
 def _done() -> None:
     import os
-    pid = paths.data_dir() / "bank_fetch" / "bofa_pull.pid"
+    pid = paths.data_dir() / "bank_fetch" / "bank_pull.pid"
     if pid.exists() and pid.read_text().strip() == str(os.getpid()):
         pid.unlink()
 

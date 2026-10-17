@@ -820,8 +820,9 @@ def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):
 def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
     from finance import bank_pull
     started, schedule = [], {"on": False}
-    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False: started.append(dry_run))
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa": started.append((bank, dry_run)))
     monkeypatch.setattr(bank_pull, "scheduled", lambda: schedule["on"])
+    monkeypatch.setattr(bank_pull, "schedule_is_current", lambda: True)
     monkeypatch.setattr(bank_pull, "set_schedule", lambda on: schedule.update(on=on) or "Scheduled.")
     conn, _ = env
     db.get_or_create_account(conn, "Bofa Checking", "Bank of America", "checking")
@@ -831,7 +832,7 @@ def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
     assert not [t for t in at.text_input if "BofA" in t.label]                       # no login to type in
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
     click(at, "🧪 Test run for Bank of America")
-    assert started == [True]
+    assert started == [("bofa", True)]
     (tmp_path / "bank_fetch").mkdir(exist_ok=True)
     (tmp_path / "bank_fetch" / "bofa_runs.log").write_text(
         "--- 2026-10-20 10:00 (dry run)\nBofa Checking (Sep 22 – Oct 21): 31 transactions, 31 already there, 0 added\n"
@@ -844,7 +845,9 @@ def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
     assert "⚠️ Advantage Savings" in row                                              # a problem shows on the row
     assert any("27 added" in m.value for m in at.markdown)                            # details under ⚙️
     [b for b in at.button if b.key == "update_bofa"][0].click().run()
-    assert started == [True, False]
+    assert started == [("bofa", True), ("bofa", False)]
+    click(at, "Update all")
+    assert started[-1] == ("all", False)                                              # every browser bank, in turn
     [t for t in at.toggle if "Update automatically" in t.label][0].set_value(True).run()
     assert schedule["on"] is True
     row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))
@@ -852,16 +855,24 @@ def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
 
 
 
-def test_chase_can_be_recorded_from_the_dashboard(env, monkeypatch, tmp_path):
+def test_chase_connects_with_a_test_run_then_gets_its_own_row(env, monkeypatch, tmp_path):
     from finance import bank_pull
-    recorded = []
-    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append((bank, label)))
+    started = []
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa": started.append((bank, dry_run)))
+    conn, _ = env
+    for name, last4 in (("Chase Checking", "2738"), ("Chase Sapphire Reserve", "2349")):
+        a = db.get_or_create_account(conn, name, "Chase", "credit_card" if "Sapphire" in name else "checking")
+        db.update_account_details(conn, a, last4=last4)
     at = app()
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
-    assert any("**Chase** · not set up yet" in m.value for m in at.markdown)
-    click(at, "⏺ Record Chase")
-    assert recorded == [("chase", "statements")]
+    assert any("**Chase** · not connected yet" in m.value for m in at.markdown)
+    click(at, "🧪 Test run for Chase")
+    assert started == [("chase", True)]
     (tmp_path / "bank_fetch").mkdir(exist_ok=True)
-    (tmp_path / "bank_fetch" / "chase_statements_recording.json").write_text('{"recorded": 1792300000, "steps": []}')
+    (tmp_path / "bank_fetch" / "chase_runs.log").write_text(
+        "--- 2026-10-28 09:05\nChase Sapphire Reserve (Sep 7 – Oct 6): 105 transactions, 61 already there, 44 added\n")
     at.run()
-    assert any("**Chase** · recorded" in m.value for m in at.markdown)
+    row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Chase**"))
+    assert "Chase Checking" in row and "Chase Sapphire Reserve" in row and "Updated Oct 28" in row
+    [b for b in at.button if b.key == "update_chase"][0].click().run()
+    assert started[-1] == ("chase", False)
