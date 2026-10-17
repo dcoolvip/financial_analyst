@@ -7,3 +7,4 @@ truststore>=0.9
 aiohttp>=3.9
 webauthn>=2.0
 pypdf>=5.0
+playwright>=1.40          # tools/bank_recorder.py: drives your installed Google Chrome (no browser download)
