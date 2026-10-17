@@ -139,16 +139,26 @@ def sign_in(page) -> bool:
 
 def _save(page, click, out: Path) -> Path | None:
     """Click, confirm Chase's Submit, and save the download under Chase's own file name."""
-    with page.expect_download(timeout=60_000) as dl:
+    with page.expect_download(timeout=30_000) as dl:
         click()
-        submit = page.locator("input[type=submit][value='Submit'], button:has-text('Submit') >> visible=true").first
-        submit.wait_for(state="visible", timeout=15_000)
+        submit = page.locator("input[type=submit], button:has-text('Submit')").filter(visible=True).first
+        submit.wait_for(state="visible", timeout=10_000)
         submit.click()
     path = out / dl.value.suggested_filename
     dl.value.save_as(path)
     page.keyboard.press("Escape")
     page.wait_for_timeout(1000)
     return path
+
+
+def _shown_buttons(page) -> str:
+    """What could be clicked on screen right then (labels only, digits masked) - for fixing, not guessing."""
+    try:
+        labels = page.locator("button, input[type=submit], [role=menuitem], [role=button]").filter(
+            visible=True).evaluate_all("els => els.slice(0, 40).map(e => (e.innerText || e.value || "").trim())")
+        return "On screen: " + str([mask_digits(" ".join(l.split()))[:40] for l in labels if l][:25])
+    except Exception:
+        return ""
 
 
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
@@ -168,29 +178,35 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
         except Exception:
             pass
     today, got = date.today(), []
-    bank_rows = page.locator("[id$='downloadDocumentDropdown-icon']")      # "Sep 16, 2026 Opens menu to save document"
-    card_rows = page.locator("[id$='requestThisDocumentLink-download']")   # "Oct 06, 2026 Statement SAPPHIRE … Saves document"
+    # Chase lists every link twice (a hidden copy for another layout): only the ones on screen
+    bank_rows = page.locator("[id$='downloadDocumentDropdown-icon']").filter(visible=True)   # "Sep 16, 2026 Opens menu…"
+    card_rows = page.locator("[id$='requestThisDocumentLink-download']").filter(visible=True)  # "Oct 06, 2026 Statement …"
+    tried = set()
     for i in range(bank_rows.count()):
         row = bank_rows.nth(i)
         text = " ".join((row.inner_text() or row.get_attribute("aria-label") or "").split())
-        if len(got) >= MAX_PER_RUN or not wanted(text, seen, today):
+        if len(got) >= MAX_PER_RUN or not wanted(text, seen | tried, today):
             continue
+        tried.add(text)
         def click(row=row):
             row.click()
-            page.locator("[id$='downloadPDFOption'] >> visible=true").first.click(timeout=10_000)
+            page.locator("[id$='downloadPDFOption']").filter(visible=True).first.click(timeout=10_000)
         try:
             got.append((text, _save(page, click, out)))
         except Exception as e:
-            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}", flush=True)
+            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}. {_shown_buttons(page)}", flush=True)
+            page.keyboard.press("Escape")
     for i in range(card_rows.count()):
         row = card_rows.nth(i)
         text = " ".join((row.inner_text() or row.get_attribute("aria-label") or "").split())
-        if len(got) >= MAX_PER_RUN or "statement" not in text.lower() or not wanted(text, seen, today):
+        if len(got) >= MAX_PER_RUN or "statement" not in text.lower() or not wanted(text, seen | tried, today):
             continue
+        tried.add(text)
         try:
             got.append((text, _save(page, row.click, out)))
         except Exception as e:
-            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}", flush=True)
+            print(f"Couldn't download {mask_digits(text)}: {e.__class__.__name__}. {_shown_buttons(page)}", flush=True)
+            page.keyboard.press("Escape")
     if not got:
         rows = [mask_digits(" ".join(t.split()))[:80] for t in (bank_rows.all_inner_texts() + card_rows.all_inner_texts())]
         print(f"Statement links seen: {rows[:20]}", flush=True)
