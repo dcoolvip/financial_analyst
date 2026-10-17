@@ -333,6 +333,84 @@ def _parse_card(s: Statement, t: str) -> None:
     s.balance = _money_after(t, [r"new balance total", r"new balance"], window=60)
     s.rate = _percent_after(t, [r"purchases?\s+(?:apr\s+)?", r"annual percentage rate"], window=80)
     s.as_of = _date_after(t, [r"statement closing date", r"closing date", r"statement date", r"billing period"])
+    if s.institution == "Bank of America" and s.as_of:
+        _bofa_card_transactions(s, t)
+
+
+# BofA card statements: blocks closed by "TOTAL <block> FOR THIS PERIOD $X"; lines are
+#   "08/27 08/28 COSTCO GAS 01234 SUNNYVALE CA 1234 5678 12.34"  (transaction date, posting date, ..., ref, acct, amount)
+# Purchases print positive and payments negative - the other way round from the dashboard (money out < 0).
+_CARD_BLOCK = re.compile(r"^(payments and other credits|purchases and adjustments|interest charged|fees charged)$", re.I)
+_CARD_ITEM = re.compile(r"^(\d{2}/\d{2})\s+(\d{2}/\d{2})\s+(.*)$")
+
+
+def _bofa_card_transactions(s: Statement, t: str) -> None:
+    end = s.as_of
+    m = re.search(r"([A-Z][a-z]+ \d{1,2})\s*-\s*([A-Z][a-z]+ \d{1,2}, \d{4})", t)    # "August 18 - September 17, 2026"
+    start = None
+    if m and (stop := _parse_date(m.group(2))):
+        start = _parse_date(f"{m.group(1)}, {stop.year}")
+        if start and start > stop:
+            start = _parse_date(f"{m.group(1)}, {stop.year - 1}")
+    start = start or end - timedelta(days=35)
+    s.period = (start, end)
+
+    def full_date(md: str) -> date:          # "08/28" -> the date within the statement's (year-less) period
+        mo, dy = int(md[:2]), int(md[3:])
+        return date(end.year - (1 if mo > end.month else 0), mo, dy)
+
+    items, problems, block, block_sum, cur = [], [], None, 0.0, None
+
+    def close_item():
+        nonlocal cur, block_sum
+        if cur:
+            if cur["amount"] is None:
+                problems.append(f"no amount found for a {block} line dated {cur['date']:%b %-d}")
+            else:
+                if cur["amount"]:                      # "INTEREST CHARGED ON PURCHASES 0.00" lines: nothing happened
+                    items.append(cur)
+                block_sum += cur["amount"]
+            cur = None
+
+    for raw in t.splitlines():
+        line = " ".join(raw.split())
+        if not line or _BOFA_SKIP.search(line):
+            continue
+        if (h := _CARD_BLOCK.match(line)):
+            close_item()
+            block, block_sum = h.group(1).lower(), 0.0
+            continue
+        if block is None:
+            continue
+        if line.lower().startswith("total "):
+            close_item()
+            toks = line.split()
+            if _TOKEN_MONEY.match(toks[-1]):
+                printed = _money(toks[-1])
+                if abs(printed - block_sum) > 0.005:
+                    problems.append(f"{block}: read ${block_sum:,.2f} but the statement's total is ${printed:,.2f}")
+            block = None
+            continue
+        if (it := _CARD_ITEM.match(line)):
+            close_item()
+            cur = {"date": full_date(it.group(2)), "parts": [], "amount": None}       # posting date, as the CSV
+            rest = it.group(3)
+        elif cur and cur["amount"] is None:
+            rest = line
+        else:
+            continue
+        toks = rest.split()
+        if toks and _TOKEN_MONEY.match(toks[-1]):
+            cur["amount"] = _money(toks[-1])
+            toks = toks[:-1]
+            while toks and re.fullmatch(r"\d{4}", toks[-1]):      # reference and account numbers
+                toks = toks[:-1]
+        cur["parts"] += toks
+    close_item()
+    s.transactions = [{"date": i["date"], "amount": -i["amount"], "description": " ".join(i["parts"])} for i in items]
+    s.totals_ok = not problems
+    if problems:
+        s.notes.append("Transactions not imported - " + "; ".join(problems[:3]))
 
 
 def _parse_investment(s: Statement, t: str) -> None:

@@ -584,3 +584,47 @@ def test_a_savings_statement_that_mentions_checking_is_still_savings():
             "Ending balance on September 25, 2026 $5,000.00\n" + "filler line\n" * 100       # past the header
             + "09/02/26 Online Banking transfer from CHK 0522 checking 500.00\n")
     assert parse_text(text).account_type == "savings"
+
+
+BOFA_CARD_STMT = """Bank of America Customized Cash Rewards Visa Signature
+Account Number: XXXX XXXX XXXX 1013
+Statement Closing Date 09/17/2026
+New Balance Total $40.00
+Minimum Payment Due $25.00
+Credit Line $18,000
+Transactions
+Payments and Other Credits
+08/27 08/28 WWW COSTCO COM 800-555-0000 WA 1111 1013 -100.00
+09/05 09/06 PAYMENT - THANK YOU 2222 1013 -20.00
+TOTAL PAYMENTS AND OTHER CREDITS FOR THIS PERIOD -$120.00
+Purchases and Adjustments
+08/27 08/28 COSTCO WHSE 00001 SUNNYVALE CA 3333 1013 55.00
+08/27 08/28 COSTCO GAS 00002 SUNNYVALE CA 4444 1013 45.00
+JANE SAMPLE ! Account # XXXX XXXX XXXX 1013 ! August 18 - September 17, 2026
+Page 2 of 4
+09/10 09/11 BLUE BOTTLE COFFEE OAKLAND CA 5555 1013 60.00
+TOTAL PURCHASES AND ADJUSTMENTS FOR THIS PERIOD $160.00
+Interest Charged
+09/17 09/17 INTEREST CHARGED ON PURCHASES 0.00
+TOTAL INTEREST CHARGED FOR THIS PERIOD $0.00
+"""
+
+
+def test_bofa_card_statement_transactions():
+    s = parse_text(BOFA_CARD_STMT)
+    assert s.kind == "credit_card" and s.totals_ok is True
+    assert s.period == (date(2026, 8, 18), date(2026, 9, 17))
+    got = [(t["date"].isoformat(), t["amount"], t["description"]) for t in s.transactions]
+    assert got == [("2026-08-28", 100.0, "WWW COSTCO COM 800-555-0000 WA"),        # credits: money in
+                   ("2026-09-06", 20.0, "PAYMENT - THANK YOU"),
+                   ("2026-08-28", -55.0, "COSTCO WHSE 00001 SUNNYVALE CA"),        # purchases: money out
+                   ("2026-08-28", -45.0, "COSTCO GAS 00002 SUNNYVALE CA"),
+                   ("2026-09-11", -60.0, "BLUE BOTTLE COFFEE OAKLAND CA")]       # page break skipped; $0 interest dropped
+
+
+def test_bofa_card_statement_across_new_year_and_a_bad_total():
+    s = parse_text(BOFA_CARD_STMT.replace("09/17/2026", "01/05/2027").replace("August 18 - September 17, 2026",
+                                                                              "December 6 - January 5, 2027"))
+    assert s.period[0] == date(2026, 12, 6) and s.transactions[0]["date"] == date(2026, 8, 28)   # earlier month = 2026
+    bad = parse_text(BOFA_CARD_STMT.replace("$160.00", "$165.00"))
+    assert bad.totals_ok is False and "purchases and adjustments" in bad.notes[-1]
