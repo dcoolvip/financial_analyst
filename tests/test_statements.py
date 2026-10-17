@@ -628,3 +628,69 @@ def test_bofa_card_statement_across_new_year_and_a_bad_total():
     assert s.period[0] == date(2026, 12, 6) and s.transactions[0]["date"] == date(2026, 8, 28)   # earlier month = 2026
     bad = parse_text(BOFA_CARD_STMT.replace("$160.00", "$165.00"))
     assert bad.totals_ok is False and "purchases and adjustments" in bad.notes[-1]
+
+
+
+def test_a_purchase_dated_before_the_statement_period_is_still_matched(tmp_path):
+    """Regression (Chase Sapphire): a purchase made on the 5th, posted on the 7th, is listed by its transaction date,
+    before the period's first day. It was missed by the 'already there?' check - doubling it if a CSV had it."""
+    from finance import db
+    from finance.importers import merge_statement_transactions
+    from finance.importers.statements import Statement
+    conn = db.connect(tmp_path / "f.db")
+    acct = db.get_or_create_account(conn, "Sapphire", "Chase", "credit_card")
+    db.insert_transactions(conn, acct, pd.DataFrame([{"date": date(2026, 9, 5), "description": "CAFE", "amount": -4.5,
+                                                      "fingerprint": "csv1"}]), "chase.csv")
+    s = Statement(kind="credit_card", period=(date(2026, 9, 7), date(2026, 10, 6)),
+                  transactions=[{"date": date(2026, 9, 5), "description": "CAFE", "amount": -4.5},
+                                {"date": date(2026, 9, 20), "description": "SHOP", "amount": -10.0}])
+    r = merge_statement_transactions(conn, acct, s, "stmt.pdf")
+    assert (r["already_there"], r["added"]) == (1, 1)
+    assert conn.execute("SELECT COUNT(*) FROM transactions WHERE amount = -4.5").fetchone()[0] == 1
+
+
+def test_chase_card_reading_uses_account_activity_and_checks_the_summary():
+    from finance.importers import chase_pdf
+    text = """ACCOUNT SUMMARY
+Payment, Credits -$100.00
+Purchases +$75.50
+Cash Advances $0.00
+Balance Transfers $0.00
+Fees Charged $0.00
+Interest Charged $4.50
+New Balance $80.00
+Date of
+Transaction Merchant Name or Transaction Description $ Amount Rewards
+PURCHASES AND REDEMPTIONS
+09/20 AMAZON.COM AMZN.COM/BILLWA 30.00 3,000
+ACCOUNT ACTIVITY
+PAYMENTS AND OTHER CREDITS
+09/30 Payment Thank You-Mobile -100.00
+PURCHASES
+09/05 APPLE CAFFE IL04 CUPERTINO CA 25.50
+10/01 OIL STOP 12 CAMPBELL CA 50.00
+INTEREST CHARGED
+10/06 PURCHASE INTEREST CHARGE 4.50
+2026 Totals Year-to-Date
+"""
+    items, problems = chase_pdf.card_transactions(text, date(2026, 10, 6))
+    assert problems == []
+    assert [(t["date"].isoformat(), t["amount"]) for t in items] == [
+        ("2026-09-30", 100.0), ("2026-09-05", -25.5), ("2026-10-01", -50.0), ("2026-10-06", -4.5)]   # no points order
+    _, bad = chase_pdf.card_transactions(text.replace("+$75.50", "+$85.50"), date(2026, 10, 6))
+    assert "purchases, fees and interest" in bad[0]
+
+
+def test_chase_checking_rows_are_proven_by_the_running_balance(monkeypatch):
+    from finance.importers import chase_pdf
+    rows = ["TRANSACTION DETAIL", "Beginning Balance $1,000.00",
+            "08/20 Apple Inc. Payroll PPD ID: 0000000000 2,500.00 3,500.00",
+            "08/22 3,000.00 Payment To Chase Card Ending IN 1234 - 500.00",     # columns jumbled, as PDFKit gives them
+            "08/25 Robinhood Debits 0000 Web ID: 000 -1,000.00 2,000.00",
+            "Ending Balance $2,000.00"]
+    monkeypatch.setattr(chase_pdf, "_rows", lambda pdf: rows)
+    items, problems = chase_pdf.deposit_transactions(b"", date(2026, 9, 16))
+    assert problems == [] and [t["amount"] for t in items] == [2500.0, -500.0, -1000.0]
+    monkeypatch.setattr(chase_pdf, "_rows", lambda pdf: rows[:-1] + ["Ending Balance $2,100.00"])
+    assert "Ending Balance" in chase_pdf.deposit_transactions(b"", date(2026, 9, 16))[1][0]
+    assert chase_pdf.last4_from_filename("20260916-statements-2738-.pdf") == "2738"

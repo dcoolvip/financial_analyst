@@ -673,11 +673,15 @@ def parse_pdf_all(pdf: bytes) -> list[Statement]:
         if starts:
             bounds = starts + [len(text)]
             return [_robinhood(text[a:b]) for a, b in zip(bounds, bounds[1:])]
-    return [parse_text(text)]
+    return [parse_pdf(pdf)]
 
 
 def parse_pdf(pdf: bytes) -> Statement:
     text = extract_text(pdf)
     if len(text.strip()) < 40:
         return Statement(kind="unknown", notes=["No text in this PDF (it may be a scan) - enter the values below"])
-    return parse_text(text)
+    s = parse_text(text)
+    if s.institution == "Chase":                  # its transaction pages need macOS's PDF reader
+        from . import chase_pdf
+        chase_pdf.enrich(pdf, s)
+    return s

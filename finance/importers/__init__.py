@@ -96,7 +96,9 @@ def merge_statement_transactions(conn, account_id: int, s: "statements.Statement
     dashboard; only the unmatched ones are added. Re-importing the same statement adds nothing."""
     from collections import Counter
     import pandas as pd
-    lo, hi = s.period or (min(t["date"] for t in s.transactions), max(t["date"] for t in s.transactions))
+    dates = [t["date"] for t in s.transactions]
+    p_lo, p_hi = s.period or (min(dates), max(dates))
+    lo, hi = min(p_lo, min(dates)), max(p_hi, max(dates))   # a card lists purchases made just before the period
     have = Counter((d, round(a, 2)) for d, a in conn.execute(
         "SELECT date, amount FROM transactions WHERE account_id = ? AND date BETWEEN ? AND ?",
         (account_id, lo.isoformat(), hi.isoformat())))
@@ -110,8 +112,9 @@ def merge_statement_transactions(conn, account_id: int, s: "statements.Statement
         new.append({"date": t["date"], "description": t["description"], "amount": t["amount"],
                     "fingerprint": f"stmt|{key[0]}|{key[1]:.2f}|{nth[key]}"})
     added = db.insert_transactions(conn, account_id, pd.DataFrame(new), filename) if new else 0
-    return {"period": (lo, hi), "on_statement": len(s.transactions), "already_there": len(s.transactions) - len(new),
-            "added": added, "only_in_dashboard": sum(have.values())}
+    left = sum(n for (d, _), n in have.items() if p_lo.isoformat() <= d <= p_hi.isoformat())   # its own period only
+    return {"period": (p_lo, p_hi), "on_statement": len(s.transactions), "already_there": len(s.transactions) - len(new),
+            "added": added, "only_in_dashboard": left}
 
 
 __all__ = ["apply_statement", "merge_statement_transactions", "statements", "suggest_csv_account", "last4_from_filename", "KIND_ACCOUNT_TYPES", "ParsedFile", "UnrecognizedFile", "apply", "parse_file"]
