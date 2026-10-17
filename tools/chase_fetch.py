@@ -119,6 +119,16 @@ def _password_box(page, timeout_s: float = 30):
     return None
 
 
+def _username_box(pwd):
+    """The visible text box next to the password box (its form), where Chrome offers saved logins."""
+    try:
+        form = pwd.locator("xpath=ancestor::form[1]")
+        box = form.locator("input[type=text], input[type=email]").filter(visible=True).first
+        return box if box.count() else None
+    except Exception:
+        return None
+
+
 def sign_in(page) -> bool:
     """Open Chase -> click the password box -> pick Chrome's saved password from its drop-down -> Enter. Then wait
     until you're signed in."""
@@ -126,11 +136,16 @@ def sign_in(page) -> bool:
     pwd = _password_box(page)
     if pwd is not None:
         try:
-            pwd.click()                   # Chrome shows the saved Chase password in a drop-down here...
-            page.wait_for_timeout(1000)
-            page.keyboard.press("ArrowDown")      # ...highlight it,
-            page.keyboard.press("Enter")          # choose it,
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(3000)           # the sign-in frame finishes loading after it appears
+            user = _username_box(pwd)
+            for box in [b for b in (user, pwd) if b is not None]:
+                box.click()                       # Chrome offers the saved login in a drop-down here...
+                page.wait_for_timeout(1500)
+                page.keyboard.press("ArrowDown")  # ...highlight it,
+                page.keyboard.press("Enter")      # pick it (fills user ID and password)
+                page.wait_for_timeout(1000)
+                if pwd.input_value():
+                    break
             pwd.press("Enter")                    # and sign in
         except Exception:
             pass                          # you signed in yourself / the page moved on: just wait below
