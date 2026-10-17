@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_pull, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
-SIGN_IN = "https://secure.bankofamerica.com/myaccounts/signin/signIn.go"   # BofA's own sign-in page
+HOME = "https://www.bankofamerica.com/"     # its sign-in boxes are where Chrome fills in your login
 STATEMENTS = "https://secure.bankofamerica.com/statements-documents/home/"
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 NEEDS_YOU = re.compile(r"(verification code|one-time code|authorization code|text message|verify (it'?s )?you"
@@ -115,28 +115,42 @@ def import_statement(conn, pdf: Path) -> str:
 
 # --- the browser part -------------------------------------------------------------------------------------------
 
-USER_FIELDS = ["#oid", "#onlineId1", "input[name=onlineId1]", "input[name=oid]", "input[autocomplete=username]"]
+AUTOFILL_WAIT_MS = 2500
 
 
-def _visible(page, selectors: list[str], timeout_s: float = 30):
-    """The first of these that's on screen (BofA keeps hidden copies of its sign-in boxes around)."""
+def _visible_password(page, timeout_s: float = 30):
+    """Whatever password box is on screen - in the page or any frame inside it (no guessing at BofA's names)."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        for sel in selectors:
-            loc = page.locator(f"{sel} >> visible=true").first
-            if loc.count():
-                return loc
+        for frame in page.frames:
+            try:
+                box = frame.locator("input[type=password] >> visible=true").first
+                if box.count():
+                    return frame, box
+            except Exception:
+                pass
         page.wait_for_timeout(500)
-    return None
+    return None, None
+
+
+def _user_box(frame, pwd):
+    """The visible text box in the same form as the password box (the user ID)."""
+    form = pwd.locator("xpath=ancestor::form[1]")
+    scope = form if form.count() else frame
+    box = scope.locator("input[type=text] >> visible=true, input[type=email] >> visible=true").first
+    return box if box.count() else None
 
 
 def _fields_seen(page) -> str:
-    """Which input boxes are on the page (id, name, type, shown or not) - never their contents."""
-    return "; ".join(page.eval_on_selector_all("input", """els => els.slice(0, 25).map(e =>
-        `${e.id || '-'}/${e.name || '-'}/${e.type}/${e.offsetParent ? 'shown' : 'hidden'}`)"""))
-
-
-AUTOFILL_WAIT_MS = 2500
+    """Every input box in the page and its frames (frame, id, name, type, shown or not) - never their contents."""
+    seen = []
+    for i, frame in enumerate(page.frames):
+        try:
+            seen += [f"f{i}:" + x for x in frame.locator("input").evaluate_all("""els => els.slice(0, 30).map(e =>
+                `${e.id || '-'}/${e.name || '-'}/${e.type}/${e.offsetParent ? 'shown' : 'hidden'}`)""")]
+        except Exception:
+            pass
+    return "; ".join(seen)
 
 
 def _autofilled(box) -> bool:
@@ -148,22 +162,22 @@ def _autofilled(box) -> bool:
 
 
 def sign_in(page, login: tuple[str, str] | None) -> bool:
-    """Sign in with Chrome's saved password if it fills the boxes (just press Enter), else the Keychain login,
-    else ask you to sign in in the window."""
-    page.goto(SIGN_IN)
+    """Sign in on BofA's home page: with Chrome's saved password if it fills the boxes (click + Enter), else the
+    Keychain login, else ask you to sign in in the window."""
+    page.goto(HOME)
     if page.get_by_text(SIGNED_IN).first.is_visible():           # still signed in from before
         return True
-    uid = _visible(page, USER_FIELDS)
-    pwd = _visible(page, ["input[type=password]"], timeout_s=5)
+    frame, pwd = _visible_password(page)
     page.wait_for_timeout(AUTOFILL_WAIT_MS)                      # give Chrome a moment to fill them in
-    if not uid or not pwd:
-        print("Sign-in boxes not found. Boxes on the page: " + _fields_seen(page), flush=True)
+    if not pwd:
+        print(f"No visible password box at {page.url.split('?')[0]}. Boxes seen: {_fields_seen(page)}", flush=True)
         notify("Couldn't find BofA's sign-in boxes - sign in yourself in the Chrome window; the pull continues.")
     elif _autofilled(pwd):
         pwd.click()                     # Chrome releases a saved password to the page only after a real click
         pwd.press("Enter")
     elif login:
-        if not (uid.input_value() or "").strip():                # "Save User ID" may have filled it in
+        uid = _user_box(frame, pwd)
+        if uid is not None and not (uid.input_value() or "").strip():   # "Save User ID" may have filled it in
             uid.fill(login[0])
         pwd.fill(login[1])
         pwd.press("Enter")

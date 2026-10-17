@@ -74,6 +74,7 @@ class FakeBox:
     def press(self, key): self.pressed.append(key)
     def click(self): self.clicked = True
     def evaluate(self, js): return self.autofilled
+    def locator(self, sel): return Nothing()                            # no enclosing <form> in this fake
 
 
 class Nothing:
@@ -81,18 +82,25 @@ class Nothing:
     @property
     def first(self): return self
     def is_visible(self): return False
+    def evaluate_all(self, js): return []
+
+
+class FakeFrame:
+    def __init__(self, boxes): self.boxes = boxes
+    def locator(self, sel):
+        if sel == "input[type=password] >> visible=true": return self.boxes.get("pwd", Nothing())
+        if sel.startswith("input[type=text] >> visible=true"): return self.boxes.get("uid", Nothing())
+        return Nothing()
 
 
 class FakeSignInPage:
-    """BofA's sign-in page: a hidden copy of the user ID box plus the visible one, the user ID already saved."""
+    """BofA's home page: the sign-in boxes sit in an embedded frame, the user ID already saved."""
     def __init__(self, autofilled=False):
-        self.uid, self.pwd, self.signed_in, self.url = FakeBox("*****1234"), FakeBox(autofilled=autofilled), False, None
+        self.uid, self.pwd = FakeBox("*****1234"), FakeBox(autofilled=autofilled)
+        self.frames = [FakeFrame({}), FakeFrame({"uid": self.uid, "pwd": self.pwd})]   # not in the main frame
+        self.signed_in, self.url = False, None
 
     def goto(self, url): self.url = url
-    def locator(self, sel):
-        if sel == "#oid >> visible=true": return self.uid               # only the shown copy counts
-        if sel == "input[type=password] >> visible=true": return self.pwd
-        return Nothing()
     def get_by_text(self, pattern):
         page = self
         class T:
@@ -101,13 +109,12 @@ class FakeSignInPage:
         return T()
     def wait_for_timeout(self, ms):
         if self.pwd.pressed: self.signed_in = True                       # Enter was pressed: BofA signs in
-    def eval_on_selector_all(self, sel, js): return []
 
 
 def test_chromes_saved_password_is_used_as_is_click_then_enter():
     page = FakeSignInPage(autofilled=True)
     assert bf.sign_in(page, None) is True                                 # no Keychain login needed
-    assert page.url == bf.SIGN_IN
+    assert page.url == bf.HOME
     assert page.pwd.value == "" and page.pwd.clicked and page.pwd.pressed == ["Enter"]   # never typed over
 
 
