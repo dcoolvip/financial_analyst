@@ -891,15 +891,15 @@ def test_with_the_schedule_on_chase_says_it_runs_after_bank_of_america(env, monk
 
 
 
-def test_amex_can_be_recorded_from_the_dashboard(env, monkeypatch, tmp_path):
+def test_amex_connects_with_a_test_run(env, monkeypatch, tmp_path):
     from finance import bank_pull
-    recorded = []
-    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    started = []
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa": started.append((bank, dry_run)))
     at = app()
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
-    assert any("**American Express** · not set up yet" in m.value for m in at.markdown)
-    click(at, "⏺ Record American Express")
-    assert recorded == ["amex"]
+    assert any("**American Express** · not connected yet" in m.value for m in at.markdown)
+    click(at, "🧪 Test run for American Express")
+    assert started == [("amex", True)]
 
 
 def test_a_refresh_comes_back_to_the_same_place(env):

@@ -257,3 +257,22 @@ def test_chase_never_submits_an_empty_password(monkeypatch):
         cf.sign_in(page)
         assert (page.box.pressed == ["Enter"]) is entered
     assert any("pick your saved login" in t for t in told)
+
+
+def test_amex_csv_imports_without_doubles_and_flags_a_gap(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("amex_fetch", Path(__file__).parent.parent / "tools/amex_fetch.py")
+    af = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(af)
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    card = db.get_or_create_account(conn, "Amex Credit Card", "American Express", "credit_card")
+    csv = tmp_path / "activity.csv"
+    csv.write_bytes((Path(__file__).parent / "fixtures" / "amex_activity.csv").read_bytes())
+    first = af.import_csv(conn, csv)
+    assert first.startswith("Amex Credit Card (") and "0 already there" in first
+    again = af.import_csv(conn, csv)
+    assert " 0 added" in again                                                   # same file again: nothing doubled
+    conn.execute("UPDATE transactions SET date = '2020-01-01'")                  # pretend the dashboard stopped long ago
+    assert "⚠️ gap" in af.import_csv(conn, csv)
+    db.get_or_create_account(conn, "Amex Gold", "American Express", "credit_card")
+    assert "2 Amex cards" in af.import_csv(conn, csv)                           # two cards: never guess
