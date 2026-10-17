@@ -55,8 +55,9 @@ def test_login_comes_from_the_keychain_item(monkeypatch):
         if cmd[-1] == "-w":
             return subprocess.CompletedProcess(cmd, 0, "s3cret pass\n", "")
         return subprocess.CompletedProcess(cmd, 0, 'keychain: "x"\n    "acct"<blob>="jane.sample"\n', "")
-    monkeypatch.setattr(bf.subprocess, "run", fake)
+    monkeypatch.setattr(bf.bank_pull.subprocess, "run", fake)
     assert bf.keychain_login() == ("jane.sample", "s3cret pass")
-    monkeypatch.setattr(bf.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 44, "", "not found"))
-    with pytest.raises(SystemExit, match="bofa_setup.sh"):
+    monkeypatch.setattr(bf.bank_pull.subprocess, "run",
+                        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 44, "", "not found"))
+    with pytest.raises(SystemExit, match="save it in the dashboard"):
         bf.keychain_login()

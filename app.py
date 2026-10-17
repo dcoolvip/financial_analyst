@@ -20,7 +20,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, plaid, portfolio, retirement
+from finance import assets, bank_pull, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, plaid, portfolio, retirement
 
 
 @st.cache_resource
@@ -35,7 +35,7 @@ def _reload_changed_modules() -> None:
     order = [paths, categorize, db, finance.importers.base, finance.importers.amex, finance.importers.apple_card, finance.importers.barclays, finance.importers.bofa, finance.importers.chase, finance.importers.wealthfront,
              finance.importers.statements,
              importers,
-             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon, plaid]
+             insights, forecast, charts, demo, portfolio, editing, checkpoints, assets, pokemon, plaid, bank_pull]
     seen = _loaded_mtimes()
     first_run = not seen
     stale = [m for m in order if seen.get(m.__name__) != os.path.getmtime(m.__file__)]
@@ -1729,6 +1729,71 @@ def render_plaid_links(keys: dict) -> None:
             st.rerun()
 
 
+@st.fragment(run_every=4)
+def bofa_status() -> None:
+    """While a pull runs: what it's doing (refreshes by itself)."""
+    if bank_pull.running():
+        st.info("Pulling from Bank of America - a Chrome window is open on this Mac. If BofA asks for a code, "
+                "type it there.", icon="⏳")
+        if out := bank_pull.output().strip():
+            st.code("\n".join(out.splitlines()[-8:]), language=None)
+    elif st.session_state.pop("bofa_was_running", False):
+        st.rerun()                                     # finished: refresh the whole page with the new data
+    if bank_pull.running():
+        st.session_state["bofa_was_running"] = True
+
+
+def render_bofa_pull() -> None:
+    user = bank_pull.saved_user()
+    st.caption("Signs in to BofA in a Chrome window on this Mac, downloads statements it hasn't seen, checks each "
+               "against its printed totals and imports it - balance plus any transactions not already here.")
+    if user:
+        c1, c2 = st.columns([3, 1])
+        c1.markdown(f"Login saved in your Mac's Keychain (user ID {user[:2]}•••).")
+        if c2.button("Remove login"):
+            bank_pull.forget_login()
+            st.rerun()
+    if not user or st.toggle("Change the saved login", key="bofa_change"):
+        with st.form("bofa_login", border=False):
+            st.caption("Saved only in your Mac's Keychain - not in the dashboard's files or the code.")
+            k1, k2 = st.columns(2)
+            uid = k1.text_input("BofA user ID", value=user or "")
+            pw = k2.text_input("BofA password", type="password")
+            if st.form_submit_button("Save to Keychain"):
+                if uid.strip() and pw:
+                    bank_pull.save_login(uid, pw)
+                    st.session_state.pop("bofa_change", None)
+                    st.rerun()
+                st.error("Enter both the user ID and the password.")
+    busy = bank_pull.running()
+    b1, b2 = st.columns(2)
+    if b1.button("▶️ Pull now", type="primary", disabled=not user or busy):
+        bank_pull.start()
+        st.rerun()
+    if b2.button("🧪 Test run (imports into a copy)", disabled=not user or busy,
+                 help="Everything a real pull does, but the import goes into a throwaway copy of your data."):
+        bank_pull.start(dry_run=True)
+        st.rerun()
+    bofa_status()
+    if not busy and (last := bank_pull.last_results()):
+        st.markdown(f"**Last pull** · {last[0]}")
+        for line in last[1]:
+            st.markdown(f"- {line}")
+    elif not busy and (out := bank_pull.output().strip()):
+        st.caption("Last pull didn't finish: " + out.splitlines()[-1][:200])
+    on = st.toggle(f"Pull automatically on the {bank_pull.SCHEDULE_DAY}th of each month, {bank_pull.SCHEDULE_HOUR} AM",
+                   value=bank_pull.scheduled(), disabled=not user)
+    if on != bank_pull.scheduled():
+        try:
+            st.session_state["flash"] = bank_pull.set_schedule(on)
+        except RuntimeError as e:
+            st.error(str(e))
+        st.rerun()
+    if bank_pull.scheduled():
+        st.caption(f"Next automatic pull: {time.strftime('%b %-d, %-I %p', bank_pull.next_run())} "
+                   "(or when the Mac next wakes, if it's asleep then).")
+
+
 with tab_add:
     st.markdown("#### Import a file")
     with st.expander("How to download your files"):
@@ -1852,6 +1917,9 @@ with tab_add:
                         plaid.save_keys(cid, sec)
                         st.rerun()
                     st.error("Paste both the client ID and the secret.")
+
+    with st.expander("🏦 Bank of America · automatic monthly pull", expanded=bank_pull.running()):
+        render_bofa_pull()
 
     cps = checkpoints.list_all(conn)
     if cps:

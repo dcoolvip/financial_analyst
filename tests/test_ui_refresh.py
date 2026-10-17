@@ -30,6 +30,7 @@ class Upload:
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("FINANCE_NO_AI", "1")
+    monkeypatch.setenv("FINANCE_BOFA_KEYCHAIN", f"FinancialAnalyst test {tmp_path.name}")   # never the real login
     uploads = {"files": [], "keys": []}
 
     def fake_uploader(*_a, key=None, **_k):
@@ -812,3 +813,41 @@ def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):
     monkeypatch.setattr(plaid, "_post", down)
     click(at, "🔄 Sync now")
     assert any("⚠️ Last try failed: ITEM_LOGIN_REQUIRED" in c.value and line in c.value for c in at.caption)
+
+
+
+def test_bofa_pull_from_the_dashboard(env, monkeypatch, tmp_path):
+    from finance import bank_pull
+    keychain, started, schedule = {}, [], {"on": False}
+
+    def fake_run(cmd, **kw):
+        import subprocess
+        if cmd[1] == "add-generic-password":
+            assert cmd[cmd.index("-s") + 1].startswith("FinancialAnalyst test")     # the test's own Keychain name
+            keychain.update(user=cmd[cmd.index("-a") + 1], pw=cmd[cmd.index("-w") + 1])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[1] == "find-generic-password" and keychain:
+            out = keychain["pw"] + "\n" if cmd[-1] == "-w" else f'    "acct"<blob>="{keychain["user"]}"\n'
+            return subprocess.CompletedProcess(cmd, 0, out, "")
+        return subprocess.CompletedProcess(cmd, 44, "", "not found")
+    monkeypatch.setattr(bank_pull.subprocess, "run", fake_run)
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False: started.append(dry_run))
+    monkeypatch.setattr(bank_pull, "scheduled", lambda: schedule["on"])
+    monkeypatch.setattr(bank_pull, "set_schedule", lambda on: schedule.update(on=on) or "Scheduled.")
+    at = app()
+    assert [b for b in at.button if b.label == "▶️ Pull now"][0].disabled            # no login yet
+    [t for t in at.text_input if t.label == "BofA user ID"][0].input("jane.sample")
+    [t for t in at.text_input if t.label == "BofA password"][0].input("s3cret")
+    [b for b in at.button if b.label == "Save to Keychain"][0].click().run()
+    assert keychain == {"user": "jane.sample", "pw": "s3cret"}
+    assert any("user ID ja•••" in m.value for m in at.markdown) and not any("s3cret" in m.value for m in at.markdown)
+    click(at, "🧪 Test run (imports into a copy)")
+    click(at, "▶️ Pull now")
+    assert started == [True, False]
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    (tmp_path / "bank_fetch" / "bofa_runs.log").write_text(
+        "--- 2026-10-28 09:03\nBofa Checking (Sep 22 – Oct 21): 31 transactions, 4 already there, 27 added\n")
+    at.run()
+    assert any("27 added" in m.value for m in at.markdown)
+    [t for t in at.toggle if "Pull automatically" in t.label][0].set_value(True).run()
+    assert schedule["on"] is True and any("Next automatic pull" in c.value for c in at.caption)

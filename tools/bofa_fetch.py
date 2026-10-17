@@ -14,6 +14,7 @@ Uses the same Chrome profile as tools/bank_recorder.py, so BofA keeps recognizin
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -25,10 +26,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from finance import checkpoints, db, paths  # noqa: E402
+from finance import bank_pull, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
-KEYCHAIN_SERVICE = "FinancialAnalyst BofA"
 HOME = "https://www.bankofamerica.com/"
 STATEMENTS = "https://secure.bankofamerica.com/statements-documents/home/"
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
@@ -46,15 +46,11 @@ def notify(text: str) -> None:
 
 
 def keychain_login() -> tuple[str, str]:
-    """(user ID, password) from the Keychain item added by tools/bofa_setup.sh."""
-    meta = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE],
-                          capture_output=True, text=True)
-    pw = subprocess.run(["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-                        capture_output=True, text=True)
-    m = re.search(r'"acct"<blob>="([^"]*)"', meta.stdout)
-    if meta.returncode or pw.returncode or not m:
-        raise SystemExit("No BofA login in the Keychain yet - run tools/bofa_setup.sh once.")
-    return m.group(1), pw.stdout.rstrip("\n")
+    """(user ID, password) from the Keychain (saved in the dashboard, or with tools/bofa_setup.sh)."""
+    login = bank_pull.keychain_login()
+    if not login:
+        raise SystemExit("No BofA login in the Keychain yet - save it in the dashboard (Add data) first.")
+    return login
 
 
 # --- which statement tiles are new ------------------------------------------------------------------------------
@@ -220,4 +216,9 @@ def main(dry_run: bool = False) -> None:
 
 
 if __name__ == "__main__":
-    main(dry_run="--dry-run" in sys.argv)
+    try:
+        main(dry_run="--dry-run" in sys.argv)
+    finally:                                   # the dashboard shows "running" until this pull's pid file is gone
+        pid = paths.data_dir() / "bank_fetch" / "bofa_pull.pid"
+        if pid.exists() and pid.read_text().strip() == str(os.getpid()):
+            pid.unlink()
