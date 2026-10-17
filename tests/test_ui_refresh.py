@@ -888,3 +888,15 @@ def test_with_the_schedule_on_chase_says_it_runs_after_bank_of_america(env, monk
     at = app()
     rows = {m.value.split("**")[1]: m.value for m in at.markdown if m.value.startswith("🏦 **")}
     assert ", after Bank of America" in rows["Chase"] and "after" not in rows["Bank of America"]
+
+
+
+def test_amex_can_be_recorded_from_the_dashboard(env, monkeypatch, tmp_path):
+    from finance import bank_pull
+    recorded = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**American Express** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record American Express")
+    assert recorded == ["amex"]

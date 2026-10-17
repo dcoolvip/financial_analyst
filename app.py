@@ -1710,6 +1710,7 @@ def bofa_status() -> None:
 
 
 BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chase", "Chase")}   # key: (shown, institution)
+RECORD_FIRST = {"amex": "American Express"}     # banks whose route is being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 
@@ -1889,8 +1890,18 @@ def render_connected() -> None:
                                   "data. Once a test has run, the bank shows in the list above."):
                     bank_pull.start(dry_run=True, bank=b)
                     st.rerun()
+            for b, shown in RECORD_FIRST.items():          # being set up: a recording of the route comes first
+                rec = bank_pull.recording(b)
+                st.markdown(f"**{shown}** · " + (f"recorded {datetime.fromtimestamp(rec['recorded']):%b %-d} - "
+                                                  "being set up" if rec else "not set up yet"))
+                if st.button(f"⏺ Record {shown}", key=f"record_{b}", disabled=bank_pull.running(),
+                             help=f"A Chrome window opens on {shown}: sign in, go to your statements and download one, "
+                                  "then close the window. Only the labels of what you click are kept (digits masked) "
+                                  "- never what you type."):
+                    bank_pull.start_recording(b)
+                    st.rerun()
             bofa_status()
-            st.caption("Other banks (Amex, …) can be added the same way - ask for the one you want next.")
+            st.caption("Other banks can be added the same way - ask for the one you want next.")
     if keys:
         with st.expander("⚙️ Plaid settings"):
             plaid_settings(keys)
