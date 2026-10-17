@@ -42,6 +42,8 @@ def running() -> bool:
 
 
 def start(dry_run: bool = False) -> None:
+    if os.environ.get("FINANCE_NO_BANK_PULL"):
+        raise RuntimeError("Bank pulls are switched off here (tests)")
     if running():
         return
     script = paths.ROOT / "tools" / "bofa_fetch.py"
@@ -59,23 +61,29 @@ def output() -> str:
         return ""
 
 
-def last_results() -> tuple[str, list[str]] | None:
-    """The newest entry of bofa_runs.log: (when, one line per statement)."""
+def last_results(real_only: bool = False) -> tuple[str, list[str]] | None:
+    """The newest entry of bofa_runs.log: (when, one line per statement). real_only skips test runs."""
     try:
         text = (_dir() / "bofa_runs.log").read_text()
     except FileNotFoundError:
         return None
-    runs = [r for r in text.split("--- ") if r.strip()]
+    runs = [r for r in text.split("--- ") if r.strip() and not (real_only and "(dry run)" in r.splitlines()[0])]
     if not runs:
         return None
     head, *lines = runs[-1].strip().splitlines()
     return head, lines
 
 
+def set_up() -> bool:
+    """Bank of America is connected: it has been updated (or tested) at least once, or it's scheduled."""
+    return (_dir() / "bofa_runs.log").exists() or (_dir() / "bofa_fetched.json").exists() or scheduled()
+
+
 # --- the monthly schedule ---------------------------------------------------------------------------------------
 
 def plist() -> Path:
-    return Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+    agents = os.environ.get("FINANCE_LAUNCH_AGENTS") or Path.home() / "Library" / "LaunchAgents"   # tests: their own
+    return Path(agents) / f"{LABEL}.plist"
 
 
 def scheduled() -> bool:

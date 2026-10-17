@@ -1656,45 +1656,11 @@ def plaid_sync(keys: dict, only: set[str] | None = None) -> None:
     st.session_state["flash"] = ("Synced - " + ", ".join(done)) if done else "Synced - nothing to import yet"
 
 
-def render_plaid_links(keys: dict) -> None:
-    """Linked banks, a Link button that opens Plaid's own sign-in, Sync, and matching new accounts."""
-    items = keys.get("items", [])
-    names = dict(zip(accts["id"], accts["name"]))
-    m = plaid.mapping(conn)
-    for it in items:
-        mine = [names.get((m.get(pid) or {}).get("account_id")) for pid in it.get("accounts", [])]
-        c1, c2 = st.columns([4, 1])
-        c1.markdown(f"**{it['institution']}** → " + (", ".join(n for n in mine if n) or "not matched yet"))
-        c1.caption(refresh_line(it.get("synced"), plaid.next_sync(it), it.get("error")))
-        if c2.button("Unlink", key=f"unlink_{it['item_id']}"):
-            plaid.remove_item(it["item_id"], keys)
-            st.rerun()
-    if items:
-        st.caption("Each linked bank updates on its own once a month, the first time you open the dashboard after "
-                   "its planned date. **Sync now** updates all of them any time.")
-    b1, b2 = st.columns(2)
-    if b1.button("➕ Link a bank", type="primary"):
-        try:
-            st.session_state["plaid_token"] = plaid.link_token(keys)
-            st.session_state["plaid_open"] = True
-        except plaid.PlaidError as e:
-            st.error(f"Plaid said: {e}")
-    if items and b2.button("🔄 Sync now"):
-        plaid_sync(keys)
-        st.rerun()
-    if token := st.session_state.get("plaid_token"):
-        got = _plaid_link(token=token, key="plaid_link", default=None)
-        if got and got.get("token") == token:
-            st.session_state.pop("plaid_token")
-            if got.get("public_token"):
-                try:
-                    new = plaid.add_item(got["public_token"], got.get("institution") or "Bank", keys)
-                except plaid.PlaidError as e:
-                    st.error(f"Plaid said: {e}")
-                else:
-                    plaid_sync(plaid.load_keys(), only={new["item_id"]})        # just the new bank
-            st.rerun()
+def plaid_matching(keys: dict, item_id: str | None) -> None:
+    """'Which of your accounts is …?' for one linked bank's accounts not matched yet (with ➕ New account…)."""
     for u in plaid.unmatched(conn):
+        if u.get("item_id") != item_id:
+            continue
         kinds = plaid.PLAID_KINDS.get(u["type"], [])
         new_acct, skip = "➕ New account…", "Don't import this one"
         options = list(accts.loc[accts["type"].isin(kinds), "name"]) + [new_acct, skip]
@@ -1733,7 +1699,7 @@ def render_plaid_links(keys: dict) -> None:
 def bofa_status() -> None:
     """While a pull runs: what it's doing (refreshes by itself)."""
     if bank_pull.running():
-        st.info("Pulling from Bank of America - a Chrome window is open on this Mac. If BofA asks for a code, "
+        st.info("Updating Bank of America - a Chrome window is open on this Mac. If BofA asks for a code, "
                 "type it there.", icon="⏳")
         if out := bank_pull.output().strip():
             st.code("\n".join(out.splitlines()[-8:]), language=None)
@@ -1743,40 +1709,180 @@ def bofa_status() -> None:
         st.session_state["bofa_was_running"] = True
 
 
-def render_bofa_pull() -> None:
-    st.caption("Signs in to BofA in a Chrome window on this Mac with the password Chrome saved, downloads "
-               "statements it hasn't seen, checks each against its printed totals and imports it: balance plus any "
-               "transactions not already here.")
-    busy = bank_pull.running()
-    b1, b2 = st.columns(2)
-    if b1.button("▶️ Pull now", type="primary", disabled=busy):
+BOFA_STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc"]
+PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
+
+
+def connection_row(icon: str, bank: str, mine: list[str], status: str, key: str):
+    """One connected bank: what it fills, when it last/next updates, an Update button and its ⚙️ settings."""
+    c1, c2, c3 = st.columns([6, 1.3, 0.8], vertical_alignment="center")
+    c1.markdown(f"{icon} **{bank}** · " + (", ".join(mine) or "not matched yet") + f"  \n{status}")
+    update = c2.button("Update", key=f"update_{key}")
+    return update, c3.popover("⚙️", help="Settings for this connection")
+
+
+def bofa_row() -> None:
+    mine = list(accts.loc[(accts["institution"] == "Bank of America") & accts["type"].isin(BOFA_STATEMENT_TYPES),
+                          "name"])
+    last = bank_pull.last_results(real_only=True)
+    when = f"Updated {datetime.strptime(last[0], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
+    nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" if bank_pull.scheduled()
+           else "no monthly update scheduled")
+    problems = [l for l in (last[1] if last else []) if any(w in l for w in PROBLEM)]
+    status = f"{when} · {nxt}" + (f"  \n⚠️ {problems[0]}" if problems else "")
+    update, gear = connection_row("🏦", "Bank of America", mine, status, "bofa")
+    if update:
         bank_pull.start()
         st.rerun()
-    if b2.button("🧪 Test run (imports into a copy)", disabled=busy,
-                 help="Everything a real pull does, but the import goes into a throwaway copy of your data."):
-        bank_pull.start(dry_run=True)
-        st.rerun()
+    with gear:
+        st.caption("Signs in to BofA in a Chrome window on this Mac with the password Chrome saved, downloads "
+                   "statements it hasn't seen, checks each against its printed totals and imports it: balance plus "
+                   "any transactions not already here.")
+        if st.button("🧪 Test run (imports into a copy)", disabled=bank_pull.running(),
+                     help="Everything an update does, but the import goes into a throwaway copy of your data."):
+            bank_pull.start(dry_run=True)
+            st.rerun()
+        on = st.toggle(f"Update automatically on the {bank_pull.SCHEDULE_DAY}th of each month, "
+                       f"{bank_pull.SCHEDULE_HOUR} AM", value=bank_pull.scheduled())
+        if on != bank_pull.scheduled():
+            try:
+                st.session_state["flash"] = bank_pull.set_schedule(on)
+            except RuntimeError as e:
+                st.error(str(e))
+            st.rerun()
+        if (latest := bank_pull.last_results()):
+            st.markdown(f"**Last update** · {latest[0]}")
+            for line in latest[1]:
+                st.markdown(f"- {line}")
+        elif out := bank_pull.output().strip():
+            st.caption("Last update didn't finish: " + out.splitlines()[-1][:200])
     bofa_status()
-    if not busy and (last := bank_pull.last_results()):
-        st.markdown(f"**Last pull** · {last[0]}")
-        for line in last[1]:
-            st.markdown(f"- {line}")
-    elif not busy and (out := bank_pull.output().strip()):
-        st.caption("Last pull didn't finish: " + out.splitlines()[-1][:200])
-    on = st.toggle(f"Pull automatically on the {bank_pull.SCHEDULE_DAY}th of each month, {bank_pull.SCHEDULE_HOUR} AM",
-                   value=bank_pull.scheduled())
-    if on != bank_pull.scheduled():
-        try:
-            st.session_state["flash"] = bank_pull.set_schedule(on)
-        except RuntimeError as e:
-            st.error(str(e))
+
+
+def plaid_row(it: dict, keys: dict) -> None:
+    names, m = dict(zip(accts["id"], accts["name"])), plaid.mapping(conn)
+    mine = [n for n in (names.get((m.get(pid) or {}).get("account_id")) for pid in it.get("accounts", [])) if n]
+    update, gear = connection_row("🔌", it["institution"], mine,
+                                  refresh_line(it.get("synced"), plaid.next_sync(it), it.get("error")), it["item_id"])
+    if update:
+        plaid_sync(keys, only={it["item_id"]})
         st.rerun()
-    if bank_pull.scheduled():
-        st.caption(f"Next automatic pull: {time.strftime('%b %-d, %-I %p', bank_pull.next_run())} "
-                   "(or when the Mac next wakes, if it's asleep then).")
+    with gear:
+        st.caption("Linked through Plaid. Updates on its own once a month, the first time you open the dashboard "
+                   "after its planned date.")
+        if st.button("Unlink", key=f"unlink_{it['item_id']}"):
+            plaid.remove_item(it["item_id"], keys)
+            st.rerun()
+    plaid_matching(keys, it["item_id"])
+
+
+def plaid_keys_form() -> None:
+    st.caption("Paste the keys from Plaid's dashboard (Developers → Keys). They're saved only on this Mac, "
+               "in the private data folder - never in the code or the database.")
+    with st.form("plaid_keys", border=False):
+        k1, k2 = st.columns(2)
+        cid = k1.text_input("Client ID")
+        sec = k2.text_input("Production secret", type="password")
+        if st.form_submit_button("Save keys"):
+            if cid.strip() and sec.strip():
+                plaid.save_keys(cid, sec)
+                st.rerun()
+            st.error("Paste both the client ID and the secret.")
+
+
+def plaid_link_flow(keys: dict) -> None:
+    """The Link with Plaid button and Plaid's own sign-in pop-up."""
+    if st.button("Link with Plaid", type="primary"):
+        try:
+            st.session_state["plaid_token"] = plaid.link_token(keys)
+        except plaid.PlaidError as e:
+            st.error(f"Plaid said: {e}")
+    if token := st.session_state.get("plaid_token"):
+        got = _plaid_link(token=token, key="plaid_link", default=None)
+        if got and got.get("token") == token:
+            st.session_state.pop("plaid_token")
+            if got.get("public_token"):
+                try:
+                    new = plaid.add_item(got["public_token"], got.get("institution") or "Bank", keys)
+                except plaid.PlaidError as e:
+                    st.error(f"Plaid said: {e}")
+                else:
+                    plaid_sync(plaid.load_keys(), only={new["item_id"]})        # just the new bank
+            st.rerun()
+
+
+def plaid_settings(keys: dict) -> None:
+    st.caption(f"Keys saved on this Mac (client ID {keys['client_id'][:6]}…, secret ••••{keys['secret'][-4:]}).")
+    b1, b2 = st.columns(2)
+    if b1.button("Check which of my banks Plaid can connect"):
+        with st.spinner("Asking Plaid…"):
+            try:
+                plaid.check(plaid.institutions_to_check(accts["institution"]), keys)
+            except plaid.PlaidError as e:
+                st.error(f"Plaid said: {e}")
+    if b2.button("Remove the keys"):
+        plaid.forget_keys()
+        st.rerun()
+    if (last := plaid.last_check()) and last["rows"]:
+        res = pd.DataFrame(last["rows"])
+        res["Plaid can connect"] = res["oauth"].map(
+            {False: "✅ Now", True: "🔒 Needs full production"}).fillna("❓ Not found on Plaid")
+        res["Has"] = res["products"].map(lambda ps: ", ".join(ps) or "-")
+        st.caption(f"Checked {datetime.fromtimestamp(last['checked']):%b %-d, %-I:%M %p}. "
+                   "“Needs full production” = the bank sends you to its own sign-in page (OAuth), which "
+                   "Limited Production access can't use.")
+        st.dataframe(res.rename(columns={"yours": "Your institution", "plaid_name": "On Plaid as"})
+                     [["Your institution", "On Plaid as", "Plaid can connect", "Has"]],
+                     hide_index=True, width="stretch")
+
+
+def render_connected() -> None:
+    """Every bank that updates on its own, in one list - whatever connects it (Plaid or a browser pull)."""
+    keys = plaid.load_keys()
+    items = (keys or {}).get("items", [])
+    bofa_on = bank_pull.set_up()
+    h1, h2 = st.columns([6, 1.5], vertical_alignment="bottom")
+    h1.markdown("#### Connected accounts", help="Banks that update themselves. Plaid banks update once a month "
+                "when you open the dashboard; Bank of America on its monthly date.")
+    if (items or bofa_on) and h2.button("Update all"):
+        if items:
+            plaid_sync(keys)
+        if bofa_on:
+            bank_pull.start()
+        st.rerun()
+    with st.container(border=True):
+        if not items and not bofa_on:
+            st.caption("Nothing connected yet.")
+        if bofa_on:
+            bofa_row()
+        for it in items:
+            plaid_row(it, keys)
+        for_unknown = [u for u in plaid.unmatched(conn) if not u.get("item_id")]
+        if keys and for_unknown:
+            plaid_matching(keys, None)
+    with st.expander("➕ Connect a bank", expanded=bool(st.session_state.get("plaid_token")) or not (items or bofa_on)):
+        how = st.radio("How", ["Through Plaid", "Browser pull"], horizontal=True, label_visibility="collapsed",
+                       captions=["Wealthfront, E*TRADE / Morgan Stanley, Barclays… (Plaid's own sign-in)",
+                                 "Signs in with Chrome's saved password and downloads statements"])
+        if how == "Through Plaid":
+            if keys:
+                plaid_link_flow(keys)
+            else:
+                plaid_keys_form()
+        else:
+            st.caption("Bank of America is set up this way" if bofa_on else
+                       "Bank of America works this way: run a test first (it imports into a copy of your data).")
+            if not bofa_on and st.button("🧪 Test run for Bank of America", disabled=bank_pull.running()):
+                bank_pull.start(dry_run=True)
+                st.rerun()
+            st.caption("Other banks (Chase, Amex, …) can be added the same way - ask for the one you want next.")
+    if keys:
+        with st.expander("⚙️ Plaid settings"):
+            plaid_settings(keys)
 
 
 with tab_add:
+    render_connected()
     st.markdown("#### Import a file")
     with st.expander("How to download your files"):
         st.markdown(
@@ -1859,49 +1965,6 @@ with tab_add:
                 if all(x.file_id in done for x in files):          # every CSV imported: clear the uploader
                     st.session_state["uploads_done"] = st.session_state.get("uploads_done", 0) + 1
                 st.rerun()                                          # every tab reflects the import right away
-
-    with st.expander("🔌 Connect banks automatically (Plaid)", expanded=bool(st.session_state.get("plaid_open"))):
-        keys = plaid.load_keys()
-        if keys:
-            render_plaid_links(keys)
-            st.divider()
-            st.caption(f"Keys saved on this Mac (client ID {keys['client_id'][:6]}…, secret ••••{keys['secret'][-4:]}).")
-            b1, b2 = st.columns(2)
-            if b1.button("Check which of my banks Plaid can connect"):
-                with st.spinner("Asking Plaid…"):
-                    try:
-                        plaid.check(plaid.institutions_to_check(accts["institution"]), keys)
-                    except plaid.PlaidError as e:
-                        st.error(f"Plaid said: {e}")
-            if b2.button("Remove the keys"):
-                plaid.forget_keys()
-                st.rerun()
-            if (last := plaid.last_check()) and last["rows"]:
-                res = pd.DataFrame(last["rows"])
-                res["Plaid can connect"] = res["oauth"].map(
-                    {False: "✅ Now", True: "🔒 Needs full production"}).fillna("❓ Not found on Plaid")
-                res["Has"] = res["products"].map(lambda ps: ", ".join(ps) or "-")
-                st.caption(f"Checked {datetime.fromtimestamp(last['checked']):%b %-d, %-I:%M %p}. "
-                           "“Needs full production” = the bank sends you to its own sign-in page (OAuth), which "
-                           "Limited Production access can't use.")
-                st.dataframe(res.rename(columns={"yours": "Your institution", "plaid_name": "On Plaid as"})
-                             [["Your institution", "On Plaid as", "Plaid can connect", "Has"]],
-                             hide_index=True, width="stretch")
-        else:
-            st.caption("Paste the keys from Plaid's dashboard (Developers → Keys). They're saved only on this Mac, "
-                       "in the private data folder - never in the code or the database.")
-            with st.form("plaid_keys", border=False):
-                k1, k2 = st.columns(2)
-                cid = k1.text_input("Client ID")
-                sec = k2.text_input("Production secret", type="password")
-                if st.form_submit_button("Save keys"):
-                    if cid.strip() and sec.strip():
-                        plaid.save_keys(cid, sec)
-                        st.rerun()
-                    st.error("Paste both the client ID and the secret.")
-
-    with st.expander("🏦 Bank of America · automatic monthly pull", expanded=bank_pull.running()):
-        render_bofa_pull()
 
     cps = checkpoints.list_all(conn)
     if cps:

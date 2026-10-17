@@ -30,6 +30,8 @@ class Upload:
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("FINANCE_NO_AI", "1")
+    monkeypatch.setenv("FINANCE_NO_BANK_PULL", "1")                    # never start a real browser pull from tests
+    monkeypatch.setenv("FINANCE_LAUNCH_AGENTS", str(tmp_path / "LaunchAgents"))   # never see the real schedule
     uploads = {"files": [], "keys": []}
 
     def fake_uploader(*_a, key=None, **_k):
@@ -699,13 +701,13 @@ def test_plaid_link_sync_and_match_from_the_ui(env, monkeypatch):
     monkeypatch.setattr(plaid, "_post", fake)
     plaid.save_keys("cid", "sec")
     at = app()
-    click(at, "➕ Link a bank")                                   # opens Plaid's pop-up with a fresh link token
+    click(at, "Link with Plaid")                                 # opens Plaid's pop-up with a fresh link token
     assert ("/link/token/create" in [c[0] for c in fake.calls])
     plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())   # what the pop-up's success does
     at.run()
-    click(at, "🔄 Sync now")
+    click(at, "Update all")
     assert conn.execute("SELECT amount FROM transactions WHERE account_id = ?", (card,)).fetchall() == [(-25.0,)]
-    assert any("**Barclays - Cards** → Old Navy Card" in m.value for m in at.markdown)
+    assert any("🔌 **Barclays - Cards** · Old Navy Card" in m.value for m in at.markdown)   # its row in the list
     q = [s for s in at.selectbox if "Mystery" in s.label]
     assert q and q[0].options == ["Barclays Checking", "➕ New account…", "Don't import this one"]  # same kind only
     q[0].select("Barclays Checking").run()
@@ -727,7 +729,7 @@ def test_plaid_account_can_go_into_a_new_dashboard_account(env, monkeypatch):
     plaid.save_keys("cid", "sec")
     plaid.add_item("public-tok", "E*TRADE from Morgan Stanley", plaid.load_keys())
     at = app()
-    click(at, "🔄 Sync now")
+    click(at, "Update all")
     at = app()                                                                # a refresh: still asked
     q = [s for s in at.selectbox if "Individual Brokerage" in s.label][0]
     q.select("➕ New account…").run()
@@ -770,7 +772,7 @@ def test_each_bank_updates_itself_once_a_month_and_only_when_due(env, monkeypatc
     tokens = lambda: [c[1]["access_token"] for c in fake.calls if c[0] == "/accounts/get"]
     at = app()
     assert tokens() == ["a2"]                                                 # only the bank whose month is up
-    assert any("updates on its own once a month" in c.value for c in at.caption)
+    assert any("Updates on its own once a month" in c.value for c in at.caption)
     app()
     assert tokens() == ["a2"]                                                 # and not again right away
 
@@ -803,33 +805,47 @@ def test_each_linked_account_shows_last_and_next_refresh(env, monkeypatch):
     synced = plaid.load_keys()["items"][0]["synced"]
     nxt = datetime.fromtimestamp(synced + plaid.SYNC_EVERY_S)
     line = f"Last refreshed {datetime.fromtimestamp(synced):%b %-d, %-I:%M %p} · next planned {nxt:%b %-d}"
-    assert any(line in c.value for c in at.caption)                           # in the Plaid section
+    assert any(line in m.value for m in at.markdown)                          # on its row in Connected accounts
     [s for s in at.selectbox if s.label == "Show details for"][0].select("Old Navy Card").run()
     assert any("Linked through Plaid (Barclays - Cards)" in c.value and line in c.value for c in at.caption)
 
     def down(endpoint, body, keys):
         raise plaid.PlaidError("ITEM_LOGIN_REQUIRED (ITEM_LOGIN_REQUIRED)")
     monkeypatch.setattr(plaid, "_post", down)
-    click(at, "🔄 Sync now")
-    assert any("⚠️ Last try failed: ITEM_LOGIN_REQUIRED" in c.value and line in c.value for c in at.caption)
+    click(at, "Update")
+    assert any("⚠️ Last try failed: ITEM_LOGIN_REQUIRED" in m.value and line in m.value for m in at.markdown)
 
 
 
-def test_bofa_pull_from_the_dashboard(env, monkeypatch, tmp_path):
+def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
     from finance import bank_pull
     started, schedule = [], {"on": False}
     monkeypatch.setattr(bank_pull, "start", lambda dry_run=False: started.append(dry_run))
     monkeypatch.setattr(bank_pull, "scheduled", lambda: schedule["on"])
     monkeypatch.setattr(bank_pull, "set_schedule", lambda on: schedule.update(on=on) or "Scheduled.")
+    conn, _ = env
+    db.get_or_create_account(conn, "Bofa Checking", "Bank of America", "checking")
+    db.get_or_create_account(conn, "Honda Civic", "Bank of America", "vehicle")       # not from statements
     at = app()
+    assert any("Nothing connected yet" in c.value for c in at.caption)
     assert not [t for t in at.text_input if "BofA" in t.label]                       # no login to type in
-    click(at, "🧪 Test run (imports into a copy)")
-    click(at, "▶️ Pull now")
-    assert started == [True, False]
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    click(at, "🧪 Test run for Bank of America")
+    assert started == [True]
     (tmp_path / "bank_fetch").mkdir(exist_ok=True)
     (tmp_path / "bank_fetch" / "bofa_runs.log").write_text(
-        "--- 2026-10-28 09:03\nBofa Checking (Sep 22 – Oct 21): 31 transactions, 4 already there, 27 added\n")
+        "--- 2026-10-20 10:00 (dry run)\nBofa Checking (Sep 22 – Oct 21): 31 transactions, 31 already there, 0 added\n"
+        "--- 2026-10-28 09:03\nBofa Checking (Sep 22 – Oct 21): 31 transactions, 4 already there, 27 added\n"
+        "Advantage Savings - ####: downloaded the wrong document (it's for an account ending 6784) - not imported\n")
     at.run()
-    assert any("27 added" in m.value for m in at.markdown)
-    [t for t in at.toggle if "Pull automatically" in t.label][0].set_value(True).run()
-    assert schedule["on"] is True and any("Next automatic pull" in c.value for c in at.caption)
+    row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))
+    assert "Bofa Checking" in row and "Honda Civic" not in row
+    assert "Updated Oct 28" in row and "no monthly update scheduled" in row
+    assert "⚠️ Advantage Savings" in row                                              # a problem shows on the row
+    assert any("27 added" in m.value for m in at.markdown)                            # details under ⚙️
+    [b for b in at.button if b.key == "update_bofa"][0].click().run()
+    assert started == [True, False]
+    [t for t in at.toggle if "Update automatically" in t.label][0].set_value(True).run()
+    assert schedule["on"] is True
+    row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))
+    assert "next " in row and "no monthly update" not in row
