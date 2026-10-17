@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from finance import paths  # noqa: E402
 
-BANKS = {"bofa": "https://www.bankofamerica.com/"}
+BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/"}
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60
@@ -153,7 +153,16 @@ def _save(out_dir: Path, name: str, steps: list) -> None:
     print(f"Recorded {len(steps)} steps (labels only, digits masked) to {rec}")
 
 
+def _done() -> None:
+    import os
+    pid = paths.data_dir() / "bank_fetch" / "bofa_pull.pid"
+    if pid.exists() and pid.read_text().strip() == str(os.getpid()):
+        pid.unlink()
+
+
 if __name__ == "__main__":
+    import atexit
+    atexit.register(_done)
     if len(sys.argv) not in (2, 3) or sys.argv[1] not in BANKS or not re.fullmatch(r"\w*", sys.argv[-1]):
         sys.exit(f"usage: bank_recorder.py {{{','.join(BANKS)}}} [statements|transactions|...]")
     main(*sys.argv[1:])

@@ -849,3 +849,19 @@ def test_bofa_from_connected_accounts(env, monkeypatch, tmp_path):
     assert schedule["on"] is True
     row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))
     assert "next " in row and "no monthly update" not in row
+
+
+
+def test_chase_can_be_recorded_from_the_dashboard(env, monkeypatch, tmp_path):
+    from finance import bank_pull
+    recorded = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append((bank, label)))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**Chase** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record Chase")
+    assert recorded == [("chase", "statements")]
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    (tmp_path / "bank_fetch" / "chase_statements_recording.json").write_text('{"recorded": 1792300000, "steps": []}')
+    at.run()
+    assert any("**Chase** · recorded" in m.value for m in at.markdown)

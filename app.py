@@ -1699,7 +1699,7 @@ def plaid_matching(keys: dict, item_id: str | None) -> None:
 def bofa_status() -> None:
     """While a pull runs: what it's doing (refreshes by itself)."""
     if bank_pull.running():
-        st.info("Updating Bank of America - a Chrome window is open on this Mac. If BofA asks for a code, "
+        st.info("A bank's Chrome window is open on this Mac (updating, or recording). If the bank asks for a code, "
                 "type it there.", icon="⏳")
         if out := bank_pull.output().strip():
             st.code("\n".join(out.splitlines()[-8:]), language=None)
@@ -1875,7 +1875,16 @@ def render_connected() -> None:
             if not bofa_on and st.button("🧪 Test run for Bank of America", disabled=bank_pull.running()):
                 bank_pull.start(dry_run=True)
                 st.rerun()
-            st.caption("Other banks (Chase, Amex, …) can be added the same way - ask for the one you want next.")
+            bofa_status()
+            chase = bank_pull.recording("chase")
+            st.markdown("**Chase** · " + (f"recorded {datetime.fromtimestamp(chase['recorded']):%b %-d} - being set up"
+                                          if chase else "not set up yet"))
+            st.caption("A Chrome window opens on Chase: sign in, go to **Statements & documents** and download one "
+                       "statement, then close the window. Only the labels of what you click are kept (digits masked) "
+                       "- never what you type.")
+            if st.button("⏺ Record Chase", disabled=bank_pull.running()):
+                bank_pull.start_recording("chase")
+                st.rerun()
     if keys:
         with st.expander("⚙️ Plaid settings"):
             plaid_settings(keys)

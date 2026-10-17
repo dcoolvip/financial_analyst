@@ -53,6 +53,28 @@ def start(dry_run: bool = False) -> None:
     _pid_file().write_text(str(p.pid))
 
 
+def start_recording(bank: str, label: str = "statements") -> None:
+    """Open the recorder for a bank (tools/bank_recorder.py): you sign in and click to one statement's download;
+    it keeps the labels of what you clicked (digits masked), so the automatic pull can be written from facts."""
+    if os.environ.get("FINANCE_NO_BANK_PULL"):
+        raise RuntimeError("Bank pulls are switched off here (tests)")
+    if running():
+        return
+    script = paths.ROOT / "tools" / "bank_recorder.py"
+    with run_log().open("w") as out:
+        p = subprocess.Popen([sys.executable, str(script), bank, label], cwd=paths.ROOT, stdout=out,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+    _pid_file().write_text(str(p.pid))
+
+
+def recording(bank: str, label: str = "statements") -> dict | None:
+    try:
+        import json
+        return json.loads((_dir() / f"{bank}_{label}_recording.json").read_text())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
 def output() -> str:
     """What the running (or last) pull printed - status lines, no amounts."""
     try:
