@@ -125,6 +125,15 @@ def sign_in(page) -> bool:
     return False
 
 
+def link_pattern(info: dict) -> re.Pattern:
+    """The tile's own "Download PDF for <title> for <account>" link. Long names are cut short on the tile
+    ("Customized Cash Re...") but not in the link, so a shortened name matches on its beginning."""
+    label = info["label"].strip()
+    short = label.endswith(("...", "…"))
+    name = re.escape(label.rstrip(".…").strip())
+    return re.compile(rf"for\s+{re.escape(info['title'])}\s+for\s+{name}" + ("" if short else r"\s*$"), re.I)
+
+
 def mask_digits(s: str) -> str:
     return re.sub(r"\d", "#", s)
 
@@ -176,8 +185,7 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path, dict]
             continue
         tile.click()
         # this statement's own link: "Download PDF for September Statement for Advantage Savings - 1234"
-        link = page.locator("#downloadPDFLink").filter(has_text=re.compile(
-            rf"for\s+{re.escape(info['title'])}\s+for\s+{re.escape(info['label'])}", re.I)).first
+        link = page.locator("#downloadPDFLink").filter(has_text=link_pattern(info)).first
         try:
             link.wait_for(state="visible", timeout=15_000)
         except Exception:

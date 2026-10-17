@@ -225,8 +225,12 @@ def _opening_balance(s: Statement, t: str) -> None:
 
 
 def _parse_deposit(s: Statement, t: str) -> None:
-    s.account_type = "savings" if re.search(r"\bsavings\b", t, re.IGNORECASE) and not re.search(
-        r"\bchecking\b", t, re.IGNORECASE) else "checking"
+    head = t[:800]       # the account's own name ("Your Advantage Savings"); later pages mention transfers to others
+    if re.search(r"\bsavings\b", head, re.IGNORECASE) and not re.search(r"\bchecking\b", head, re.IGNORECASE):
+        s.account_type = "savings"
+    else:
+        s.account_type = "savings" if re.search(r"\bsavings\b", t, re.IGNORECASE) and not re.search(
+            r"\bchecking\b", t, re.IGNORECASE) else "checking"
     m = re.search(rf"ending balance(?: on| as of)?\s+(?:{_DATE_LONG}|{_DATE_NUM})?[^\d$\n]{{0,20}}{MONEY}", t,
                   re.IGNORECASE)
     if m:

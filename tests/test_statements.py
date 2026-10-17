@@ -573,3 +573,14 @@ def test_mismatched_statement_imports_its_balance_but_no_transactions(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 0
     assert conn.execute("SELECT balance FROM balances WHERE account_id = ? AND date = '2026-09-21'",
                         (acct,)).fetchone()[0] == 2930.0                       # the ending balance still saved
+
+
+
+def test_a_savings_statement_that_mentions_checking_is_still_savings():
+    """Regression: BofA's Advantage Savings statement mentions a transfer from checking further down, and was
+    read as a checking statement - so it couldn't be matched to the savings account."""
+    from finance.importers.statements import parse_text
+    text = ("Bank of America, N.A.\nYour Advantage Savings\nfor August 27, 2026 to September 25, 2026\n"
+            "Ending balance on September 25, 2026 $5,000.00\n" + "filler line\n" * 100       # past the header
+            + "09/02/26 Online Banking transfer from CHK 0522 checking 500.00\n")
+    assert parse_text(text).account_type == "savings"
