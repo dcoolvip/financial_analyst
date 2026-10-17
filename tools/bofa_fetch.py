@@ -163,6 +163,26 @@ def _autofilled(box) -> bool:
         return False
 
 
+QUICK_MS = 5000
+
+
+def _submit(frame, pwd, login) -> None:
+    """Chrome's saved password first: click into the box (that's when Chrome hands it to the page) and press
+    Enter if it's filled. Else type the Keychain login. Else ask you. Every step gives up quickly, never stalls."""
+    pwd.click(timeout=QUICK_MS)
+    pwd.page.wait_for_timeout(700)
+    if (pwd.input_value(timeout=QUICK_MS) or "") or _autofilled(pwd):
+        pwd.press("Enter", timeout=QUICK_MS)
+    elif login:
+        uid = _user_box(frame, pwd)
+        if uid is not None and not (uid.input_value(timeout=QUICK_MS) or "").strip():   # "Save User ID" may fill it
+            uid.fill(login[0], timeout=QUICK_MS)
+        pwd.fill(login[1], timeout=QUICK_MS)
+        pwd.press("Enter", timeout=QUICK_MS)
+    else:
+        notify("Chrome didn't fill in your BofA password - sign in in the Chrome window; the pull continues.")
+
+
 def sign_in(page, login: tuple[str, str] | None) -> bool:
     """Sign in on BofA's home page: with Chrome's saved password if it fills the boxes (click + Enter), else the
     Keychain login, else ask you to sign in in the window."""
@@ -182,17 +202,11 @@ def sign_in(page, login: tuple[str, str] | None) -> bool:
     if not pwd:
         print(f"No visible password box at {page.url.split('?')[0]}. Boxes seen: {_fields_seen(page)}", flush=True)
         notify("Couldn't find BofA's sign-in boxes - sign in yourself in the Chrome window; the pull continues.")
-    elif _autofilled(pwd):
-        pwd.click()                     # Chrome releases a saved password to the page only after a real click
-        pwd.press("Enter")
-    elif login:
-        uid = _user_box(frame, pwd)
-        if uid is not None and not (uid.input_value() or "").strip():   # "Save User ID" may have filled it in
-            uid.fill(login[0])
-        pwd.fill(login[1])
-        pwd.press("Enter")
     else:
-        notify("Chrome didn't fill in your BofA password - sign in in the Chrome window; the pull continues.")
+        try:
+            _submit(frame, pwd, login)
+        except Exception as e:          # you signed in yourself, or the page moved on: just wait for "signed in"
+            print(f"Sign-in step didn't finish ({e.__class__.__name__}) - waiting for you to be signed in.", flush=True)
     told, deadline = False, time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
         try:

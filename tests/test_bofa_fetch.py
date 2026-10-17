@@ -63,17 +63,24 @@ def test_login_comes_from_the_keychain_item_if_saved(monkeypatch):
 
 
 class FakeBox:
-    def __init__(self, value="", autofilled=False):
-        self.value, self.autofilled, self.pressed, self.clicked = value, autofilled, [], False
+    """Like Chrome: a saved password is filled in, but the page only gets it once the box is clicked."""
+    def __init__(self, value="", autofilled=False, gone=False):
+        self.value, self.autofilled, self.pressed, self.clicked, self.gone = value, autofilled, [], False, gone
+        self.page = None
 
+    def _check(self):
+        if self.gone:
+            raise TimeoutError("the box is gone - the page moved on")
     def count(self): return 1
     @property
     def first(self): return self
-    def input_value(self): return self.value
-    def fill(self, v): self.value = v
-    def press(self, key): self.pressed.append(key)
-    def click(self): self.clicked = True
-    def evaluate(self, js): return self.autofilled
+    def input_value(self, timeout=None):
+        self._check()
+        return "(saved)" if self.autofilled and self.clicked else self.value
+    def fill(self, v, timeout=None): self._check(); self.value = v
+    def press(self, key, timeout=None): self._check(); self.pressed.append(key)
+    def click(self, timeout=None): self._check(); self.clicked = True
+    def evaluate(self, js): return False                              # :autofill didn't match (as on BofA)
     def locator(self, sel): return Nothing()                            # no enclosing <form> in this fake
 
 
@@ -97,6 +104,7 @@ class FakeSignInPage:
     """BofA's home page: the sign-in boxes sit in an embedded frame, the user ID already saved."""
     def __init__(self, autofilled=False):
         self.uid, self.pwd = FakeBox("*****1234"), FakeBox(autofilled=autofilled)
+        self.pwd.page = self
         self.frames = [FakeFrame({}), FakeFrame({"uid": self.uid, "pwd": self.pwd})]   # not in the main frame
         self.signed_in, self.url = False, None
 
@@ -123,6 +131,19 @@ def test_chromes_saved_password_is_used_as_is_click_then_enter():
     assert bf.sign_in(page, None) is True                                 # no Keychain login needed
     assert page.url in (bf.HOME, bf.SIGN_IN)
     assert page.pwd.value == "" and page.pwd.clicked and page.pwd.pressed == ["Enter"]   # never typed over
+
+
+def test_if_you_sign_in_yourself_mid_way_the_pull_carries_on(monkeypatch):
+    """Regression: you clicked Log In while the script was typing the Keychain password; the box vanished, the
+    script waited 30 s on it and crashed - never reaching Statements."""
+    page = FakeSignInPage(autofilled=False)
+    page.pwd.gone = True                                                 # BofA already moved to your accounts
+    waits = []
+    def wait(ms):
+        waits.append(ms)
+        page.signed_in = len(waits) > 3                                  # ...and shows "Log Out" shortly after
+    page.wait_for_timeout = wait
+    assert bf.sign_in(page, ("jane.sample", "s3cret")) is True
 
 
 def test_without_chrome_autofill_the_keychain_login_is_typed_keeping_a_saved_user_id():
