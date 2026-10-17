@@ -1,0 +1,26 @@
+"""The bank recorder must never keep account numbers, balances or anything typed (no browser needed)."""
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("bank_recorder", Path(__file__).parent.parent / "tools/bank_recorder.py")
+rec = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(rec)
+
+
+def test_digits_and_amounts_are_masked():
+    assert rec.mask("Adv Plus Banking - 6784  $12,345.67 available") == "Adv Plus Banking - ####  $… available"
+    assert rec.mask("Balance -$1,000") == "Balance $…"
+
+
+def test_steps_keep_labels_only():
+    s = rec._clean({"event": "click", "tag": "a", "text": "Download", "id": "acct-123456",
+                    "href": "/myaccounts/details/deposit/account-details.go?adx=9f8e7d6c5b&acct=12345678",
+                    "aria": None, "name": ""})
+    assert s == {"event": "click", "tag": "a", "text": "Download", "id": "acct-######",
+                 "href": "/myaccounts/details/deposit/account-details.go"}
+
+
+def test_typed_text_is_never_captured():
+    js = rec.RECORDER_JS
+    assert "isField ? null" in js                           # text boxes report no text at all
+    assert ".value" not in js.replace("t.value || ''", "").replace("t.options[t.selectedIndex]", "")
