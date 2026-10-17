@@ -1,6 +1,9 @@
 """Record how you reach a bank's "download transactions" page, so it can be automated later.
 
-    ~/.venvs/financial-analyst/bin/python tools/bank_recorder.py bofa
+    ~/.venvs/financial-analyst/bin/python tools/bank_recorder.py bofa statements
+    ~/.venvs/financial-analyst/bin/python tools/bank_recorder.py bofa transactions
+
+The second word names the recording (one per route), so recording another route doesn't replace the first.
 
 Opens a real Google Chrome window (its own profile in the private data folder, so "remember this device"
 sticks between runs). You sign in yourself - password and text code - and nothing is recorded until you're
@@ -71,7 +74,7 @@ def _clean(step: dict) -> dict:
     return out
 
 
-def main(bank: str) -> None:
+def main(bank: str, label: str = "statements") -> None:
     from playwright.sync_api import sync_playwright
 
     out_dir = paths.data_dir() / "bank_fetch"
@@ -137,20 +140,20 @@ def main(bank: str) -> None:
         except KeyboardInterrupt:
             print("Stopped - saving what was recorded.")
         finally:
-            _save(out_dir, bank, steps)
+            _save(out_dir, f"{bank}_{label}", steps)
             try:
                 ctx.close()
             except Exception:
                 pass
 
 
-def _save(out_dir: Path, bank: str, steps: list) -> None:
-    rec = out_dir / f"{bank}_recording.json"
-    rec.write_text(json.dumps({"bank": bank, "recorded": time.time(), "steps": steps}, indent=1))
+def _save(out_dir: Path, name: str, steps: list) -> None:
+    rec = out_dir / f"{name}_recording.json"
+    rec.write_text(json.dumps({"recording": name, "recorded": time.time(), "steps": steps}, indent=1))
     print(f"Recorded {len(steps)} steps (labels only, digits masked) to {rec}")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in BANKS:
-        sys.exit(f"usage: bank_recorder.py {{{','.join(BANKS)}}}")
-    main(sys.argv[1])
+    if len(sys.argv) not in (2, 3) or sys.argv[1] not in BANKS or not re.fullmatch(r"\w*", sys.argv[-1]):
+        sys.exit(f"usage: bank_recorder.py {{{','.join(BANKS)}}} [statements|transactions|...]")
+    main(*sys.argv[1:])
