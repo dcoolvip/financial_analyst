@@ -61,3 +61,51 @@ def test_login_comes_from_the_keychain_item(monkeypatch):
                         lambda cmd, **kw: subprocess.CompletedProcess(cmd, 44, "", "not found"))
     with pytest.raises(SystemExit, match="save it in the dashboard"):
         bf.keychain_login()
+
+
+class FakeBox:
+    def __init__(self, value=""):
+        self.value, self.pressed = value, []
+
+    def count(self): return 1
+    @property
+    def first(self): return self
+    def input_value(self): return self.value
+    def fill(self, v): self.value = v
+    def press(self, key): self.pressed.append(key)
+
+
+class Nothing:
+    def count(self): return 0
+    @property
+    def first(self): return self
+    def is_visible(self): return False
+
+
+class FakeSignInPage:
+    """BofA's sign-in page: a hidden copy of the user ID box plus the visible one, the user ID already saved."""
+    def __init__(self):
+        self.uid, self.pwd, self.signed_in, self.url = FakeBox("*****1234"), FakeBox(), False, None
+
+    def goto(self, url): self.url = url
+    def locator(self, sel):
+        if sel == "#oid >> visible=true": return self.uid               # only the shown copy counts
+        if sel == "input[type=password] >> visible=true": return self.pwd
+        return Nothing()
+    def get_by_text(self, pattern):
+        page = self
+        class T:
+            first = property(lambda s: s)
+            def is_visible(s): return page.signed_in and bool(pattern.search("Log Out"))
+        return T()
+    def wait_for_timeout(self, ms):
+        if self.pwd.pressed: self.signed_in = True                       # Enter was pressed: BofA signs in
+    def eval_on_selector_all(self, sel, js): return []
+
+
+def test_sign_in_uses_the_visible_boxes_keeps_a_saved_user_id_and_presses_enter():
+    page = FakeSignInPage()
+    assert bf.sign_in(page, "jane.sample", "s3cret") is True
+    assert page.url == bf.SIGN_IN
+    assert page.uid.value == "*****1234"                                 # saved user ID left alone
+    assert page.pwd.value == "s3cret" and page.pwd.pressed == ["Enter"]
