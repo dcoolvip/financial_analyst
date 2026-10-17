@@ -3,8 +3,8 @@
     ~/.venvs/financial-analyst/bin/python tools/chase_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/chase_fetch.py --dry-run  # download + check, import into a copy
 
-Signs in with the password Chrome saved for Chase in this profile (click the password box, pick the saved password
-from Chrome's drop-down, Enter); if Chase
+Sign-in: if Chrome has filled in the saved Chase login, presses Enter; otherwise (Chase's sign-in frame only shows
+Chrome's saved login after a real click) a notification asks you to pick it and Log In - never an empty submit. If Chase
 asks for a code, type it in the window. Opens Statements & documents and downloads every statement from the last
 45 days it hasn't fetched before - bank accounts via "save document" -> Save as PDF -> Submit, cards via
 "Saves document" -> Submit (the route recorded in tools/bank_recorder.py). Chase names each file after the
@@ -119,34 +119,20 @@ def _password_box(page, timeout_s: float = 30):
     return None
 
 
-def _username_box(pwd):
-    """The visible text box next to the password box (its form), where Chrome offers saved logins."""
-    try:
-        form = pwd.locator("xpath=ancestor::form[1]")
-        box = form.locator("input[type=text], input[type=email]").filter(visible=True).first
-        return box if box.count() else None
-    except Exception:
-        return None
-
-
 def sign_in(page) -> bool:
-    """Open Chase -> click the password box -> pick Chrome's saved password from its drop-down -> Enter. Then wait
-    until you're signed in."""
+    """Open Chase; Enter if Chrome filled the password in, else ask you to pick the saved login. Then wait until
+    you're signed in."""
     page.goto(DASHBOARD)
     pwd = _password_box(page)
     if pwd is not None:
         try:
             page.wait_for_timeout(3000)           # the sign-in frame finishes loading after it appears
-            user = _username_box(pwd)
-            for box in [b for b in (user, pwd) if b is not None]:
-                box.click()                       # Chrome offers the saved login in a drop-down here...
-                page.wait_for_timeout(1500)
-                page.keyboard.press("ArrowDown")  # ...highlight it,
-                page.keyboard.press("Enter")      # pick it (fills user ID and password)
-                page.wait_for_timeout(1000)
-                if pwd.input_value():
-                    break
-            pwd.press("Enter")                    # and sign in
+            if pwd.input_value():                 # Chrome filled it in: sign in
+                pwd.press("Enter")
+            else:
+                # Chase's sign-in is in a frame from another address: Chrome only offers the saved login there after
+                # a real click from you. Never submit an empty password (Chase counts that as a failed sign-in).
+                notify("Chase: click the password box, pick your saved login, and Log In - the pull does the rest.")
         except Exception:
             pass                          # you signed in yourself / the page moved on: just wait below
     deadline = time.time() + WAIT_FOR_SIGN_IN_S

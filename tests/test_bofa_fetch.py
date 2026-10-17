@@ -221,3 +221,39 @@ def test_chase_download_watcher_gives_playwright_a_real_function():
     assert cf.DOWNLOADS == ["a download"]
     [f for e, f in handlers if e == "page"][0](Page())                           # a new tab gets watched too
     assert sum(1 for e, _ in handlers if e == "download") == 2
+
+
+
+def test_chase_never_submits_an_empty_password(monkeypatch):
+    """Chase's sign-in frame only shows Chrome's saved login after a real click; pressing Enter on an empty password
+    counted as a failed sign-in. Now: Enter only if filled, else a notification asks you to pick it."""
+    spec = importlib.util.spec_from_file_location("chase_fetch4", Path(__file__).parent.parent / "tools/chase_fetch.py")
+    cf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cf)
+    told = []
+    monkeypatch.setattr(cf, "notify", told.append)
+    monkeypatch.setattr(cf, "WAIT_FOR_SIGN_IN_S", 0)
+
+    class Box:
+        def __init__(self, value): self.value, self.pressed = value, []
+        def input_value(self): return self.value
+        def press(self, k): self.pressed.append(k)
+
+    class Page:
+        def __init__(self): self.signed_in = False
+        def goto(self, url): pass
+        def wait_for_timeout(self, ms):
+            if self.box.pressed: self.signed_in = True
+        def get_by_text(self, pattern):
+            page = self
+            class T:
+                first = property(lambda s: s)
+                def is_visible(s): return page.signed_in
+            return T()
+    for value, entered in (("", False), ("(saved)", True)):
+        page = Page()
+        page.box = Box(value)
+        monkeypatch.setattr(cf, "_password_box", lambda p, box=page.box: box)
+        cf.sign_in(page)
+        assert (page.box.pressed == ["Enter"]) is entered
+    assert any("pick your saved login" in t for t in told)
