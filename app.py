@@ -1742,7 +1742,7 @@ BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chas
 NO_SIGN_IN = {"redfin": "Opens each home's public Redfin page in a Chrome window on this Mac (no sign-in) and saves "
                         "its Redfin Estimate as today's value."}
 PICK_ACCOUNT = {"fidelity", "fidelity_2"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
-RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
+RECORD_FIRST = {"applecard": "Apple Card", "golden1": "Golden 1"}   # route being recorded (no pull yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 

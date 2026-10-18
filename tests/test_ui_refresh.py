@@ -1006,3 +1006,15 @@ def test_gold_and_loan_schedule_say_when_they_last_updated(env):
                for t in text)
     assert any(t.startswith("📅 **Payment schedule** · Car loan  \nBalance as of") and "on-time payments" in t
                for t in text)
+
+
+def test_apple_card_and_golden_1_are_recorded_first(env, monkeypatch):
+    from finance import bank_pull
+    started = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": started.append(bank))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**Apple Card** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record Apple Card")
+    click(at, "⏺ Record Golden 1")
+    assert started == ["applecard", "golden1"]
