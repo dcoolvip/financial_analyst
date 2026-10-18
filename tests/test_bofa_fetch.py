@@ -298,3 +298,34 @@ def test_merrill_picks_account_statements_and_imports_by_digits(tmp_path, monkey
     line = mf.import_statement(conn, pdf)
     assert line.startswith("Merrill Brokerage: value saved (Jul 31)") and "positions" in line
     assert conn.execute("SELECT COUNT(*) FROM holdings WHERE account_id = ?", (a,)).fetchone()[0] >= 2
+
+
+
+def test_merrill_finds_the_pdf_inside_the_statement_window():
+    """Merrill's statement window is a web page wrapping the PDF in an embedded frame (its own address is HTML)."""
+    spec = importlib.util.spec_from_file_location("merrill_fetch2", Path(__file__).parent.parent / "tools/merrill_fetch.py")
+    mf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mf)
+    asked = []
+
+    class Resp:
+        def __init__(self, body, ctype): self._b, self.headers = body, {"content-type": ctype}
+        def body(self): return self._b
+
+    class Req:
+        def get(self, url, headers=None):
+            asked.append(url)
+            return Resp(b"%PDF-1.7 statement", "application/pdf") if url.endswith("/doc.pdf?id=1") else \
+                Resp(b"<html>wrapper</html>", "text/html")
+
+    class El:
+        def __init__(self, src): self.src = src
+        def get_attribute(self, a): return self.src
+
+    class Win:
+        url = "https://olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_09302026"
+        frames = [type("F", (), {"url": "https://olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_09302026"})()]
+        context = type("C", (), {"request": Req()})()
+        def locator(self, sel): return type("L", (), {"all": lambda s: [El("/Records/doc.pdf?id=1")] if sel == "embed" else []})()
+    assert mf.fetch_pdf(Win()).startswith(b"%PDF")
+    assert asked == [Win.url, "https://olui2.fs.ml.com/Records/doc.pdf?id=1"]       # window first, then the embed

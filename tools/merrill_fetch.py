@@ -106,28 +106,49 @@ def sign_in(page) -> bool:
     return False
 
 
+def fetch_pdf(win) -> bytes:
+    """The statement window is a web page wrapping the PDF in an embedded frame: fetch the PDF from wherever it is -
+    the window itself, a frame inside it, or an embed/object/iframe's address - with the signed-in session."""
+    from urllib.parse import urljoin
+    candidates = [win.url] + [f.url for f in win.frames if f.url and f.url != "about:blank"]
+    for sel, attr in (("embed", "src"), ("object", "data"), ("iframe", "src")):
+        for el in win.locator(sel).all():
+            if (src := el.get_attribute(attr)):
+                candidates.append(urljoin(win.url, src))
+    seen_types = []
+    for url in dict.fromkeys(candidates):
+        r = win.context.request.get(url, headers={"Referer": win.url})
+        body = r.body()
+        if body.startswith(b"%PDF"):
+            return body
+        seen_types.append(r.headers.get("content-type", "?").split(";")[0])
+    raise ValueError(f"no PDF in the statement window (looked at {len(seen_types)} addresses: {seen_types})")
+
+
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
     page.goto(DOCUMENTS)
     page.wait_for_timeout(4000)
     today, got = date.today(), []
     rows = page.locator("tr").filter(has_text=_DATE)
+    tried = set()
     for i in range(rows.count()):
         row = rows.nth(i)
+        text = row.inner_text()
+        if len(_DATE.findall(text)) != 1:                # a row wrapping a whole box of statements, not one statement
+            continue
         link = row.locator("a").first
         if not link.count():
             continue
-        info = row_info(row.inner_text(), link.inner_text())
-        if not info or not wanted(info, seen | {k for k, _ in got}, today):
+        info = row_info(text, link.inner_text())
+        if not info or not wanted(info, seen | tried, today):
             continue
+        tried.add(key(info))
         try:
             with page.expect_popup(timeout=20_000) as pop:
                 link.click()
             win = pop.value
             win.wait_for_load_state()
-            r = page.context.request.get(win.url)       # the window's address is the PDF itself
-            body = r.body()
-            if not body.startswith(b"%PDF"):
-                raise ValueError(f"the statement window didn't give a PDF ({r.headers.get('content-type')})")
+            body = fetch_pdf(win)
             path = out / f"ML_{info['date']:%m%d%Y}_{re.sub(r'[^A-Za-z0-9]+', '', info['name'])}.pdf"
             path.write_bytes(body)
             got.append((key(info), path))
