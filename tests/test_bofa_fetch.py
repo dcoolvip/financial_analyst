@@ -442,10 +442,27 @@ def test_fidelity_goes_in_through_view_your_statements_like_the_recording():
         balky = True
         def wait_for_load_state(self, *a, **k): log.append(("settle",))
         def get_by_text(self, t, exact=False): return Loc("view" if isinstance(t, str) else "unavailable")
-        def get_by_label(self, label): return Loc(label)
+        def locator(self, sel): return type("V", (), {"filter": lambda s, visible: Loc(sel)})()
         def reload(self): log.append(("reload",)); Page.balky = False
         def goto(self, url): log.append(("goto", url))
     page = Page()
     ff.open_statements(page)
-    assert log == [("settle",), ("click", "view"), ("reload",), ("form", "Time period")]
+    assert log == [("settle",), ("click", "view"), ("reload",), ("form", "select[aria-label='Time period']")]
     assert not [e for e in log if e[0] == "goto"]                                 # no jumping straight to the address
+
+
+
+def test_fidelity_dropdowns_are_the_visible_selects_by_name():
+    """Regression: get_by_label("Time period") matched several elements on Fidelity's page and stopped the pull."""
+    spec = importlib.util.spec_from_file_location("fidelity_fetch4", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    asked = []
+
+    class Page:
+        def locator(self, sel):
+            asked.append(sel)
+            return type("L", (), {"filter": lambda s, visible: type("F", (), {"first": "the one"})()})()
+    assert ff.dropdown(Page(), "Month") == "the one" and asked == ["select[aria-label='Month']"]
+    import inspect
+    assert "get_by_label(" not in inspect.getsource(ff.show_statement) + inspect.getsource(ff.open_statements)

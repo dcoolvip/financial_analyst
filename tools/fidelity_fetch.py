@@ -76,6 +76,12 @@ def sign_in(page) -> bool:
     return False
 
 
+def dropdown(page, label: str):
+    """The visible select box with this label (the recording: aria-label "Time period" / "Month" / "Year"). Fidelity's
+    page has other elements with the same label, so only a visible <select> counts."""
+    return page.locator(f"select[aria-label='{label}']").filter(visible=True).first
+
+
 UNAVAILABLE = re.compile(r"temporarily unavailable|not all the features are currently available", re.I)
 
 
@@ -93,7 +99,7 @@ def open_statements(page) -> None:
         page.goto(STATEMENT_ENTRY)                      # the address that link leads to, if the link has moved
     for attempt in range(2):
         try:
-            page.get_by_label("Time period").wait_for(state="visible", timeout=45_000)
+            dropdown(page, "Time period").wait_for(state="visible", timeout=45_000)
             return
         except Exception:
             if attempt == 0 and page.get_by_text(UNAVAILABLE).count():
@@ -105,10 +111,10 @@ def open_statements(page) -> None:
 def show_statement(page, year: int, month: int) -> str:
     """Monthly -> month -> year -> Get statement; returns the statement's text as shown on the page."""
     open_statements(page)
-    page.get_by_label("Time period").select_option(label="Monthly")
+    dropdown(page, "Time period").select_option(label="Monthly")
     page.wait_for_timeout(1000)
-    page.get_by_label("Month").select_option(label=MONTHS[month - 1])
-    page.get_by_label("Year").select_option(label=str(year))
+    dropdown(page, "Month").select_option(label=MONTHS[month - 1])
+    dropdown(page, "Year").select_option(label=str(year))
     page.get_by_role("button", name=re.compile(r"get statement", re.I)).click()
     page.wait_for_url(re.compile(r"soddetail"), timeout=30_000)
     page.wait_for_timeout(4000)
