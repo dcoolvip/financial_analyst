@@ -2,6 +2,7 @@
 
     ~/.venvs/financial-analyst/bin/python tools/monthly_pull.py [--dry-run]     # every set-up bank still to do
     ~/.venvs/financial-analyst/bin/python tools/monthly_pull.py --bank chase    # one bank (the Update button)
+    ~/.venvs/financial-analyst/bin/python tools/monthly_pull.py --bank chase --force   # ... even what it already has
 
 Runs tools/<bank>_fetch.py for every bank that's set up, then the monthly steps without a browser (the Pokemon
 collection). What finishes is remembered for this month's round (from the 28th): run again after a failure and only
@@ -22,15 +23,16 @@ from finance import bank_pull, paths  # noqa: E402
 FAILED = {1: "stopped with an error", 2: "couldn't sign in"}
 
 
-def run_bank(bank: str, dry_run: bool) -> bool:
-    print(f"=== {bank_pull.BANKS[bank]}", flush=True)
-    rc = subprocess.run([sys.executable, *bank_pull.command(bank)] + (["--dry-run"] if dry_run else []), cwd=ROOT).returncode
+def run_bank(bank: str, dry_run: bool, force: bool = False) -> bool:
+    print(f"=== {bank_pull.BANKS[bank]}" + (" (forced)" if force else ""), flush=True)
+    extra = (["--dry-run"] if dry_run else []) + (["--force"] if force else [])
+    rc = subprocess.run([sys.executable, *bank_pull.command(bank)] + extra, cwd=ROOT).returncode
     if not dry_run:
         bank_pull.mark_round(bank, rc == 0, FAILED.get(rc, f"stopped (code {rc})"))
     return rc == 0
 
 
-def run_extra(step: str, dry_run: bool) -> bool:
+def run_extra(step: str, dry_run: bool, force: bool = False) -> bool:
     print(f"=== {bank_pull.EXTRA_STEPS[step]}", flush=True)
     if dry_run:
         return True
@@ -51,7 +53,7 @@ def main(argv: list[str]) -> None:
     dry_run = "--dry-run" in argv
     if "--bank" in argv:
         bank = argv[argv.index("--bank") + 1]
-        (run_extra if bank in bank_pull.EXTRA_STEPS else run_bank)(bank, dry_run)
+        (run_extra if bank in bank_pull.EXTRA_STEPS else run_bank)(bank, dry_run, "--force" in argv)
         return
     todo = ([b for b in bank_pull.BANKS if bank_pull.set_up(b)] + [s for s in bank_pull.EXTRA_STEPS
                                                                    if bank_pull.extra_available(s)]

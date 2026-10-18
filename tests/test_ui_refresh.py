@@ -1042,3 +1042,16 @@ def test_update_all_makes_no_plaid_calls_when_no_linked_bank_is_due(env, monkeyp
     before = len(fake.calls)
     click(at, "Update all")
     assert [c[0] for c in fake.calls[before:]] == []                     # no calls to Plaid at all
+
+
+def test_force_update_button_on_a_bank_row(env, monkeypatch, tmp_path):
+    from finance import bank_pull
+    started = []
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa", force=False:
+                        started.append((bank, dry_run, force)))
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    (tmp_path / "bank_fetch" / "chase_runs.log").write_text("--- 2026-10-18 10:00\nChase Checking: balance saved\n")
+    at = app()
+    [b for b in at.button if b.key == "force_chase"][0].click().run()
+    assert started == [("chase", False, True)]
+    assert not [b for b in at.button if b.key == "force_redfin"]               # nothing to force there

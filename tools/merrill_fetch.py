@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
+FORCE = "--force" in sys.argv          # Force update: fetch again even what was already fetched (imports never double)
+
 HOME = "https://www.merrilledge.com/"
 DOCUMENTS = "https://olui2.fs.ml.com/Records/Overview.aspx"
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
@@ -205,7 +207,7 @@ def main(dry_run: bool = False) -> None:
     for d in (profile, out):
         d.mkdir(parents=True, exist_ok=True)
         d.chmod(0o700)
-    seen = already_fetched()
+    seen = set() if FORCE else already_fetched()
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile, plain=True)
         catch_pdfs(ctx)
@@ -233,7 +235,7 @@ def main(dry_run: bool = False) -> None:
         checkpoints.create(conn, f"Before the Merrill pull ({len(new)} statements)")
     lines = [import_statement(conn, path) for _, path in sorted(new, key=lambda x: x[1].name)]
     if not dry_run:
-        fetched_path().write_text(json.dumps(sorted(seen | {k for k, _ in new}), indent=1))
+        fetched_path().write_text(json.dumps(sorted(already_fetched() | {k for k, _ in new}), indent=1))
     with (base / "merrill_runs.log").open("a") as log:        # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))

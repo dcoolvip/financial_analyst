@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
+FORCE = "--force" in sys.argv          # Force update: fetch again even what was already fetched (imports never double)
+
 LOGIN = "https://nb.fidelity.com/"     # where the recording started
 # where "View your statements" leads (recorded); it forwards to the statement page itself
 STATEMENT_ENTRY = "https://workplaceservices.fidelity.com/mybenefits/definedcontributions/navigation/dc/OnlineStatement"
@@ -229,7 +231,7 @@ def main(login: str = "fidelity", dry_run: bool = False) -> None:
         d.chmod(0o700)
     year, month = last_month(date.today())
     key = f"{year}-{month:02d}"
-    if key in already_fetched(login) and not dry_run:
+    if key in already_fetched(login) and not dry_run and not FORCE:
         notify(f"Fidelity: {MONTHS[month - 1]} {year} is already in - nothing to do.")
         return
     with sync_playwright() as pw:

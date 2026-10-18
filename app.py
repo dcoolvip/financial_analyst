@@ -1743,6 +1743,7 @@ BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chas
                  "redfin": ("Redfin home values", "Redfin estimate")}   # key: (shown, institution); in this order
 NO_SIGN_IN = {"redfin": "Opens each home's public Redfin page in a Chrome window on this Mac (no sign-in) and saves "
                         "its Redfin Estimate as today's value."}
+FORCEABLE = {"bofa", "chase", "merrill", "fidelity", "fidelity_2", "robinhood", "applecard"}   # keep a fetched list
 PICK_ACCOUNT = {"fidelity", "fidelity_2"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
 RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
@@ -1789,6 +1790,11 @@ def browser_row(bank: str) -> None:
         if st.button("🧪 Test run (imports into a copy)", key=f"test_{bank}", disabled=bank_pull.running(),
                      help="Everything an update does, but the import goes into a throwaway copy of your data."):
             bank_pull.start(dry_run=True, bank=bank)
+            st.rerun()
+        if bank in FORCEABLE and st.button("⏩ Force update", key=f"force_{bank}", disabled=bank_pull.running(),
+                                           help="Signs in and fetches the latest statements again, even ones already "
+                                                "imported (nothing gets doubled). Update skips what's already here."):
+            bank_pull.start(bank=bank, force=True)
             st.rerun()
         on = st.toggle(f"Update automatically on the {bank_pull.SCHEDULE_DAY}th of each month, "
                        f"{bank_pull.SCHEDULE_HOUR} AM", value=bank_pull.scheduled(), key=f"sched_{bank}",

@@ -91,3 +91,26 @@ def test_amex_balance_is_read_off_the_dashboard(tmp_path, monkeypatch):
     assert af.save_balance(conn, (1_234.56, "Total Balance"), date(2026, 10, 28)) == \
         "Amex: balance saved (Oct 28, the dashboard's Total Balance)"
     assert conn.execute("SELECT balance FROM balances WHERE account_id = ?", (card,)).fetchone()[0] == 1_234.56
+
+
+def test_force_update_reaches_the_bank_and_keeps_its_fetched_list(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("monthly_pull_f", Path(__file__).parent.parent / "tools/monthly_pull.py")
+    mp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mp)
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    cmds = []
+
+    class Done:
+        returncode = 0
+    monkeypatch.setattr(mp.subprocess, "run", lambda cmd, cwd=None: cmds.append(cmd) or Done())
+    mp.main(["--bank", "fidelity_2", "--force"])
+    assert cmds[-1][-3:] == ["--login", "fidelity_2", "--force"]
+    mp.main(["--bank", "chase"])
+    assert "--force" not in cmds[-1]
+    assert set(bank_pull.round_state()["done"]) == {"fidelity_2", "chase"}
+    root = Path(__file__).parent.parent / "tools"
+    for name in ("bofa", "chase", "merrill", "robinhood", "applecard"):
+        src = (root / f"{name}_fetch.py").read_text()
+        assert "seen = set() if FORCE else already_fetched()" in src, name
+        assert "sorted(seen |" not in src, name          # a forced run (empty seen) must not wipe the fetched list
+    assert "and not FORCE" in (root / "fidelity_fetch.py").read_text()

@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
+FORCE = "--force" in sys.argv          # Force update: fetch again even what was already fetched (imports never double)
+
 HOME = "https://card.apple.com/"
 SAVINGS = "https://card.apple.com/savings"
 WAIT_FOR_SIGN_IN_S = 10 * 60
@@ -205,7 +207,7 @@ def main(dry_run: bool = False) -> None:
     for d in (profile, out):
         d.mkdir(parents=True, exist_ok=True)
         d.chmod(0o700)
-    seen = already_fetched()
+    seen = set() if FORCE else already_fetched()
     got, savings = None, None
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile, plain=True)
@@ -236,7 +238,7 @@ def main(dry_run: bool = False) -> None:
     lines = [import_statement(conn, got[1]) if got else "Apple Card: no new statement yet",
              save_savings(conn, savings, date.today())]
     if got and not dry_run and "balance saved" in lines[0]:
-        fetched_path().write_text(json.dumps(sorted(seen | {got[0]}), indent=1))
+        fetched_path().write_text(json.dumps(sorted(already_fetched() | {got[0]}), indent=1))
     with (base / "applecard_runs.log").open("a") as log:        # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))

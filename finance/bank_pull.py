@@ -54,15 +54,17 @@ def running() -> bool:
         return False
 
 
-def start(dry_run: bool = False, bank: str = "bofa") -> None:
+def start(dry_run: bool = False, bank: str = "bofa", force: bool = False) -> None:
     """Start a pull in the background: one bank, or bank="all" for every set-up bank not yet done this round.
-    Real runs go through tools/monthly_pull.py, which remembers what finished; test runs call the bank directly."""
+    Real runs go through tools/monthly_pull.py, which remembers what finished; test runs call the bank directly.
+    force: the bank fetches its statements again even if it already has them (imports never double anything)."""
     if os.environ.get("FINANCE_NO_BANK_PULL"):
         raise RuntimeError("Bank pulls are switched off here (tests)")
     if running():
         return
     monthly = [str(paths.ROOT / "tools" / "monthly_pull.py")]
     cmd = monthly if bank == "all" else command(bank) if dry_run else monthly + ["--bank", bank]
+    cmd += ["--force"] if force and bank != "all" else []      # fetch again even what was already fetched
     with run_log().open("w") as out:
         p = subprocess.Popen([sys.executable, *cmd] + (["--dry-run"] if dry_run else []),
                              cwd=paths.ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)

@@ -29,6 +29,8 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, chase_pdf, statements  # noqa: E402
 
+FORCE = "--force" in sys.argv          # Force update: fetch again even what was already fetched (imports never double)
+
 DASHBOARD = "https://secure.chase.com/web/auth/dashboard"
 DOCUMENTS = DASHBOARD + "#/dashboard/documents/myDocs/index;mode=documents"
 SIGNED_IN = re.compile(r"\bsign ?out\b", re.I)
@@ -270,7 +272,7 @@ def main(dry_run: bool = False) -> None:
     for d in (profile, out):
         d.mkdir(parents=True, exist_ok=True)
         d.chmod(0o700)
-    seen = already_fetched()
+    seen = set() if FORCE else already_fetched()
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
@@ -298,7 +300,7 @@ def main(dry_run: bool = False) -> None:
         checkpoints.create(conn, f"Before the Chase pull ({len(new)} statements)")
     lines = [import_statement(conn, path) for _, path in sorted(new, key=lambda x: x[1].name)]
     if not dry_run:
-        fetched_path().write_text(json.dumps(sorted(seen | {k for k, _ in new}), indent=1))
+        fetched_path().write_text(json.dumps(sorted(already_fetched() | {k for k, _ in new}), indent=1))
     with (base / "chase_runs.log").open("a") as log:         # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))

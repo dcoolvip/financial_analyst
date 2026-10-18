@@ -25,6 +25,8 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
+FORCE = "--force" in sys.argv          # Force update: fetch again even what was already fetched (imports never double)
+
 LOGIN = "https://robinhood.com/login"
 STATEMENTS = "https://robinhood.com/account/reports-statements/individual"
 WAIT_FOR_SIGN_IN_S = 10 * 60
@@ -158,7 +160,7 @@ def main(dry_run: bool = False) -> None:
         shutil.copy(db_path, tmp)
         db_path = tmp
     conn = db.connect(db_path)
-    seen = already_fetched()
+    seen = set() if FORCE else already_fetched()
     probe = statements.parse_pdf_all(pdf.read_bytes())
     when = next((s.as_of.isoformat() for s in probe if s.as_of), None)
     if when and when in seen and not dry_run:
@@ -168,7 +170,7 @@ def main(dry_run: bool = False) -> None:
         checkpoints.create(conn, "Before the Robinhood pull")
     lines, when = import_statement(conn, pdf)
     if not dry_run and when:
-        fetched_path().write_text(json.dumps(sorted(seen | {when}), indent=1))
+        fetched_path().write_text(json.dumps(sorted(already_fetched() | {when}), indent=1))
     with (base / "robinhood_runs.log").open("a") as log:       # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n" + "\n".join(lines) + "\n")
     print("\n".join(lines))
