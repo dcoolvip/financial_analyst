@@ -1730,8 +1730,10 @@ def bofa_status() -> None:
 
 BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chase", "Chase"),
                  "amex": ("American Express", "American Express"),
-                 "merrill": ("Merrill", "Merrill")}   # key: (shown, institution); run in this order
-RECORD_FIRST: dict[str, str] = {"fidelity": "Fidelity"}     # route being recorded (no pull written yet)
+                 "merrill": ("Merrill", "Merrill"),
+                 "fidelity": ("Fidelity", "Fidelity")}   # key: (shown, institution); run in this order
+PICK_ACCOUNT = {"fidelity"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
+RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 
@@ -1748,6 +1750,9 @@ def browser_row(bank: str) -> None:
     """A bank updated by a browser pull (Chrome signs in with its saved password and downloads statements)."""
     shown, institution = BROWSER_BANKS[bank]
     mine = list(accts.loc[(accts["institution"] == institution) & accts["type"].isin(STATEMENT_TYPES), "name"])
+    chosen = (db.get_setting(conn, "browser_pull_accounts", {}) or {}).get(bank)
+    if bank in PICK_ACCOUNT:
+        mine = [n for i, n in zip(accts["id"], accts["name"]) if i == chosen]
     last = bank_pull.last_results(real_only=True, bank=bank)
     when = f"Updated {datetime.strptime(last[0], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
     before = [BROWSER_BANKS[b][0] for b in list(BROWSER_BANKS)[:list(BROWSER_BANKS).index(bank)] if bank_pull.set_up(b)]
@@ -1776,6 +1781,17 @@ def browser_row(bank: str) -> None:
             except RuntimeError as e:
                 st.error(str(e))
             st.rerun()
+        if bank in PICK_ACCOUNT:
+            options = accts[accts["institution"] == institution]
+            ids = list(options["id"])
+            pick = st.selectbox("Fills", ids, index=ids.index(chosen) if chosen in ids else None,
+                                format_func=dict(zip(options["id"], options["name"])).get, key=f"fills_{bank}",
+                                placeholder="Which account is this login?",
+                                help="This sign-in shows one person's plan; pick the dashboard account it updates.")
+            if pick is not None and pick != chosen:
+                db.set_setting(conn, "browser_pull_accounts",
+                               {**(db.get_setting(conn, "browser_pull_accounts", {}) or {}), bank: int(pick)})
+                st.rerun()
         if (latest := bank_pull.last_results(bank=bank)):
             st.markdown(f"**Last update** · {latest[0]}")
             for line in latest[1]:

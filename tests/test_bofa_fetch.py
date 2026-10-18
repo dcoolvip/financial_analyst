@@ -379,3 +379,16 @@ def test_merrill_waits_out_its_own_redirect_after_sign_in():
     assert p.went == [mf.DOCUMENTS] and p.waits == 3
     with pytest.raises(RuntimeError):
         mf.goto_settled(Page(fails=5), mf.DOCUMENTS)                           # gives up after 3 tries, loudly
+
+
+def test_fidelity_reads_last_month_and_fills_the_chosen_account(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("fidelity_fetch", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    assert ff.last_month(date(2026, 10, 28)) == (2026, 9) and ff.last_month(date(2027, 1, 28)) == (2026, 12)
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    md = db.get_or_create_account(conn, "MD 401(k)", "Fidelity", "retirement")
+    assert "pick which account" in ff.import_text(conn, "fidelity", "text", "NetBenefits_2026-09.txt")
+    db.set_setting(conn, "browser_pull_accounts", {"fidelity": md})
+    assert "couldn't read the balance" in ff.import_text(conn, "fidelity", "nothing useful here", "x.txt")

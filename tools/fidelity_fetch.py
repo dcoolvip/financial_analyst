@@ -1,0 +1,170 @@
+"""Monthly Fidelity NetBenefits pull: sign in, show last month's 401(k) statement, read it off the page, import it.
+
+    ~/.venvs/financial-analyst/bin/python tools/fidelity_fetch.py            # the real thing
+    ~/.venvs/financial-analyst/bin/python tools/fidelity_fetch.py --dry-run  # read + check, import into a copy
+
+The route (recorded): View your statements -> Time period "Monthly" -> Month -> Year -> Get statement -> the statement
+shows as a page (#/sod/soddetail); "Download or Print" only prints that page, so there's no file. The pull reads the
+statement's text straight off the page (kept privately in the data folder) and imports it with the Fidelity 401(k)
+reader. It fills the dashboard account chosen for this login (Connected accounts -> Fidelity -> ⚙️ -> Fills).
+Plain Chrome. Sign-in: Enter once Chrome has filled the saved password in, else a notification asks you to sign in;
+"Remember this device" (ticked in the recording) keeps the text code away.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import date, datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from finance import bank_browser, checkpoints, db, paths  # noqa: E402
+from finance.importers import apply_statement, statements  # noqa: E402
+
+LOGIN = "https://nb.fidelity.com/public/nb/default/home"
+STATEMENT = "https://workplaceservices.fidelity.com/mybenefits/savings#/navigation/dc/OnlineStatement"
+WAIT_FOR_SIGN_IN_S = 10 * 60
+MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
+          "November", "December"]
+
+
+def notify(text: str) -> None:
+    print(text, flush=True)
+    subprocess.run(["osascript", "-e", f"display notification {json.dumps(text)} with title \"Fidelity pull\""],
+                   check=False, capture_output=True)
+
+
+def last_month(today: date) -> tuple[int, int]:
+    return (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+
+
+def fetched_path(login: str) -> Path:
+    return paths.data_dir() / "bank_fetch" / f"{login}_fetched.json"
+
+
+def already_fetched(login: str) -> set[str]:
+    try:
+        return set(json.loads(fetched_path(login).read_text()))
+    except (FileNotFoundError, ValueError):
+        return set()
+
+
+def _signed_in(page) -> bool:
+    return "workplaceservices.fidelity.com" in page.url and \
+        not page.locator("input[type=password]").filter(visible=True).count()
+
+
+def sign_in(page) -> bool:
+    page.goto(LOGIN)
+    pressed, told = set(), False
+    deadline, ask_after = time.time() + WAIT_FOR_SIGN_IN_S, time.time() + 15
+    while time.time() < deadline:
+        if _signed_in(page):
+            return True
+        try:
+            pwd = page.locator("input[type=password]").filter(visible=True).first
+            here = page.url.split("?")[0]
+            if here not in pressed and pwd.count() and pwd.input_value():   # Chrome filled it in: sign in
+                pressed.add(here)
+                pwd.press("Enter")
+            elif not told and time.time() > ask_after:                       # never an empty submit
+                notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
+                told = True
+        except Exception:
+            pass
+        page.wait_for_timeout(1500)
+    return False
+
+
+def show_statement(page, year: int, month: int) -> str:
+    """Monthly -> month -> year -> Get statement; returns the statement's text as shown on the page."""
+    page.goto(STATEMENT)
+    page.wait_for_timeout(5000)
+    page.get_by_label("Time period").select_option(label="Monthly")
+    page.wait_for_timeout(1000)
+    page.get_by_label("Month").select_option(label=MONTHS[month - 1])
+    page.get_by_label("Year").select_option(label=str(year))
+    page.get_by_role("button", name=re.compile(r"get statement", re.I)).click()
+    page.wait_for_url(re.compile(r"soddetail"), timeout=30_000)
+    page.wait_for_timeout(4000)
+    return page.locator("body").inner_text()
+
+
+def account_for(conn, login: str) -> int | None:
+    return (db.get_setting(conn, "browser_pull_accounts", {}) or {}).get(login)
+
+
+def import_text(conn, login: str, text: str, label: str) -> str:
+    aid = account_for(conn, login)
+    if aid is None:
+        return f"{label}: pick which account this login fills (Connected accounts -> Fidelity -> ⚙️ -> Fills)"
+    s = statements.parse_text(text)
+    name = db.accounts(conn).set_index("id").loc[aid, "name"]
+    if s.balance is None or s.as_of is None:
+        return f"{label}: couldn't read the balance from the statement page - the reader needs adjusting"
+    apply_statement(conn, s, aid, label)
+    split = ", pre-tax / Roth split saved" if s.tax_sources else ""
+    return f"{name}: value saved ({s.as_of:%b %-d}){split}"
+
+
+def main(login: str = "fidelity", dry_run: bool = False) -> None:
+    from playwright.sync_api import sync_playwright
+
+    base = paths.data_dir() / "bank_fetch"
+    profile, out = base / "chrome-profile" / login, base / "downloads" / login
+    for d in (profile, out):
+        d.mkdir(parents=True, exist_ok=True)
+        d.chmod(0o700)
+    year, month = last_month(date.today())
+    key = f"{year}-{month:02d}"
+    if key in already_fetched(login) and not dry_run:
+        notify(f"Fidelity: {MONTHS[month - 1]} {year} is already in - nothing to do.")
+        return
+    with sync_playwright() as pw:
+        ctx = bank_browser.launch(pw, profile, plain=True)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            if not sign_in(page):
+                notify("Couldn't sign in to Fidelity within 10 minutes - nothing read.")
+                return
+            text = show_statement(page, year, month)
+        except Exception as e:
+            notify(f"Fidelity pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing was imported.")
+            raise
+        finally:
+            ctx.close()
+    label = f"NetBenefits_{key}.txt"
+    path = out / label
+    path.write_text(text)                                     # private copy, for checking the reader
+    path.chmod(0o600)
+    db_path = paths.data_dir() / "finance.db"
+    if dry_run:
+        tmp = Path(tempfile.mkdtemp()) / "finance.db"
+        shutil.copy(db_path, tmp)
+        db_path = tmp
+    conn = db.connect(db_path)
+    if not dry_run:
+        checkpoints.create(conn, f"Before the Fidelity pull ({MONTHS[month - 1]} {year})")
+    line = import_text(conn, login, text, label)
+    if not dry_run and "value saved" in line:
+        fetched_path(login).write_text(json.dumps(sorted(already_fetched(login) | {key}), indent=1))
+    with (base / f"{login}_runs.log").open("a") as log:      # what happened, no amounts
+        log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n{line}\n")
+    print(line)
+    notify(("Dry run: " if dry_run else "") + line[:220])
+
+
+if __name__ == "__main__":
+    try:
+        main(dry_run="--dry-run" in sys.argv)
+    finally:                                   # the dashboard shows "running" until this pull's pid file is gone
+        pid = paths.data_dir() / "bank_fetch" / "bank_pull.pid"
+        if pid.exists() and pid.read_text().strip() == str(os.getpid()):
+            pid.unlink()

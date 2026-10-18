@@ -936,12 +936,23 @@ def test_merrill_connects_with_a_test_run(env, monkeypatch):
 
 
 
-def test_fidelity_can_be_recorded_from_the_dashboard(env, monkeypatch):
+def test_fidelity_connects_and_you_pick_the_account_it_fills(env, monkeypatch, tmp_path):
     from finance import bank_pull
-    recorded = []
-    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    started = []
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa": started.append((bank, dry_run)))
+    conn, _ = env
+    md = db.get_or_create_account(conn, "MD 401(k)", "Fidelity", "retirement")
+    db.get_or_create_account(conn, "DS 401(k)", "Fidelity", "retirement")
     at = app()
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
-    assert any("**Fidelity** · not set up yet" in m.value for m in at.markdown)
-    click(at, "⏺ Record Fidelity")
-    assert recorded == ["fidelity"]
+    click(at, "🧪 Test run for Fidelity")
+    assert started == [("fidelity", True)]
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    (tmp_path / "bank_fetch" / "fidelity_runs.log").write_text("--- 2026-10-28 09:10 (dry run)\nx\n")
+    at.run()
+    row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Fidelity**"))
+    assert "not matched yet" in row                                                   # neither 401(k) until you pick
+    [s for s in at.selectbox if s.label == "Fills"][0].select(md).run()
+    assert db.get_setting(conn, "browser_pull_accounts")["fidelity"] == md
+    row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Fidelity**"))
+    assert "MD 401(k)" in row and "DS 401(k)" not in row
