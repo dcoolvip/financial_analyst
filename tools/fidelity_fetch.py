@@ -101,10 +101,32 @@ def account_for(conn, login: str) -> int | None:
     return (db.get_setting(conn, "browser_pull_accounts", {}) or {}).get(login)
 
 
+def holder(conn, text: str) -> str | None:
+    """Whose plan this statement is: the one household member (names from the dashboard's household settings, never
+    the code) whose name appears on it. None if no one or several do (then there's nothing to check against)."""
+    people = [p.get("name", "") for p in (db.get_setting(conn, "household_people", []) or [])]
+    found = [n for n in people if n and re.search(rf"\b{re.escape(n.split()[0])}\b", text, re.I)]
+    return found[0] if len(found) == 1 else None
+
+
+def same_holder(conn, login: str, text: str) -> str | None:
+    """None if fine; else why not. The first statement fixes whose plan this login is; a different name later means
+    someone else signed in to this window - never import that into this login's account."""
+    who, known = holder(conn, text), db.get_setting(conn, "browser_pull_holders", {}) or {}
+    if not who:
+        return None
+    if login not in known:
+        db.set_setting(conn, "browser_pull_holders", {**known, login: who})
+        return None
+    return None if known[login] == who else "this statement is for a different person than this login's earlier ones"
+
+
 def import_text(conn, login: str, text: str, label: str) -> str:
     aid = account_for(conn, login)
     if aid is None:
         return f"{label}: pick which account this login fills (Connected accounts -> Fidelity -> ⚙️ -> Fills)"
+    if (why := same_holder(conn, login, text)):
+        return f"{label}: not imported - {why}"
     s = statements.parse_text(text)
     name = db.accounts(conn).set_index("id").loc[aid, "name"]
     if s.balance is None or s.as_of is None:
@@ -163,7 +185,8 @@ def main(login: str = "fidelity", dry_run: bool = False) -> None:
 
 if __name__ == "__main__":
     try:
-        main(dry_run="--dry-run" in sys.argv)
+        login = sys.argv[sys.argv.index("--login") + 1] if "--login" in sys.argv else "fidelity"
+        main(login=login, dry_run="--dry-run" in sys.argv)
     finally:                                   # the dashboard shows "running" until this pull's pid file is gone
         pid = paths.data_dir() / "bank_fetch" / "bank_pull.pid"
         if pid.exists() and pid.read_text().strip() == str(os.getpid()):

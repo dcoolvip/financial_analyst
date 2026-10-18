@@ -1731,8 +1731,9 @@ def bofa_status() -> None:
 BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chase", "Chase"),
                  "amex": ("American Express", "American Express"),
                  "merrill": ("Merrill", "Merrill"),
-                 "fidelity": ("Fidelity", "Fidelity")}   # key: (shown, institution); run in this order
-PICK_ACCOUNT = {"fidelity"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
+                 "fidelity": ("Fidelity", "Fidelity"),
+                 "fidelity_2": ("Fidelity · second login", "Fidelity")}   # key: (shown, institution); in this order
+PICK_ACCOUNT = {"fidelity", "fidelity_2"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
 RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")

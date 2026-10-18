@@ -14,7 +14,16 @@ from . import paths
 
 LABEL = "com.financialanalyst.bofa-monthly"     # (kept: it's the job macOS already knows; it now runs every bank)
 BANKS = {"bofa": "Bank of America", "chase": "Chase", "amex": "American Express",
-         "merrill": "Merrill", "fidelity": "Fidelity"}   # tools/<key>_fetch.py each, run in this order
+         "merrill": "Merrill", "fidelity": "Fidelity", "fidelity_2": "Fidelity (second login)"}   # run in this order
+# A bank with several logins (Fidelity: one per person) runs the same script once per login, each with its own Chrome
+# profile (its own saved password and "remember this device"), its own "Fills" account and its own history.
+SCRIPTS = {"fidelity_2": ("fidelity_fetch.py", ["--login", "fidelity_2"])}
+
+
+def command(bank: str) -> list[str]:
+    """What to run for a bank: tools/<bank>_fetch.py, or a shared script with its login."""
+    script, args = SCRIPTS.get(bank, (f"{bank}_fetch.py", []))
+    return [str(paths.ROOT / "tools" / script)] + args
 SCHEDULE_DAY, SCHEDULE_HOUR = 28, 9
 
 
@@ -49,9 +58,9 @@ def start(dry_run: bool = False, bank: str = "bofa") -> None:
         raise RuntimeError("Bank pulls are switched off here (tests)")
     if running():
         return
-    script = paths.ROOT / "tools" / ("monthly_pull.py" if bank == "all" else f"{bank}_fetch.py")
+    cmd = [str(paths.ROOT / "tools" / "monthly_pull.py")] if bank == "all" else command(bank)
     with run_log().open("w") as out:
-        p = subprocess.Popen([sys.executable, str(script)] + (["--dry-run"] if dry_run else []),
+        p = subprocess.Popen([sys.executable, *cmd] + (["--dry-run"] if dry_run else []),
                              cwd=paths.ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
     _pid_file().write_text(str(p.pid))
 

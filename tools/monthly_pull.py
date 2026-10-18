@@ -20,7 +20,7 @@ if __name__ == "__main__":
         for bank in bank_pull.BANKS:
             if bank_pull.set_up(bank):
                 print(f"=== {bank_pull.BANKS[bank]}", flush=True)
-                subprocess.run([sys.executable, str(ROOT / "tools" / f"{bank}_fetch.py")] + sys.argv[1:], cwd=ROOT)
+                subprocess.run([sys.executable, *bank_pull.command(bank)] + sys.argv[1:], cwd=ROOT)
     finally:
         pid = paths.data_dir() / "bank_fetch" / "bank_pull.pid"
         if pid.exists() and pid.read_text().strip() == str(os.getpid()):

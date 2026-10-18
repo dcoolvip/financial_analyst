@@ -392,3 +392,27 @@ def test_fidelity_reads_last_month_and_fills_the_chosen_account(tmp_path, monkey
     assert "pick which account" in ff.import_text(conn, "fidelity", "text", "NetBenefits_2026-09.txt")
     db.set_setting(conn, "browser_pull_accounts", {"fidelity": md})
     assert "couldn't read the balance" in ff.import_text(conn, "fidelity", "nothing useful here", "x.txt")
+
+
+
+def test_each_fidelity_login_is_its_own_connection_and_never_fills_the_wrong_account(tmp_path, monkeypatch):
+    """Both people sign in at the same NetBenefits page: each login has its own profile, Fills account and history,
+    and a statement for a different person than a login's earlier ones is never imported."""
+    from finance import bank_pull
+    assert bank_pull.command("fidelity")[0].endswith("fidelity_fetch.py") and bank_pull.command("fidelity")[1:] == []
+    assert bank_pull.command("fidelity_2")[0].endswith("fidelity_fetch.py")
+    assert bank_pull.command("fidelity_2")[1:] == ["--login", "fidelity_2"]
+    spec = importlib.util.spec_from_file_location("fidelity_fetch2", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    db.set_setting(conn, "household_people", [{"name": "Jane"}, {"name": "Sam"}])
+    a = db.get_or_create_account(conn, "J 401(k)", "Fidelity", "retirement")
+    b = db.get_or_create_account(conn, "S 401(k)", "Fidelity", "retirement")
+    db.set_setting(conn, "browser_pull_accounts", {"fidelity": a, "fidelity_2": b})
+    assert ff.same_holder(conn, "fidelity", "Account Statement\nJANE SAMPLE\nBeginning Balance") is None   # first: Jane
+    assert ff.same_holder(conn, "fidelity_2", "Account Statement\nSAM SAMPLE\n...") is None                # Sam's login
+    assert "different person" in ff.same_holder(conn, "fidelity", "Account Statement\nSAM SAMPLE")       # wrong window
+    assert "not imported" in ff.import_text(conn, "fidelity", "SAM SAMPLE statement", "x.txt")
+    assert db.get_setting(conn, "browser_pull_holders") == {"fidelity": "Jane", "fidelity_2": "Sam"}
