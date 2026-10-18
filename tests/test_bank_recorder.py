@@ -49,3 +49,10 @@ def test_after_a_click_only_layout_measurements_are_noted():
     js = rec.RECORDER_JS
     assert "event: 'layout'" in js and "getBoundingClientRect" in js
     assert "innerText" not in js.split("const layout")[1].split("};")[0]          # sizes and kinds, never content
+
+
+
+def test_plain_chrome_keeps_the_pdf_viewer():
+    import inspect
+    src = inspect.getsource(rec.main)
+    assert '"--disable-extensions"' in src and "--disable-component-extensions-with-background-pages" in src

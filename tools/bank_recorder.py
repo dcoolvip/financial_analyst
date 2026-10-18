@@ -107,7 +107,10 @@ def main(bank: str, label: str = "statements") -> None:
         args = list(WINDOW)                                   # a full-size window: pop-ups (Merrill) scale to it
         extra = {}
         if bank in PLAIN_CHROME:                              # some banks (Amex) stall the sign-in of a browser that
-            extra["ignore_default_args"] = ["--enable-automation"]          # says it's script-driven
+            extra["ignore_default_args"] = ["--enable-automation",          # says it's script-driven; and keep Chrome's
+                                            "--disable-extensions",          # own PDF viewer (a built-in extension):
+                                            "--disable-component-extensions-with-background-pages"]  # its download
+                                                                             # buttons are what statement pop-ups show
             args.append("--disable-blink-features=AutomationControlled")
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
                                                     accept_downloads=True, viewport=None, args=args, **extra)
