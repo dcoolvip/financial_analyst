@@ -7,8 +7,8 @@ The route (recorded): View your statements -> Time period "Monthly" -> Month -> 
 shows as a page (#/sod/soddetail); "Download or Print" only prints that page, so there's no file. The pull reads the
 statement's text straight off the page (kept privately in the data folder) and imports it with the Fidelity 401(k)
 reader. It fills the dashboard account chosen for this login (Connected accounts -> Fidelity -> ⚙️ -> Fills).
-Plain Chrome. Sign-in: Enter once Chrome has filled the saved password in, else a notification asks you to sign in;
-"Remember this device" (ticked in the recording) keeps the text code away.
+Plain Chrome. Sign-in is yours: Fidelity refused sign-ins while the pull read the password box, so the pull leaves the
+sign-in page alone and only watches the address; "Remember this device" (ticked in the recording) keeps the code away.
 """
 from __future__ import annotations
 
@@ -57,21 +57,21 @@ def already_fetched(login: str) -> set[str]:
 
 
 def _signed_in(page) -> bool:
-    return "workplaceservices.fidelity.com" in page.url and \
-        not page.locator("input[type=password]").filter(visible=True).count()
+    return "workplaceservices.fidelity.com" in page.url        # inside NetBenefits (only the address is looked at)
 
 
 def sign_in(page) -> bool:
+    """Open NetBenefits and leave the sign-in page completely alone - you sign in (and the text code if asked).
+    Fidelity refused sign-ins in this window while the pull was reading the password box (even with the password
+    typed correctly and Log In clicked by you); the recorder, which didn't touch it, signed in fine. So until you're
+    in, the pull only watches the page address, which runs nothing on the page."""
     page.goto(LOGIN)
-    pressed, told = set(), False
-    deadline, ask_after = time.time() + WAIT_FOR_SIGN_IN_S, time.time() + 15
+    notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
+    deadline = time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
         if _signed_in(page):
             return True
-        if not bank_browser.press_if_chrome_filled(page, pressed) and not told and time.time() > ask_after:
-            notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
-            told = True                   # Enter only if Chrome filled the password - never while you're typing
-        page.wait_for_timeout(1500)
+        page.wait_for_timeout(2000)
     return False
 
 

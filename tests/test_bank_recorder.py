@@ -121,6 +121,27 @@ def test_enter_is_pressed_only_on_a_password_chrome_filled_never_while_typing():
     pressed = set()
     assert bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1
     assert not bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1   # once per page
-    for f in ("fidelity_fetch.py", "merrill_fetch.py", "amex_fetch.py"):
+    for f in ("merrill_fetch.py", "amex_fetch.py"):
         src = (Path(__file__).parent.parent / "tools" / f).read_text()
         assert "press_if_chrome_filled" in src and "pwd.input_value()" not in src, f
+
+
+
+def test_fidelity_sign_in_never_touches_the_page_until_you_are_in():
+    """Fidelity refused sign-ins in the pull's window while it read the password box; the recorder, which didn't,
+    signed in fine. So the Fidelity pull only watches the page address until you're inside NetBenefits."""
+    import importlib.util, inspect
+    spec = importlib.util.spec_from_file_location("ff", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    src = inspect.getsource(ff.sign_in) + inspect.getsource(ff._signed_in)
+    code = "\n".join(l.split("#")[0] for l in src.splitlines() if not l.strip().startswith(('"', "Open", "Fidelity", "typed", "in,")))
+    assert "locator(" not in code and "evaluate(" not in code and "press(" not in code
+    visits = []
+
+    class Page:
+        url = "https://nb.fidelity.com/login"
+        def goto(self, url): visits.append(url)
+        def wait_for_timeout(self, ms): Page.url = "https://workplaceservices.fidelity.com/mybenefits/navstation"
+    ff.notify = lambda t: None
+    assert ff.sign_in(Page()) is True and visits == [ff.LOGIN]
