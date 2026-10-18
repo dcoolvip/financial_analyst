@@ -933,3 +933,15 @@ def test_merrill_connects_with_a_test_run(env, monkeypatch):
     assert any("**Merrill** · not connected yet" in m.value for m in at.markdown)
     click(at, "🧪 Test run for Merrill")
     assert started == [("merrill", True)]
+
+
+
+def test_fidelity_can_be_recorded_from_the_dashboard(env, monkeypatch):
+    from finance import bank_pull
+    recorded = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**Fidelity** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record Fidelity")
+    assert recorded == ["fidelity"]

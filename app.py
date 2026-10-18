@@ -1731,7 +1731,7 @@ def bofa_status() -> None:
 BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chase", "Chase"),
                  "amex": ("American Express", "American Express"),
                  "merrill": ("Merrill", "Merrill")}   # key: (shown, institution); run in this order
-RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
+RECORD_FIRST: dict[str, str] = {"fidelity": "Fidelity"}     # route being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 
