@@ -138,8 +138,25 @@ def wait_for_pdf(page, before: int, timeout_s: float = 30) -> bytes:
     return CAUGHT[before]
 
 
+def goto_settled(page, url: str, tries: int = 3) -> None:
+    """Go to url, letting Merrill finish its own redirects first: right after sign-in it sends you on to the accounts
+    overview, and going elsewhere at that moment gets cut off ("interrupted by another navigation")."""
+    for attempt in range(tries):
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        try:
+            page.goto(url)
+            return
+        except Exception as e:
+            if "interrupted by another navigation" not in str(e) or attempt == tries - 1:
+                raise
+            page.wait_for_timeout(3000)
+
+
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
-    page.goto(DOCUMENTS)
+    goto_settled(page, DOCUMENTS)
     page.wait_for_timeout(4000)
     today, got = date.today(), []
     rows = page.locator("tr").filter(has_text=_DATE)

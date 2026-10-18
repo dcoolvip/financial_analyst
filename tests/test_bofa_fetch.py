@@ -355,3 +355,27 @@ def test_merrill_sign_in_starts_where_chrome_has_the_login_saved():
     src = inspect.getsource(mf.sign_in)
     assert "page.goto(HOME)" in src and "page.goto(DOCUMENTS)" not in src
     assert mf.HOME == "https://www.merrilledge.com/"
+
+
+
+def test_merrill_waits_out_its_own_redirect_after_sign_in():
+    """Regression: the update stopped with 'interrupted by another navigation' (Merrill redirecting to the accounts
+    overview right after sign-in) before reaching the statements."""
+    spec = importlib.util.spec_from_file_location("merrill_fetch4", Path(__file__).parent.parent / "tools/merrill_fetch.py")
+    mf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mf)
+
+    class Page:
+        def __init__(self, fails): self.fails, self.went, self.waits = fails, [], 0
+        def wait_for_load_state(self, state, timeout=None): self.waits += 1
+        def wait_for_timeout(self, ms): pass
+        def goto(self, url):
+            if self.fails:
+                self.fails -= 1
+                raise RuntimeError('Page.goto: Navigation to "x" is interrupted by another navigation to "y"')
+            self.went.append(url)
+    p = Page(fails=2)
+    mf.goto_settled(p, mf.DOCUMENTS)
+    assert p.went == [mf.DOCUMENTS] and p.waits == 3
+    with pytest.raises(RuntimeError):
+        mf.goto_settled(Page(fails=5), mf.DOCUMENTS)                           # gives up after 3 tries, loudly
