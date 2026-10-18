@@ -464,7 +464,6 @@ def test_fidelity_dropdowns_are_the_visible_selects_by_name():
             asked.append(sel)
             return type("L", (), {"filter": lambda s, visible: type("F", (), {"first": "the one"})()})()
     assert ff.dropdown(Page(), "Month") == "the one" and asked == ["select[aria-label='Month']"]
-    src = inspect.getsource(ff.show_statement) if False else ""
     import inspect
     assert "get_by_label(" not in inspect.getsource(ff.show_statement) + inspect.getsource(ff.open_statements)
 
