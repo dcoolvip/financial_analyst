@@ -3,11 +3,11 @@
     ~/.venvs/financial-analyst/bin/python tools/applecard_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/applecard_fetch.py --dry-run  # download + check, import into a copy
 
-The route (recorded): card.apple.com -> sign in (Continue with Password -> Sign In -> a verification code on your
+The route (recorded): card.apple.com -> Sign In (opens a pop-up) -> Continue with Password -> Sign In -> a verification code on your
 iPhone) -> Statements -> "Download statement of <month> (PDF)" (the newest is first) -> the PDF. Then Savings
 (card.apple.com/savings) for the balance, saved as today's value of the Apple Cash Savings account (created the first
 time). Statement transactions merge with what's here (date + amount), so nothing is doubled.
-Plain Chrome. Sign-in: "Continue with Password" is pressed for you and Enter once Chrome has filled the password in;
+Plain Chrome. Sign-in: "Sign In" on the home page and "Continue with Password" are pressed for you and Enter once Chrome has filled the password in;
 the verification code is yours (a notification asks).
 """
 from __future__ import annotations
@@ -79,15 +79,35 @@ def _signed_in(page) -> bool:
     return _menu(page, "Statements").count() > 0
 
 
+def _sign_in_form_open(page) -> bool:
+    """Apple's sign-in pop-up is showing (its frame has the account / password boxes or Continue with Password)."""
+    for frame in page.frames:
+        try:
+            if frame.locator("#continue-password, input[type=password], #account_name_text_field").filter(
+                    visible=True).count():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def sign_in(page) -> bool:
-    """Apple's sign-in sits in a frame: press "Continue with Password" when it shows, Enter once Chrome has filled
+    """Press Sign In on the home page (it opens a pop-up); Apple's sign-in sits in a frame there: press
+    "Continue with Password" when it shows, Enter once Chrome has filled
     the password in (never a typed one), and leave the verification code to you."""
     page.goto(HOME)
-    pressed, told = set(), False
+    pressed, told, opened = set(), False, 0.0
     deadline, ask_after = time.time() + WAIT_FOR_SIGN_IN_S, time.time() + 20
     while time.time() < deadline:
         if _signed_in(page):
             return True
+        if not _sign_in_form_open(page) and time.time() - opened > 15:      # the home page: Sign In opens the pop-up
+            try:
+                page.locator("ui-button, button, [role=button], a").filter(
+                    has_text=re.compile(r"^\s*Sign In\s*$", re.I)).filter(visible=True).first.click(timeout=3000)
+                opened = time.time()
+            except Exception:
+                pass
         for frame in page.frames:
             try:
                 button = frame.locator("#continue-password").filter(visible=True)

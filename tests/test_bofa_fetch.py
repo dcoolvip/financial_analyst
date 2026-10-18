@@ -560,3 +560,39 @@ def test_apple_card_pull_imports_the_statement_and_the_savings_balance(tmp_path,
     assert af.save_savings(conn, 12_345.67, date(2026, 10, 28)) == "Apple Cash Savings: balance saved (Oct 28)"
     accts = db.accounts(conn).set_index("name")
     assert accts.loc["Apple Cash Savings", "institution"] == "Apple Card" and accts.loc["Apple Cash Savings", "type"] == "savings"
+
+
+def test_apple_card_sign_in_presses_sign_in_on_the_home_page_first(monkeypatch):
+    spec = importlib.util.spec_from_file_location("applecard_fetch2", Path(__file__).parent.parent / "tools/applecard_fetch.py")
+    af = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(af)
+
+    class Loc:
+        def __init__(self, page, what):
+            self.page, self.what = page, what
+        def filter(self, **kw):
+            if "has_text" in kw:
+                self.what += "|" + kw["has_text"].pattern
+            return self
+        @property
+        def first(self):
+            return self
+        def count(self):
+            return int(self.what.startswith(".menu-item-label") and self.page.signed_in)
+        def click(self, **kw):
+            self.page.clicks.append(self.what)
+            self.page.signed_in = True                 # pretend the rest of the sign-in happened
+
+    class Page:
+        def __init__(self):
+            self.clicks, self.signed_in, self.frames = [], False, []
+        def goto(self, url):
+            self.url = url
+        def locator(self, sel, **kw):
+            return Loc(self, sel + ("|" + kw["has_text"].pattern if "has_text" in kw else ""))
+        def wait_for_timeout(self, ms):
+            pass
+
+    page = Page()
+    assert af.sign_in(page)
+    assert len(page.clicks) == 1 and "Sign In" in page.clicks[0]
