@@ -965,3 +965,15 @@ def test_a_note_after_the_date_in_a_run_history_never_breaks_the_page(env, tmp_p
     (tmp_path / "bank_fetch" / "bofa_runs.log").write_text("--- 2026-10-18 10:45 (from the saved statement)\nok\n")
     at = app()
     assert any("Updated Oct 18" in m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))
+
+
+
+def test_robinhood_can_be_recorded_from_the_dashboard(env, monkeypatch):
+    from finance import bank_pull
+    recorded = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**Robinhood** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record Robinhood")
+    assert recorded == ["robinhood"]

@@ -28,8 +28,8 @@ from finance import bank_browser, paths  # noqa: E402
 
 BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/",
          "amex": "https://www.americanexpress.com/", "merrill": "https://www.merrilledge.com/",
-         "fidelity": "https://nb.fidelity.com/"}
-PLAIN_CHROME = {"amex", "merrill", "fidelity"}
+         "fidelity": "https://nb.fidelity.com/", "robinhood": "https://robinhood.com/login"}
+PLAIN_CHROME = {"amex", "merrill", "fidelity", "robinhood"}
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60
