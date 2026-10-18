@@ -1,6 +1,8 @@
 """Importer registry + the single function that writes a ParsedFile to the DB."""
 from __future__ import annotations
 
+import csv
+
 from .. import db
 from . import amex, apple_card, barclays, bofa, chase, statements, wealthfront
 from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
@@ -9,11 +11,15 @@ from .base import KIND_ACCOUNT_TYPES, ParsedFile, UnrecognizedFile
 IMPORTERS = [bofa, chase, wealthfront, amex, barclays, apple_card]
 
 
+EXCEL_IMPORTERS = [amex]          # the ones that read .xlsx (a zip file); the rest are text CSV readers
+
+
 def parse_file(content: bytes | str, filename: str = "") -> ParsedFile:
-    for importer in IMPORTERS:
+    excel = isinstance(content, bytes) and content[:2] == b"PK"
+    for importer in (EXCEL_IMPORTERS if excel else IMPORTERS):
         try:
             return importer.parse(content, filename=filename)
-        except UnrecognizedFile:
+        except (UnrecognizedFile, csv.Error):           # not this bank's file (a CSV reader choking on it too)
             continue
     raise UnrecognizedFile("No importer recognized this file")
 

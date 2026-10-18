@@ -401,3 +401,13 @@ def test_amex_excel_without_openpyxl_says_how_to_fix_it(monkeypatch):
     monkeypatch.setattr(pd, "read_excel", lambda *a, **k: (_ for _ in ()).throw(ImportError("no openpyxl")))
     with pytest.raises(base.UnrecognizedFile, match="pip install openpyxl"):
         amex.parse(b"PK\x03\x04 an xlsx")
+
+
+def test_an_excel_file_goes_to_the_excel_reader_not_the_csv_ones(monkeypatch):
+    """Regression: the BofA CSV reader tried the Amex .xlsx first and crashed with a csv error."""
+    from finance import importers
+    from finance.importers import amex
+    seen = []
+    monkeypatch.setattr(amex, "parse", lambda content, filename="": seen.append(filename) or "parsed")
+    assert importers.parse_file(b"PK\x03\x04rest-of-a-zip", filename="activity.xlsx") == "parsed"
+    assert seen == ["activity.xlsx"]
