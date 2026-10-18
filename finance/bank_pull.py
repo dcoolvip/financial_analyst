@@ -15,7 +15,8 @@ from . import paths
 LABEL = "com.financialanalyst.bofa-monthly"     # (kept: it's the job macOS already knows; it now runs every bank)
 BANKS = {"bofa": "Bank of America", "chase": "Chase", "amex": "American Express",
          "merrill": "Merrill", "fidelity": "Fidelity", "fidelity_2": "Fidelity (second login)",
-         "robinhood": "Robinhood", "redfin": "Redfin home values"}   # run in this order
+         "robinhood": "Robinhood", "applecard": "Apple Card",
+         "redfin": "Redfin home values"}   # run in this order
 # A bank with several logins (Fidelity: one per person) runs the same script once per login, each with its own Chrome
 # profile (its own saved password and "remember this device"), its own "Fills" account and its own history.
 SCRIPTS = {"fidelity_2": ("fidelity_fetch.py", ["--login", "fidelity_2"])}

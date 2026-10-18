@@ -606,7 +606,52 @@ def _fidelity_401k(t: str) -> Statement:
     return s
 
 
+# Apple Card monthly statement (card.apple.com -> Statements -> Download, PDF). Rows, one value per line:
+#   payments:      "09/12/2026 / ACH Deposit Internet transfer from account ending in 1234 / -$500.00"
+#   transactions:  "09/03/2026 / Hulu 2500 Broadway Street ... CA USA / 2% / $0.36 / $17.99"   (Daily Cash %, $, amount)
+# Charges print positive and payments negative - the other way round from the dashboard (money out < 0). A row can
+# show up on both sides of a page break and still be real (a same-day repeat charge): the printed totals decide.
+_APPLE_MONEY = r"(-?\$[\d,]+\.\d{2})"
+
+
+def _apple_card(t: str) -> Statement:
+    s = Statement(kind="credit_card", institution="Apple Card", account_type="credit_card", text=t)
+    m = re.search(rf"(?m)^Total Balance\s*\n{_APPLE_MONEY}\s*\n\s*as of {_DATE_LONG}", t)
+    if m:
+        s.balance, s.as_of = _money(m.group(1)), _parse_date(m.group(2))
+    m = re.search(r"Statement\s*\n\s*([A-Z][a-z]{2} \d{1,2})\s*\n\s*[—–-]\s*\n\s*([A-Z][a-z]{2} \d{1,2}, \d{4})", t)
+    if m and (end := _parse_date(m.group(2))):
+        start = _parse_date(f"{m.group(1)}, {end.year}")
+        if start and start > end:
+            start = _parse_date(f"{m.group(1)}, {end.year - 1}")
+        s.period = (start, end) if start else None
+        s.as_of = s.as_of or end
+    charges = re.findall(rf"(?m)^(\d{{2}}/\d{{2}}/\d{{4}})\n(.+?)\n\d+%\n{_APPLE_MONEY}\n{_APPLE_MONEY}\s*$", t)
+    payments = re.findall(rf"(?m)^(\d{{2}}/\d{{2}}/\d{{4}})\n(.+?)\n{_APPLE_MONEY}\s*$", t)
+    problems = []
+    for label, rows, total in (("charges", [(d, x, a) for d, x, _, a in charges],
+                                r"Total charges, credits, and returns for this period"),
+                               ("payments", payments, r"Total payments for this period")):
+        m = re.search(rf"{total}\s*\n{_APPLE_MONEY}", t)
+        read = round(sum(_money(a) for *_, a in rows), 2)
+        if not m:
+            problems.append(f"{label}: no printed total to check against")
+        elif abs(read - _money(m.group(1))) > 0.005:
+            problems.append(f"{label}: read ${read:,.2f} but the statement's total is ${_money(m.group(1)):,.2f}")
+    s.transactions = [{"date": _parse_date(d), "amount": -_money(a), "description": " ".join(x.split())}
+                      for d, x, a in [(d, x, a) for d, x, _, a in charges] + payments]
+    s.totals_ok = not problems
+    if problems:
+        s.transactions = []
+        s.notes.append("Transactions not imported - " + "; ".join(problems))
+    if s.balance is None or s.as_of is None:
+        s.notes.append("Not found: " + ", ".join(n for n, v in (("date", s.as_of), ("balance", s.balance)) if v is None))
+    return s
+
+
 def parse_text(text: str) -> Statement:
+    if "Apple Card is issued by Goldman Sachs" in text:
+        return _apple_card(text)
     if re.search(r"NetBenefits|Retirement Savings Statement", text) and re.search(r"401\(k\)|403\(b\)|457", text):
         return _fidelity_401k(text)
     if re.search(r"\bTrade Confirmation\b", text[:400], re.IGNORECASE):

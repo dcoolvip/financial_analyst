@@ -538,3 +538,25 @@ def test_robinhood_imports_every_account_in_the_statement_by_digits(tmp_path, mo
     assert lines[0] == "Kid Robinhood: value saved (Aug 31), 1 positions"
     assert "ending 2941: no dashboard account" in lines[1]                    # never guessed into another account
     assert conn.execute("SELECT COUNT(*) FROM holdings WHERE account_id = ?", (a,)).fetchone()[0] == 1
+
+
+def test_apple_card_pull_imports_the_statement_and_the_savings_balance(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("applecard_fetch", Path(__file__).parent.parent / "tools/applecard_fetch.py")
+    af = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(af)
+    from tests.test_statements import APPLE_CARD_STMT
+    assert af.savings_balance("Savings\nBalance\n$12,345.67\nInterest earned") == 12_345.67
+    assert af.savings_balance("Total Balance $5,000.00 as of today") == 5_000.0
+    assert af.savings_balance("Nothing here") is None
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    card = db.get_or_create_account(conn, "Apple Card", "Apple Card", "credit_card")
+    pdf = tmp_path / "Apple Card Statement - September 2026.pdf"
+    pdf.write_bytes(_pdf(APPLE_CARD_STMT.splitlines()))
+    line = af.import_statement(conn, pdf)
+    assert line == "Apple Card: balance saved (Sep 30), 4 transactions, 0 already there, 4 added"
+    assert af.import_statement(conn, pdf).endswith("4 transactions, 4 already there, 0 added")      # never doubled
+    assert af.save_savings(conn, None, date(2026, 10, 28)).endswith("nothing saved")
+    assert af.save_savings(conn, 12_345.67, date(2026, 10, 28)) == "Apple Cash Savings: balance saved (Oct 28)"
+    accts = db.accounts(conn).set_index("name")
+    assert accts.loc["Apple Cash Savings", "institution"] == "Apple Card" and accts.loc["Apple Cash Savings", "type"] == "savings"

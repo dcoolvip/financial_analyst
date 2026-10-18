@@ -720,3 +720,76 @@ def test_robinhood_masked_account_numbers_still_give_the_last_four():
     text = ("09/01/2026 to 09/30/2026\nJane Sample\nIndividual Account #:*****4688\n"
             "Net Account Balance $1,000.00\n")
     assert _robinhood(text).last4 == "4688"
+
+
+APPLE_CARD_STMT = """Your September Balance
+as of Sep 30, 2026
+$120.00
+Account Information
+Previous Total Balance
+$500.00
+as of Aug 31, 2026
+Total Balance
+$120.00
+as of Sep 30, 2026
+Page 1 /6
+Apple Card is issued by Goldman Sachs Bank USA, Salt Lake City Branch.
+Statement
+Sep 1
+-
+Sep 30, 2026
+Account Activity
+Payments
+Total payments for this period
+-$500.00
+Transactions
+Total charges, credits, and returns for this period
+$120.00
+Payments made by Pat Sample
+Date
+Description
+Amount
+09/12/2026
+ACH Deposit Internet transfer from account ending in 1234
+-$500.00
+Transactions by Pat Sample
+Date
+Description
+Daily Cash
+Amount
+09/03/2026
+Hulu 2500 Broadway Street, 2nd Floor Santa Monica 90404 CA USA
+2%
+$0.80
+$40.00
+Page 3 /6
+Apple Card is issued by Goldman Sachs Bank USA, Salt Lake City Branch.
+Transactions by Pat Sample
+09/20/2026
+KIDS CLASS 123 Main St FAIRFAX 22030 VA USA
+2%
+$0.80
+$40.00
+09/20/2026
+KIDS CLASS 123 Main St FAIRFAX 22030 VA USA
+2%
+$0.80
+$40.00
+"""
+
+
+def test_apple_card_statement_reads_balance_period_and_every_row():
+    from finance.importers.statements import parse_pdf_all
+    s = parse_pdf_all(_pdf(APPLE_CARD_STMT.splitlines()))[0]
+    assert (s.institution, s.account_type, s.as_of, s.balance) == ("Apple Card", "credit_card", date(2026, 9, 30), 120.0)
+    assert s.period == (date(2026, 9, 1), date(2026, 9, 30)) and s.totals_ok and not s.notes
+    assert sorted(t["amount"] for t in s.transactions) == [-40.0, -40.0, -40.0, 500.0]   # same-day repeat kept
+    assert s.transactions[0]["description"].startswith("Hulu")
+
+
+def test_apple_card_statement_that_does_not_add_up_imports_no_transactions():
+    from finance.importers.statements import parse_pdf_all
+    broken = APPLE_CARD_STMT.replace("$120.00\nPayments made", "$80.00\nPayments made")
+    s = parse_pdf_all(_pdf(broken.splitlines()))[0]
+    assert s.balance == 120.0 and not s.transactions and not s.totals_ok
+    assert "charges: read $120.00 but the statement's total is $80.00" in s.notes[0]

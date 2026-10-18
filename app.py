@@ -1738,11 +1738,12 @@ BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chas
                  "fidelity": ("Fidelity", "Fidelity"),
                  "fidelity_2": ("Fidelity · second login", "Fidelity"),
                  "robinhood": ("Robinhood", "Robinhood"),
+                 "applecard": ("Apple Card", "Apple Card"),
                  "redfin": ("Redfin home values", "Redfin estimate")}   # key: (shown, institution); in this order
 NO_SIGN_IN = {"redfin": "Opens each home's public Redfin page in a Chrome window on this Mac (no sign-in) and saves "
                         "its Redfin Estimate as today's value."}
 PICK_ACCOUNT = {"fidelity", "fidelity_2"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
-RECORD_FIRST = {"applecard": "Apple Card", "golden1": "Golden 1"}   # route being recorded (no pull yet)
+RECORD_FIRST = {"golden1": "Golden 1"}   # route being recorded (no pull yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
 PROBLEM = ("couldn't", "wrong document", "not imported", "don't add up")
 
