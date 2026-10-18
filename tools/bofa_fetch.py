@@ -219,6 +219,7 @@ def main(dry_run: bool = False) -> None:
     seen = already_fetched()
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to BofA within 10 minutes - nothing downloaded.")

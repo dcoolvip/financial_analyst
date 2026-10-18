@@ -2,6 +2,8 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 spec = importlib.util.spec_from_file_location("bank_recorder", Path(__file__).parent.parent / "tools/bank_recorder.py")
 rec = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(rec)
@@ -154,3 +156,40 @@ def test_fidelity_sign_in_never_touches_the_page_until_you_are_in():
     ff.notify = lambda t: None
     tab = ff.sign_in(first)
     assert tab is not first and "workplaceservices" in tab.url and visits == [ff.LOGIN]
+
+
+def test_every_pull_opens_its_tab_before_using_it():
+    """A pull whose main() uses `page` must create it there (a refactor once dropped the line from BofA and Chase:
+    the window opened and closed at once with NameError)."""
+    import ast
+    for f in sorted((Path(__file__).parent.parent / "tools").glob("*_fetch.py")):
+        main = next(n for n in ast.walk(ast.parse(f.read_text())) if isinstance(n, ast.FunctionDef) and n.name == "main")
+        used = {n.id for n in ast.walk(main) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        made = {t.id for n in ast.walk(main) if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+        if "page" in used:
+            assert "page" in made, f.name
+
+
+def test_no_undefined_names_anywhere():
+    """The pulls run outside the tests: a name lost in a refactor must fail here, not on the 28th."""
+    api = pytest.importorskip("pyflakes.api")
+    from pyflakes import messages, reporter
+    root = Path(__file__).parent.parent
+    found = []
+
+    class Collect(reporter.Reporter):
+        def __init__(self):
+            pass
+
+        def flake(self, m):
+            if isinstance(m, (messages.UndefinedName, messages.UndefinedLocal)):
+                found.append(str(m))
+
+        def syntaxError(self, *a):
+            found.append(f"syntax error: {a}")
+
+        def unexpectedError(self, *a):
+            found.append(f"unexpected: {a}")
+    for f in [root / "app.py", *root.glob("tools/*.py"), *root.glob("finance/*.py"), *root.glob("finance/importers/*.py")]:
+        api.checkPath(str(f), Collect())
+    assert not found, found

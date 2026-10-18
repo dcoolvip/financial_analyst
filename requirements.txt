@@ -2,6 +2,7 @@ streamlit>=1.50
 pandas>=2.2
 plotly>=6.0
 pytest>=8.0
+pyflakes>=3.0             # tests: no undefined names in the pulls (they run outside the tests)
 anthropic>=1.0
 truststore>=0.9
 aiohttp>=3.9

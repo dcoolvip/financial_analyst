@@ -273,6 +273,7 @@ def main(dry_run: bool = False) -> None:
     seen = already_fetched()
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile)
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
         watch_downloads(ctx)
         try:
             if not sign_in(page):
