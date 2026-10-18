@@ -57,7 +57,19 @@ RECORDER_JS = r"""
       href: t.getAttribute('href'),
     };
   };
-  document.addEventListener('click', e => window.__record && window.__record({event: 'click', ...describe(e.target)}), true);
+  // After a click: the size and kind of any pop-up / frame / embedded document on screen - measurements only.
+  const layout = () => {
+    const els = [...document.querySelectorAll("[role=dialog],[aria-modal=true],iframe,embed,object")]
+      .filter(e => e.offsetParent || e.getClientRects().length);
+    window.__record && window.__record({event: 'layout', window: `${innerWidth}x${innerHeight}`,
+      items: els.slice(0, 8).map(e => { const r = e.getBoundingClientRect();
+        return `${e.tagName.toLowerCase()}${e.getAttribute('role') ? '[' + e.getAttribute('role') + ']' : ''}` +
+               `${e.type ? ' type=' + e.type : ''} ${Math.round(r.width)}x${Math.round(r.height)}`; })});
+  };
+  document.addEventListener('click', e => {
+    window.__record && window.__record({event: 'click', ...describe(e.target)});
+    setTimeout(layout, 2500);
+  }, true);
   document.addEventListener('change', e => {
     const t = e.target;
     if (t.tagName === 'SELECT') {
@@ -118,17 +130,23 @@ def main(bank: str, label: str = "statements") -> None:
         print("Sign in in the Chrome window (password, text code). Nothing is recorded until you're signed in.",
               flush=True)
 
-        deadline = time.time() + WAIT_FOR_SIGN_IN_S
+        deadline, saw_password = time.time() + WAIT_FOR_SIGN_IN_S, False
         while time.time() < deadline:
             try:
                 if any(p.get_by_text(SIGNED_IN).first.is_visible() for p in ctx.pages):
+                    break
+                boxes = sum(f.locator("input[type=password]").filter(visible=True).count()
+                            for p in ctx.pages for f in p.frames)
+                if boxes:
+                    saw_password = True
+                elif saw_password:            # the sign-in form was there and is gone: you're in (Log Out may be in a menu)
                     break
             except Exception:
                 pass
             if not ctx.pages:
                 print("Window closed before signing in - nothing recorded.")
                 return
-            time.sleep(2)
+            ctx.pages[0].wait_for_timeout(2000) if ctx.pages else time.sleep(2)
         else:
             print("Didn't see you sign in within 10 minutes - stopping.")
             ctx.close()

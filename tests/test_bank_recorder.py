@@ -42,3 +42,10 @@ def test_chrome_opens_full_size_so_pop_ups_keep_their_buttons():
     assert "--window-size=1680,1050" in rec.WINDOW
     for f in ("bofa_fetch.py", "chase_fetch.py", "amex_fetch.py"):
         assert "--window-size=1680,1050" in (Path(__file__).parent.parent / "tools" / f).read_text(), f
+
+
+
+def test_after_a_click_only_layout_measurements_are_noted():
+    js = rec.RECORDER_JS
+    assert "event: 'layout'" in js and "getBoundingClientRect" in js
+    assert "innerText" not in js.split("const layout")[1].split("};")[0]          # sizes and kinds, never content
