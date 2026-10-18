@@ -80,6 +80,10 @@ def test_amex_balance_is_read_off_the_dashboard(tmp_path, monkeypatch):
     assert af.balance_from("Welcome\nTotal Balance\n$1,234.56\nStatement Balance\n$900.00") == (1_234.56, "Total Balance")
     assert af.balance_from("Current Balance  -$25.00 (credit)") == (-25.0, "Current Balance")
     assert af.balance_from("Nothing to see") is None
+    real = ("Total annual income\nUSD $\n$\nBlue Cash\n••••12345\nRemaining Statement Balance\n"   # as the page shows it
+            "More info on remaining_statement_balance_tooltip\n$0.00\nAug 25 - Sep 24\nPayment not required at this "
+            "time\nTotal Balance\nMore info on total_balance_tooltip\n$87.65\nCredit Limit")
+    assert af.balance_from(real) == (87.65, "Total Balance")
     monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
     conn = db.connect(tmp_path / "finance.db")
     card = db.get_or_create_account(conn, "Amex", "American Express", "credit_card")

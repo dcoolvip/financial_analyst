@@ -83,7 +83,8 @@ BALANCE_LABELS = ("Total Balance", "Current Balance", "Balance")      # in this 
 def balance_from(text: str) -> tuple[float, str] | None:
     """The card balance on the Amex dashboard: (amount owed, the label it was under). A credit shows as negative."""
     for label in BALANCE_LABELS:
-        m = re.search(rf"(?i)\b{label}\b[^$\n-]{{0,40}}\n?[^$\n-]{{0,40}}(-?)\s?\$\s?([\d,]+\.\d{{2}})", text or "")
+        m = re.search(rf"(?i)\b{label}\b(?:[^$\n-]{{0,60}}\n){{0,3}}[^$\n-]{{0,40}}(-?)\s?\$\s?([\d,]+\.\d{{2}})",
+                      text or "")           # the amount can sit a few lines down (Amex puts a help-text line between)
         if m:
             return (-1 if m.group(1) else 1) * float(m.group(2).replace(",", "")), label
     return None
