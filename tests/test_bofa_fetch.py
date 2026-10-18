@@ -488,3 +488,27 @@ def test_fidelity_fills_one_form_and_checks_monthly_stuck_before_submitting():
         def press(self, k): did.append(k)
     ff.choose(Box(), "Monthly")
     assert did == ["click", "select Monthly", "change", "Tab"]
+
+
+
+def test_fidelity_waits_for_month_and_year_to_appear():
+    """Regression: the update chose Monthly, gave the Month box one second to appear and timed out on a slow day."""
+    spec = importlib.util.spec_from_file_location("fidelity_fetch6", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    ticks = {"n": 0}
+
+    class Box:
+        def __init__(self, there): self.there = there
+        def count(self): return 1 if self.there() else 0
+
+    class Scope:
+        def __init__(self, where): self.where = where
+        def locator(self, sel):
+            there = (lambda: ticks["n"] >= 6) if self.where == "page" else (lambda: False)   # shows up late, outside the form
+            return type("L", (), {"filter": lambda s, visible: type("F", (), {"first": Box(there)})()})()
+
+    class Page(Scope):
+        def wait_for_timeout(self, ms): ticks["n"] += 1
+    box = ff.appeared(Page("page"), Scope("form"), "Month")
+    assert box.count() == 1 and ticks["n"] == 6                                     # waited ~3 s, then found it

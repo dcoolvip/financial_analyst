@@ -89,6 +89,19 @@ def statement_form(page):
     return (form if form.count() else button.locator("xpath=ancestor::*[.//select][1]")), button
 
 
+def appeared(page, form, label: str, timeout_s: float = 20):
+    """Wait for a box Fidelity adds after a choice (Month / Year appear once Monthly is picked; it took longer than a
+    second on a slow day). In the form if it's there, else the visible one on the page."""
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        for scope in (form, page):
+            box = dropdown(scope, label)
+            if box.count():
+                return box
+        page.wait_for_timeout(500)
+    raise TimeoutError(f"the '{label}' box didn't appear after choosing Monthly")
+
+
 def choose(box, label: str) -> None:
     """Pick an option the way you did: click into the box, choose, move on (so the page registers the choice)."""
     box.click()
@@ -129,9 +142,9 @@ def show_statement(page, year: int, month: int) -> str:
     form, button = statement_form(page)
     for attempt in range(2):
         choose(dropdown(form, "Time period"), "Monthly")
-        page.wait_for_timeout(1000)                        # Month and Year appear once Monthly is chosen
-        choose(dropdown(form, "Month"), MONTHS[month - 1])
-        choose(dropdown(form, "Year"), str(year))
+        month_box, year_box = appeared(page, form, "Month"), appeared(page, form, "Year")   # added once Monthly is in
+        choose(month_box, MONTHS[month - 1])
+        choose(year_box, str(year))
         chosen = dropdown(form, "Time period").evaluate("e => e.options[e.selectedIndex].text")
         if chosen.strip() == "Monthly":
             break
