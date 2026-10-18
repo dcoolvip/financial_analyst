@@ -20,7 +20,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, bank_pull, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, paths, plaid, portfolio, retirement
+from finance import assets, bank_pull, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, loan_schedule, paths, plaid, portfolio, retirement
 
 
 @st.cache_resource
@@ -266,6 +266,8 @@ if due := plaid_due():
             plaid.mark_tried(due, str(e))                                                       # try again tomorrow
             st.session_state["flash"] = f"Couldn't update your linked banks this time ({e}). Will retry tomorrow."
 
+if source == "My data":
+    loan_schedule.roll_forward(conn)               # loans without statements follow their payment schedule
 accts = db.accounts(conn)
 txns = db.transactions(conn)
 categorize.match_loan_payments(conn, txns)          # payments at your loans' exact amount = that loan
