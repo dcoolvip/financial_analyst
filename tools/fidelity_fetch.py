@@ -239,7 +239,7 @@ def main(login: str = "fidelity", dry_run: bool = False) -> None:
             page = sign_in(page)
             if page is None:
                 notify("Couldn't sign in to Fidelity within 10 minutes - nothing read.")
-                return
+                sys.exit(2)                             # the monthly run: not done
             text = show_statement(page, year, month)
         except Exception as e:
             notify(f"Fidelity pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing was imported.")

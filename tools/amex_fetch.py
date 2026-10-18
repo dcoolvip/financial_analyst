@@ -5,6 +5,7 @@
 
 Amex stalls the sign-in of a browser that announces it's script-driven, so Chrome opens without the automation
 flag. Sign-in: Enter if Chrome has filled the password in, else a notification asks you to sign in. Then
+First the balance is read off the dashboard you land on. Then
 Statements & Activity -> Download -> (a pop-up) Excel -> its Download (the route recorded in tools/bank_recorder.py),
 imported with the Amex reader: Amex's own reference number per transaction means nothing is doubled. If the file starts
 after the newest Amex transaction already here, it says so - a gap can't go unnoticed.
@@ -19,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +75,46 @@ def sign_in(page) -> bool:
             return True
         page.wait_for_timeout(2000)
     return False
+
+
+BALANCE_LABELS = ("Total Balance", "Current Balance", "Balance")      # in this order: the first one shown wins
+
+
+def balance_from(text: str) -> tuple[float, str] | None:
+    """The card balance on the Amex dashboard: (amount owed, the label it was under). A credit shows as negative."""
+    for label in BALANCE_LABELS:
+        m = re.search(rf"(?i)\b{label}\b[^$\n-]{{0,40}}\n?[^$\n-]{{0,40}}(-?)\s?\$\s?([\d,]+\.\d{{2}})", text or "")
+        if m:
+            return (-1 if m.group(1) else 1) * float(m.group(2).replace(",", "")), label
+    return None
+
+
+def read_balance(page):
+    """Read the balance off the dashboard you land on after sign-in (no extra page visits)."""
+    try:
+        if "/dashboard" not in page.url:
+            page.goto(DASHBOARD)
+        page.get_by_text(re.compile("balance", re.I)).first.wait_for(timeout=20_000)
+        page.wait_for_timeout(2000)
+        text = page.locator("body").inner_text()
+    except Exception as e:
+        print(f"Couldn't read the dashboard ({e.__class__.__name__})", flush=True)
+        return None
+    found = balance_from(text)
+    if found is None:                                    # what the page showed, digits hidden - to fix the reader
+        print("Dashboard shows: " + str([mask_digits(l)[:60] for l in text.splitlines() if l.strip()][:40]), flush=True)
+    return found
+
+
+def save_balance(conn, found, today) -> str:
+    accts = db.accounts(conn)
+    cards = accts[(accts["institution"] == INSTITUTION) & (accts["type"] == "credit_card")]
+    if found is None:
+        return "Amex balance: couldn't find it on the dashboard - nothing saved"
+    if len(cards) != 1:
+        return f"Amex balance: {len(cards)} Amex cards in the dashboard - not saved"
+    db.upsert_balance(conn, int(cards["id"].iloc[0]), today, found[0], f"Amex dashboard ({found[1]})")
+    return f"{cards['name'].iloc[0]}: balance saved ({today:%b %-d}, the dashboard's {found[1]})"
 
 
 def _labels(scope) -> list[str]:
@@ -161,7 +202,8 @@ def main(dry_run: bool = False) -> None:
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to Amex within 10 minutes - nothing downloaded.")
-                return
+                sys.exit(2)                             # the monthly run: not done
+            balance = read_balance(page)
             path = download_activity(page, out)
         except Exception as e:
             notify(f"Amex pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing was imported.")
@@ -176,7 +218,7 @@ def main(dry_run: bool = False) -> None:
     conn = db.connect(db_path)
     if not dry_run:
         checkpoints.create(conn, "Before the Amex pull")
-    line = import_csv(conn, path)
+    line = import_csv(conn, path) + "\n" + save_balance(conn, balance, date.today())
     with (base / "amex_runs.log").open("a") as log:          # what happened, no amounts
         log.write(f"--- {datetime.now():%Y-%m-%d %H:%M}{' (dry run)' if dry_run else ''}\n{line}\n")
     print(line)

@@ -145,7 +145,7 @@ def main(dry_run: bool = False) -> None:
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to Robinhood within 10 minutes - nothing downloaded.")
-                return
+                sys.exit(2)                             # the monthly run: not done
             pdf = download_latest(page, out)
         except Exception as e:
             notify(f"Robinhood pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing was imported.")

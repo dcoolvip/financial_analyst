@@ -268,6 +268,7 @@ if due := plaid_due():
 
 if source == "My data":
     loan_schedule.roll_forward(conn)               # loans without statements follow their payment schedule
+    assets.roll_forward_vehicles(conn)              # cars: month-end estimates from your last value
     if gold_news := gold.monthly_update(conn):     # once a month: gold at today's price
         st.session_state["flash"] = " ".join(filter(None, [st.session_state.get("flash"), *gold_news]))
 accts = db.accounts(conn)
@@ -1773,6 +1774,8 @@ def browser_row(bank: str) -> None:
     nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" + (f", after {before[-1]}" if before else "")
            if bank_pull.scheduled() else "no monthly update scheduled")      # one bank at a time, in this order
     problems = [l for l in (last[1] if last else []) if any(w in l for w in PROBLEM)]
+    if why := bank_pull.round_state()["failed"].get(bank):
+        problems.insert(0, f"Didn't finish this month ({why}) - Update the rest picks it up")
     status = f"{when} · {nxt}" + (f"  \n⚠️ {problems[0]}" if problems else "")
     update, gear = connection_row("🏠" if bank in NO_SIGN_IN else "🏦", shown, mine, status, bank)
     if update:
@@ -1918,6 +1921,21 @@ def automatic_rows() -> None:
         status = ("Paid off" if last[1] <= 0 else
                   f"Balance as of {date.fromisoformat(last[0]):%b %-d}, assuming on-time payments · next {nxt:%b %-d}")
         st.markdown(f"📅 **Payment schedule** · {r.name}  \n{status}")
+    for r in accts[accts["type"] == "vehicle"].itertuples():
+        if not assets.vehicle_purchase(r.notes):
+            continue
+        typed = conn.execute("SELECT MAX(date) FROM balances WHERE account_id = ? AND source NOT LIKE 'Estimated%'",
+                             (r.id,)).fetchone()[0]
+        nxt = (pd.Timestamp(today) + pd.offsets.MonthEnd(1)).date()           # the next month-end
+        st.markdown(f"🚗 **Value estimate** · {r.name}  \nCarried on from the value you typed"
+                    + (f" on {date.fromisoformat(typed):%b %-d}" if typed else "") + f", at the car's own pace · "
+                    f"next {nxt:%b %-d} (type a new value any time)")
+    if "pokemon" in bank_pull.EXTRA_STEPS and bank_pull.extra_available("pokemon"):
+        last = conn.execute("SELECT MAX(b.date) FROM balances b JOIN accounts a ON a.id = b.account_id "
+                            "WHERE a.institution = 'Pokemon dashboard'").fetchone()[0]
+        st.markdown("🃏 **Pokemon collection** · from your Pokemon dashboard  \n"
+                    + (f"Latest value {date.fromisoformat(last):%b %-d}" if last else "Not synced yet")
+                    + " · syncs in the monthly update")
 
 
 def render_connected() -> None:
@@ -1934,7 +1952,12 @@ def render_connected() -> None:
     h1, h2 = st.columns([6, 1.5], vertical_alignment="bottom")
     h1.markdown("#### Connected accounts", help="Banks that update themselves. Plaid banks update once a month "
                 "when you open the dashboard; Bank of America on its monthly date.")
-    if (items or bofa_on) and h2.button("Update all"):
+    rnd = bank_pull.round_state()
+    left = [b for b in bank_pull.left_this_round() if b in browser or b in bank_pull.EXTRA_STEPS]
+    resuming = bool(rnd["done"]) and bool(left)
+    if (items or bofa_on) and h2.button("Update the rest" if resuming else "Update all",
+                                         help="Banks already updated this month (since the "
+                                              f"{bank_pull.SCHEDULE_DAY}th) aren't signed in to again."):
         if items:
             plaid_sync(keys)
         if bofa_on:
@@ -1943,6 +1966,10 @@ def render_connected() -> None:
     with st.container(border=True):
         if not items and not bofa_on:
             st.caption("Nothing connected yet.")
+        if rnd["done"] or rnd["failed"]:
+            names = {**{b: BROWSER_BANKS[b][0] for b in BROWSER_BANKS}, **bank_pull.EXTRA_STEPS}
+            st.caption(f"This month (since {date.fromisoformat(rnd['round']):%b %-d}): {len(rnd['done'])} done"
+                       + (" · still to do: " + ", ".join(names.get(b, b) for b in left) if left else " · all done"))
         for b in browser:
             browser_row(b)
         if browser:

@@ -55,12 +55,14 @@ def running() -> bool:
 
 
 def start(dry_run: bool = False, bank: str = "bofa") -> None:
-    """Start a pull in the background: one bank (tools/<bank>_fetch.py), or bank="all" for every set-up bank."""
+    """Start a pull in the background: one bank, or bank="all" for every set-up bank not yet done this round.
+    Real runs go through tools/monthly_pull.py, which remembers what finished; test runs call the bank directly."""
     if os.environ.get("FINANCE_NO_BANK_PULL"):
         raise RuntimeError("Bank pulls are switched off here (tests)")
     if running():
         return
-    cmd = [str(paths.ROOT / "tools" / "monthly_pull.py")] if bank == "all" else command(bank)
+    monthly = [str(paths.ROOT / "tools" / "monthly_pull.py")]
+    cmd = monthly if bank == "all" else command(bank) if dry_run else monthly + ["--bank", bank]
     with run_log().open("w") as out:
         p = subprocess.Popen([sys.executable, *cmd] + (["--dry-run"] if dry_run else []),
                              cwd=paths.ROOT, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
@@ -149,3 +151,62 @@ def next_run(now: float | None = None) -> time.struct_time:
     if (t.tm_mday, t.tm_hour) >= (SCHEDULE_DAY, SCHEDULE_HOUR):
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return time.strptime(f"{year}-{month:02d}-{SCHEDULE_DAY} {SCHEDULE_HOUR}", "%Y-%m-%d %H")
+
+
+# --- the monthly round: what's done, so a re-run picks up where it stopped -----------------------------------------
+# A round starts on the schedule day (the 28th). Each bank that finishes is remembered for the round; "Update all"
+# then runs only the ones that failed or haven't run, so no bank is signed in to twice in a month without need.
+
+def round_start(today=None):
+    from datetime import date
+    today = today or date.today()
+    if today.day >= SCHEDULE_DAY:
+        return today.replace(day=SCHEDULE_DAY)
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    return date(y, m, SCHEDULE_DAY)
+
+
+def _round_file() -> Path:
+    return _dir() / "monthly_round.json"
+
+
+def round_state(today=None) -> dict:
+    """{"round": "2026-10-28", "done": {bank: "when"}, "failed": {bank: "why"}} for the current round."""
+    import json
+    key = round_start(today).isoformat()
+    try:
+        state = json.loads(_round_file().read_text())
+    except (FileNotFoundError, ValueError):
+        state = {}
+    return state if state.get("round") == key else {"round": key, "done": {}, "failed": {}}
+
+
+def mark_round(bank: str, ok: bool, note: str = "", today=None) -> None:
+    import json
+    from datetime import datetime
+    state = round_state(today)
+    state["done"].pop(bank, None)
+    state["failed"].pop(bank, None)
+    if ok:
+        state["done"][bank] = f"{datetime.now():%Y-%m-%d %H:%M}"
+    else:
+        state["failed"][bank] = note or "stopped"
+    _dir().mkdir(parents=True, exist_ok=True)
+    _round_file().write_text(json.dumps(state, indent=1))
+
+
+def left_this_round(today=None) -> list[str]:
+    """Set-up banks (and the extra monthly steps) not finished in this round, in run order."""
+    done = round_state(today)["done"]
+    return [b for b in [*BANKS, *EXTRA_STEPS] if b not in done and (extra_available(b) if b in EXTRA_STEPS else set_up(b))]
+
+
+EXTRA_STEPS = {"pokemon": "Pokemon collection"}    # monthly, no browser: run after the banks
+
+
+def extra_available(step: str) -> bool:
+    if step == "pokemon":
+        from . import pokemon
+        return pokemon.available()
+    return False
+

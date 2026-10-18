@@ -11,6 +11,9 @@ and feeds the forecast's range. Too little history falls back to a typical figur
 """
 from __future__ import annotations
 
+import re
+from datetime import date
+
 import numpy as np
 import pandas as pd
 
@@ -111,6 +114,14 @@ def explain(o: dict) -> str:
 VEHICLE_DEPRECIATION_BY_AGE = [0.20, 0.15, 0.14, 0.13, 0.12, 0.11, 0.10]
 
 
+def _curve(age: float) -> float:
+    """Log of value / price paid along the typical curve, at this age in years."""
+    rates = VEHICLE_DEPRECIATION_BY_AGE
+    full = int(age)
+    yrs = [rates[min(i, len(rates) - 1)] for i in range(full + 1)]
+    return sum(np.log1p(-r) for r in yrs[:full]) + (age - full) * np.log1p(-yrs[full])
+
+
 def vehicle_history(price: float, bought, value_now: float, as_of) -> pd.DataFrame:
     """Estimated month-end values (date, value) for a car bought new, from purchase to as_of. Follows the
     typical depreciation curve's shape, adjusted evenly so it starts exactly at the price paid and ends
@@ -119,13 +130,55 @@ def vehicle_history(price: float, bought, value_now: float, as_of) -> pd.DataFra
     dates = [bought] + [d for d in pd.date_range(bought, as_of, freq="ME") if d > bought] + [as_of]
     dates = sorted(set(dates))
     ages = np.array([(d - bought).days / 365.25 for d in dates])
-    rates = VEHICLE_DEPRECIATION_BY_AGE
-
-    def curve(age):                       # log of value / price along the typical curve
-        full = int(age)
-        yrs = [rates[min(i, len(rates) - 1)] for i in range(full + 1)]
-        return sum(np.log1p(-r) for r in yrs[:full]) + (age - full) * np.log1p(-yrs[full])
-    raw = np.array([curve(a) for a in ages])
+    raw = np.array([_curve(a) for a in ages])
     fix = (np.log(value_now / price) - raw[-1]) * ages / ages[-1]     # spread the difference evenly
     values = price * np.exp(raw + fix)
     return pd.DataFrame({"date": [d.date() for d in dates], "value": values.round(0)})
+
+
+# --- cars between the values you type: carried forward along the curve ---------------------------------------------
+# A car's notes say when and for how much it was bought new ("bought new Nov 15, 2019 for $27,000"). Each month-end
+# after its latest value gets an estimate: that value, lowered along the typical curve for the car's age, at the
+# pace the car has actually kept since it was bought. A value you
+# type (e.g. from Kelley Blue Book) is never overwritten, and the estimate carries on from it.
+
+VEHICLE_SOURCE = "Estimated (depreciation from your last value)"
+_BOUGHT = re.compile(r"bought new (?:on )?([A-Z][a-z]{2,8}\.? \d{1,2},? \d{4}) for \$([\d,]+)")
+
+
+def vehicle_purchase(notes) -> tuple[date, float] | None:
+    m = _BOUGHT.search(notes or "")
+    if not m:
+        return None
+    d = pd.to_datetime(m.group(1).replace(".", ""), errors="coerce")
+    return (d.date(), float(m.group(2).replace(",", ""))) if not pd.isna(d) else None
+
+
+def vehicle_forward(value: float, at: date, bought: date, until: date, price: float | None = None
+                    ) -> list[tuple[date, float]]:
+    """(month-end, estimated value) after `at`, up to `until`, from `value` along the curve - at the car's own pace
+    so far when the price paid is known (an EV that lost value faster than usual keeps doing so), within 0.5-2x."""
+    age = lambda d: max(0.0, (pd.Timestamp(d) - pd.Timestamp(bought)).days / 365.25)
+    start = _curve(age(at))
+    pace = min(2.0, max(0.5, np.log(value / price) / start)) if price and start < 0 and 0 < value < price else 1.0
+    return [(d.date(), round(value * float(np.exp(pace * (_curve(age(d)) - start))), 0))
+            for d in pd.date_range(pd.Timestamp(at), pd.Timestamp(until), freq="ME") if d.date() > at]
+
+
+def roll_forward_vehicles(conn, today: date | None = None) -> int:
+    """Add the month-end estimates up to today for every car whose notes give its purchase. Returns how many."""
+    from . import db
+    today = today or date.today()
+    added = 0
+    for r in db.accounts(conn).itertuples():
+        if r.type != "vehicle" or not r.active or not (bought := vehicle_purchase(r.notes)):
+            continue
+        last = conn.execute("SELECT date, balance FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1",
+                            (r.id,)).fetchone()
+        if not last or not last[1]:
+            continue
+        for d, v in vehicle_forward(float(last[1]), date.fromisoformat(last[0]), bought[0], today, bought[1]):
+            db.add_balance_if_missing(conn, int(r.id), d, v, VEHICLE_SOURCE)
+            added += 1
+    return added
+

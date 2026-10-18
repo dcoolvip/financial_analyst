@@ -277,7 +277,7 @@ def main(dry_run: bool = False) -> None:
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to Chase within 10 minutes - nothing downloaded.")
-                return
+                sys.exit(2)                             # the monthly run: not done
             new = download_new(page, out, seen)
         except Exception as e:
             notify(f"Chase pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing half-done was imported.")

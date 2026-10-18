@@ -214,7 +214,7 @@ def main(dry_run: bool = False) -> None:
         try:
             if not sign_in(page):
                 notify("Couldn't sign in to Apple Card within 10 minutes - nothing downloaded.")
-                return
+                sys.exit(2)                             # the monthly run: not done
             got = download_latest(page, out, seen)
             savings, text = read_savings(page)
             if savings is None:                        # what the page showed, digits hidden - to fix the reader

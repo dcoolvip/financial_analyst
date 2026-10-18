@@ -1013,3 +1013,13 @@ def test_golden_1_follows_its_schedule_instead_of_a_browser_pull(env):
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
     assert not any("Golden 1" in m.value for m in at.markdown)
     assert any("**Apple Card** · not connected yet" in m.value for m in at.markdown)
+
+
+def test_car_value_estimate_row(env):
+    conn, _ = env
+    car = db.add_account(conn, "Civic", "Honda", "vehicle", "bought new Nov 15, 2019 for $27,000")
+    db.upsert_balance(conn, car, date.today(), 8_910)
+    at = app()
+    assert any(m.value.startswith("🚗 **Value estimate** · Civic  \nCarried on from the value you typed on "
+                                  f"{date.today():%b %-d}") for m in at.markdown)
+
