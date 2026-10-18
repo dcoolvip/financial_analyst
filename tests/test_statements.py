@@ -711,3 +711,12 @@ def test_a_card_purchase_from_the_last_days_isnt_flagged_as_missing(tmp_path):
     s = Statement(kind="credit_card", period=(date(2026, 8, 7), date(2026, 9, 6)),
                   transactions=[{"date": date(2026, 8, 10), "description": "SHOP", "amount": -10.0}])
     assert merge_statement_transactions(conn, acct, s, "stmt.pdf")["only_in_dashboard"] == 1     # only the Aug 20 one
+
+
+
+def test_robinhood_masked_account_numbers_still_give_the_last_four():
+    """Robinhood's September statement prints 'Individual Account #:*****4688' (August showed the whole number)."""
+    from finance.importers.statements import _robinhood
+    text = ("09/01/2026 to 09/30/2026\nJane Sample\nIndividual Account #:*****4688\n"
+            "Net Account Balance $1,000.00\n")
+    assert _robinhood(text).last4 == "4688"

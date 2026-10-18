@@ -631,7 +631,7 @@ def _robinhood(t: str) -> Statement:
     s = Statement(kind="investment", institution="Robinhood", text=t)
     m = re.search(r"(\d{2}/\d{2}/\d{4})\s+to\s+(\d{2}/\d{2}/\d{4})", t)
     s.as_of = _parse_date(m.group(2)) if m else None
-    m = re.search(r"(?m)^([A-Za-z][A-Za-z ]*?)\s+Account\s*#:\s*(\d+)", t)
+    m = re.search(r"(?m)^([A-Za-z][A-Za-z ]*?)\s+Account\s*#:\s*[*xX•]*\s*(\d+)", t)   # "#:*****4688" too (masked)
     label = m.group(1).strip() if m else ""
     if m:
         s.last4 = m.group(2)[-4:]
