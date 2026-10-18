@@ -1008,13 +1008,8 @@ def test_gold_and_loan_schedule_say_when_they_last_updated(env):
                for t in text)
 
 
-def test_golden_1_is_recorded_first(env, monkeypatch):
-    from finance import bank_pull
-    started = []
-    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": started.append(bank))
+def test_golden_1_follows_its_schedule_instead_of_a_browser_pull(env):
     at = app()
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
-    assert any("**Golden 1** · not set up yet" in m.value for m in at.markdown)
-    assert any("**Apple Card** · not connected yet" in m.value for m in at.markdown)    # recorded: a pull now
-    click(at, "⏺ Record Golden 1")
-    assert started == ["golden1"]
+    assert not any("Golden 1" in m.value for m in at.markdown)
+    assert any("**Apple Card** · not connected yet" in m.value for m in at.markdown)
