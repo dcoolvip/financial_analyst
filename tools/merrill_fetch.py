@@ -5,10 +5,10 @@
 
 Merrill opens each statement in its own window (olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_…): a web page
 wrapping the PDF in a small embedded frame without download buttons. So: click the statement on Statements &
-Documents, find the PDF inside that window (a frame / embed address) and fetch it with the signed-in session (no
-viewer buttons needed), check it's a PDF, and import it with the Merrill statement reader.
-Plain Chrome (no automation signals), as for Amex. Sign-in: Enter if Chrome filled the password in, else a
-notification asks you to sign in.
+Documents and keep a copy of the PDF as that window loads it (the link is single-use, so it can't be fetched again;
+no viewer buttons needed), check it's a PDF, and import it with the Merrill statement reader.
+Plain Chrome (no automation signals), as for Amex. Sign-in: Merrill passes through an interim page first; whenever a
+page shows the password Chrome filled in, Enter is pressed; otherwise a notification asks you to sign in.
 """
 from __future__ import annotations
 
@@ -83,46 +83,57 @@ def _signed_in(page) -> bool:
     return page.get_by_text(SIGNED_IN).first.is_visible()
 
 
-def sign_in(page) -> bool:
-    page.goto(DOCUMENTS)                                 # signed out: Merrill sends you to its sign-in
-    page.wait_for_timeout(4000)
-    if not _signed_in(page):
-        if "olui2" in page.url:
-            page.goto(HOME)
-            page.wait_for_timeout(3000)
+def _press_if_filled(page, pressed: set[str]) -> bool:
+    """If this page shows a password Chrome has filled in, press Enter - once per page (Merrill passes you through
+    an interim sign-in page first, then the real one with the saved login filled)."""
+    try:
         pwd = page.locator("input[type=password]").filter(visible=True).first
-        try:
-            if pwd.count() and pwd.input_value():         # Chrome filled it in: sign in
-                pwd.press("Enter")
-            else:                                         # never submit an empty password
-                notify("Merrill: sign in in the Chrome window (pick your saved login) - the pull does the rest.")
-        except Exception:
-            pass
-    deadline = time.time() + WAIT_FOR_SIGN_IN_S
-    while time.time() < deadline:
-        if _signed_in(page):
+        here = page.url.split("?")[0]
+        if here not in pressed and pwd.count() and pwd.input_value():
+            pressed.add(here)
+            pwd.press("Enter")
             return True
-        page.wait_for_timeout(2000)
+    except Exception:
+        pass
     return False
 
 
-def fetch_pdf(win) -> bytes:
-    """The statement window is a web page wrapping the PDF in an embedded frame: fetch the PDF from wherever it is -
-    the window itself, a frame inside it, or an embed/object/iframe's address - with the signed-in session."""
-    from urllib.parse import urljoin
-    candidates = [win.url] + [f.url for f in win.frames if f.url and f.url != "about:blank"]
-    for sel, attr in (("embed", "src"), ("object", "data"), ("iframe", "src")):
-        for el in win.locator(sel).all():
-            if (src := el.get_attribute(attr)):
-                candidates.append(urljoin(win.url, src))
-    seen_types = []
-    for url in dict.fromkeys(candidates):
-        r = win.context.request.get(url, headers={"Referer": win.url})
-        body = r.body()
+def sign_in(page) -> bool:
+    page.goto(DOCUMENTS)                                 # signed out: Merrill sends you to its sign-in
+    pressed, told = set(), False
+    deadline, ask_after = time.time() + WAIT_FOR_SIGN_IN_S, time.time() + 15
+    while time.time() < deadline:
+        if _signed_in(page):
+            return True
+        if not _press_if_filled(page, pressed) and not told and time.time() > ask_after:
+            notify("Merrill: sign in in the Chrome window (pick your saved login) - the pull does the rest.")
+            told = True                                  # never submits an empty password
+        page.wait_for_timeout(1500)
+    return False
+
+
+CAUGHT: list = []        # PDFs caught on their way into a statement window
+
+
+def catch_pdfs(ctx) -> None:
+    """Statement links are single-use (…&g=<one-time code>): asking again gives an error page. So keep a copy of any
+    PDF as the window loads it, and let the window show it as usual."""
+    def handle(route):
+        resp = route.fetch()
+        body = resp.body()
         if body.startswith(b"%PDF"):
-            return body
-        seen_types.append(r.headers.get("content-type", "?").split(";")[0])
-    raise ValueError(f"no PDF in the statement window (looked at {len(seen_types)} addresses: {seen_types})")
+            CAUGHT.append(body)
+        route.fulfill(response=resp, body=body)
+    ctx.route("**/Records/**", handle)
+
+
+def wait_for_pdf(page, before: int, timeout_s: float = 30) -> bytes:
+    deadline = time.time() + timeout_s
+    while time.time() < deadline and len(CAUGHT) == before:
+        page.wait_for_timeout(500)
+    if len(CAUGHT) == before:
+        raise ValueError("no PDF came into the statement window")
+    return CAUGHT[before]
 
 
 def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
@@ -144,11 +155,11 @@ def download_new(page, out: Path, seen: set[str]) -> list[tuple[str, Path]]:
             continue
         tried.add(key(info))
         try:
+            before = len(CAUGHT)
             with page.expect_popup(timeout=20_000) as pop:
                 link.click()
             win = pop.value
-            win.wait_for_load_state()
-            body = fetch_pdf(win)
+            body = wait_for_pdf(page, before)
             path = out / f"ML_{info['date']:%m%d%Y}_{re.sub(r'[^A-Za-z0-9]+', '', info['name'])}.pdf"
             path.write_bytes(body)
             got.append((key(info), path))
@@ -187,6 +198,7 @@ def main(dry_run: bool = False) -> None:
     seen = already_fetched()
     with sync_playwright() as pw:
         ctx = bank_browser.launch(pw, profile, plain=True)
+        catch_pdfs(ctx)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
             if not sign_in(page):

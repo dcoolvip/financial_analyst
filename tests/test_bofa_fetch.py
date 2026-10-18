@@ -301,31 +301,45 @@ def test_merrill_picks_account_statements_and_imports_by_digits(tmp_path, monkey
 
 
 
-def test_merrill_finds_the_pdf_inside_the_statement_window():
-    """Merrill's statement window is a web page wrapping the PDF in an embedded frame (its own address is HTML)."""
+def test_merrill_keeps_the_pdf_as_the_window_loads_it_and_presses_enter_when_filled():
+    """Merrill's statement link is single-use (asking again gave an HTML error page): the PDF is caught as the window
+    loads it. And the real sign-in page (after an interim one) gets Enter once Chrome has filled the password."""
     spec = importlib.util.spec_from_file_location("merrill_fetch2", Path(__file__).parent.parent / "tools/merrill_fetch.py")
     mf = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mf)
-    asked = []
+    routes = {}
+    ctx = type("Ctx", (), {"route": lambda self, pattern, f: routes.__setitem__(pattern, f)})()
+    mf.catch_pdfs(ctx)
+    fulfilled = []
 
     class Resp:
-        def __init__(self, body, ctype): self._b, self.headers = body, {"content-type": ctype}
+        def __init__(self, body): self._b = body
         def body(self): return self._b
 
-    class Req:
-        def get(self, url, headers=None):
-            asked.append(url)
-            return Resp(b"%PDF-1.7 statement", "application/pdf") if url.endswith("/doc.pdf?id=1") else \
-                Resp(b"<html>wrapper</html>", "text/html")
+    class Route:
+        def __init__(self, body): self.b = body
+        def fetch(self): return Resp(self.b)
+        def fulfill(self, response, body): fulfilled.append(body)
+    mf.CAUGHT.clear()
+    routes["**/Records/**"](Route(b"<html>the wrapper page</html>"))
+    routes["**/Records/**"](Route(b"%PDF-1.7 the statement"))
+    assert mf.CAUGHT == [b"%PDF-1.7 the statement"] and len(fulfilled) == 2       # the window still gets both
+    assert mf.wait_for_pdf(type("P", (), {"wait_for_timeout": lambda s, ms: None})(), 0) == b"%PDF-1.7 the statement"
 
-    class El:
-        def __init__(self, src): self.src = src
-        def get_attribute(self, a): return self.src
+    class Box:
+        def __init__(self, v): self.v, self.pressed = v, 0
+        def filter(self, visible): return self
+        @property
+        def first(self): return self
+        def count(self): return 1
+        def input_value(self): return self.v
+        def press(self, k): self.pressed += 1
 
-    class Win:
-        url = "https://olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_09302026"
-        frames = [type("F", (), {"url": "https://olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_09302026"})()]
-        context = type("C", (), {"request": Req()})()
-        def locator(self, sel): return type("L", (), {"all": lambda s: [El("/Records/doc.pdf?id=1")] if sel == "embed" else []})()
-    assert mf.fetch_pdf(Win()).startswith(b"%PDF")
-    assert asked == [Win.url, "https://olui2.fs.ml.com/Records/doc.pdf?id=1"]       # window first, then the embed
+    class Page:
+        def __init__(self, url, v): self.url, self.box = url, Box(v)
+        def locator(self, sel): return self.box
+    pressed = set()
+    interim, real = Page("https://www.merrilledge.com/login", ""), Page("https://olui2.fs.ml.com/login?x=1", "(saved)")
+    assert not mf._press_if_filled(interim, pressed) and interim.box.pressed == 0   # empty: never submitted
+    assert mf._press_if_filled(real, pressed) and real.box.pressed == 1
+    assert not mf._press_if_filled(real, pressed) and real.box.pressed == 1        # once per page
