@@ -24,12 +24,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from finance import paths  # noqa: E402
+from finance import bank_browser, paths  # noqa: E402
 
 BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/",
          "amex": "https://www.americanexpress.com/", "merrill": "https://www.merrilledge.com/"}
 PLAIN_CHROME = {"amex", "merrill"}
-WINDOW = ["--window-size=1680,1050", "--window-position=0,0"]      # Chrome otherwise opens small, and pop-ups lose their buttons      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60
@@ -104,16 +103,7 @@ def main(bank: str, label: str = "statements") -> None:
             steps.append({"t": round(time.time(), 1), **_clean(step)})
 
     with sync_playwright() as pw:
-        args = list(WINDOW)                                   # a full-size window: pop-ups (Merrill) scale to it
-        extra = {}
-        if bank in PLAIN_CHROME:                              # some banks (Amex) stall the sign-in of a browser that
-            extra["ignore_default_args"] = ["--enable-automation",          # says it's script-driven; and keep Chrome's
-                                            "--disable-extensions",          # own PDF viewer (a built-in extension):
-                                            "--disable-component-extensions-with-background-pages"]  # its download
-                                                                             # buttons are what statement pop-ups show
-            args.append("--disable-blink-features=AutomationControlled")
-        ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None, args=args, **extra)
+        ctx = bank_browser.launch(pw, profile, plain=bank in PLAIN_CHROME)
         ctx.expose_binding("__record", record)
         ctx.add_init_script(RECORDER_JS)
 

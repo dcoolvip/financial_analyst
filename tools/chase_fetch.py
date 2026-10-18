@@ -26,7 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from finance import checkpoints, db, paths  # noqa: E402
+from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, chase_pdf, statements  # noqa: E402
 
 DASHBOARD = "https://secure.chase.com/web/auth/dashboard"
@@ -272,10 +272,7 @@ def main(dry_run: bool = False) -> None:
         d.chmod(0o700)
     seen = already_fetched()
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None,
-                                                    args=["--window-size=1680,1050", "--window-position=0,0"])   # full size: pop-ups have room
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        ctx = bank_browser.launch(pw, profile)
         watch_downloads(ctx)
         try:
             if not sign_in(page):

@@ -24,7 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from finance import checkpoints, db, paths  # noqa: E402
+from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import amex, apply  # noqa: E402
 
 DASHBOARD = "https://global.americanexpress.com/dashboard"
@@ -32,9 +32,6 @@ ACTIVITY = "https://global.americanexpress.com/activity"
 SIGNED_IN = re.compile(r"\blog ?out\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 INSTITUTION = "American Express"
-PLAIN = {"ignore_default_args": ["--enable-automation", "--disable-extensions",
-                                 "--disable-component-extensions-with-background-pages"],
-         "args": ["--disable-blink-features=AutomationControlled", "--window-size=1680,1050", "--window-position=0,0"]}
 
 
 def notify(text: str) -> None:
@@ -164,8 +161,7 @@ def main(dry_run: bool = False) -> None:
         d.mkdir(parents=True, exist_ok=True)
         d.chmod(0o700)
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None, **PLAIN)
+        ctx = bank_browser.launch(pw, profile, plain=True)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         watch_downloads(ctx)
         try:
