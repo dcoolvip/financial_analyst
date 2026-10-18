@@ -956,3 +956,12 @@ def test_fidelity_connects_and_you_pick_the_account_it_fills(env, monkeypatch, t
     assert db.get_setting(conn, "browser_pull_accounts")["fidelity"] == md
     row = next(m.value for m in at.markdown if m.value.startswith("🏦 **Fidelity**"))
     assert "MD 401(k)" in row and "DS 401(k)" not in row
+
+
+
+def test_a_note_after_the_date_in_a_run_history_never_breaks_the_page(env, tmp_path):
+    """Regression: a history entry '--- 2026-10-18 10:45 (from the saved statement)' crashed Connected accounts."""
+    (tmp_path / "bank_fetch").mkdir(exist_ok=True)
+    (tmp_path / "bank_fetch" / "bofa_runs.log").write_text("--- 2026-10-18 10:45 (from the saved statement)\nok\n")
+    at = app()
+    assert any("Updated Oct 18" in m.value for m in at.markdown if m.value.startswith("🏦 **Bank of America**"))

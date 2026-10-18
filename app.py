@@ -1755,7 +1755,10 @@ def browser_row(bank: str) -> None:
     if bank in PICK_ACCOUNT:
         mine = [n for i, n in zip(accts["id"], accts["name"]) if i == chosen]
     last = bank_pull.last_results(real_only=True, bank=bank)
-    when = f"Updated {datetime.strptime(last[0], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
+    try:                                  # the entry's date and time; anything after them is a note
+        when = f"Updated {datetime.strptime(last[0][:16], '%Y-%m-%d %H:%M'):%b %-d}" if last else "Not updated yet"
+    except ValueError:
+        when = "Updated (date unreadable)"
     before = [BROWSER_BANKS[b][0] for b in list(BROWSER_BANKS)[:list(BROWSER_BANKS).index(bank)] if bank_pull.set_up(b)]
     nxt = (f"next {time.strftime('%b %-d', bank_pull.next_run())}" + (f", after {before[-1]}" if before else "")
            if bank_pull.scheduled() else "no monthly update scheduled")      # one bank at a time, in this order
