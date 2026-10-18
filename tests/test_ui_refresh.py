@@ -3,6 +3,7 @@ everywhere (other tabs, selectors, totals) in the same session - no manual refre
 
 Runs against a throwaway data folder; never touches real data and never calls the AI.
 """
+import time
 from datetime import date, datetime
 from pathlib import Path
 
@@ -1023,3 +1024,21 @@ def test_car_value_estimate_row(env):
     assert any(m.value.startswith("🚗 **Value estimate** · Civic  \nCarried on from the value you typed on "
                                   f"{date.today():%b %-d}") for m in at.markdown)
 
+
+
+def test_update_all_makes_no_plaid_calls_when_no_linked_bank_is_due(env, monkeypatch):
+    from finance import plaid
+    app()                      # the first start in a process reloads finance/*, which would drop the fake below
+    from tests.test_plaid import FakePlaid
+    fake = FakePlaid()
+    monkeypatch.setattr(plaid, "_post", fake)
+    plaid.save_keys("cid", "sec")
+    plaid.add_item("public-tok", "Barclays - Cards", plaid.load_keys())
+    keys = plaid.load_keys()
+    for it in keys["items"]:
+        plaid._save_item(keys, {**it, "synced": time.time()})            # every linked bank synced just now
+    assert plaid.due_items(plaid.load_keys()) == set()
+    at = app()
+    before = len(fake.calls)
+    click(at, "Update all")
+    assert [c[0] for c in fake.calls[before:]] == []                     # no calls to Plaid at all

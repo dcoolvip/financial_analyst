@@ -1958,8 +1958,8 @@ def render_connected() -> None:
     if (items or bofa_on) and h2.button("Update the rest" if resuming else "Update all",
                                          help="Banks already updated this month (since the "
                                               f"{bank_pull.SCHEDULE_DAY}th) aren't signed in to again."):
-        if items:
-            plaid_sync(keys)
+        if items and (due := plaid.due_items(keys)):     # only linked banks whose month is up: no spare calls
+            plaid_sync(keys, only=due)
         if bofa_on:
             bank_pull.start(bank="all")
         st.rerun()
