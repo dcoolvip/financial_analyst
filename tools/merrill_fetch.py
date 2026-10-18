@@ -3,10 +3,10 @@
     ~/.venvs/financial-analyst/bin/python tools/merrill_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/merrill_fetch.py --dry-run  # download + check, import into a copy
 
-Merrill opens each statement in its own window whose address IS the PDF (olui2.fs.ml.com/Records/
-StatementsReport.aspx/STMT_09302026_XXXXX932_CMAEdge?...), embedded in a small fixed box without download buttons.
-So: click the statement on Statements & Documents, take that window's address and fetch the PDF with the signed-in
-session (no viewer buttons needed), check it's a PDF, and import it with the Merrill statement reader.
+Merrill opens each statement in its own window (olui2.fs.ml.com/Records/StatementsReport.aspx/STMT_…): a web page
+wrapping the PDF in a small embedded frame without download buttons. So: click the statement on Statements &
+Documents, find the PDF inside that window (a frame / embed address) and fetch it with the signed-in session (no
+viewer buttons needed), check it's a PDF, and import it with the Merrill statement reader.
 Plain Chrome (no automation signals), as for Amex. Sign-in: Enter if Chrome filled the password in, else a
 notification asks you to sign in.
 """
