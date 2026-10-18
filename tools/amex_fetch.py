@@ -1,12 +1,12 @@
-"""Monthly American Express pull: sign in, download recent activity as CSV, import it without doubles.
+"""Monthly American Express pull: sign in, download recent activity (Excel), import it without doubles.
 
     ~/.venvs/financial-analyst/bin/python tools/amex_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/amex_fetch.py --dry-run  # download + check, import into a copy
 
 Amex stalls the sign-in of a browser that announces it's script-driven, so Chrome opens without the automation
 flag. Sign-in: Enter if Chrome has filled the password in, else a notification asks you to sign in. Then
-Statements & Activity -> Download -> CSV -> Download (the route recorded in tools/bank_recorder.py), imported with
-the Amex CSV reader: Amex's own reference number per transaction means nothing is doubled. If the file starts
+Statements & Activity -> Download -> (a pop-up) Excel -> its Download (the route recorded in tools/bank_recorder.py),
+imported with the Amex reader: Amex's own reference number per transaction means nothing is doubled. If the file starts
 after the newest Amex transaction already here, it says so - a gap can't go unnoticed.
 """
 from __future__ import annotations
@@ -83,10 +83,10 @@ def sign_in(page) -> bool:
     return False
 
 
-def _labels(page) -> list[str]:
-    """What's on screen in the download dialog (labels only, digits masked) - for setting the date range from facts."""
+def _labels(scope) -> list[str]:
+    """What's in the download pop-up (labels only, digits masked) - for setting the date range from facts."""
     out = []
-    for el in page.locator("label, [role=radio], [role=option], button, select option").filter(visible=True).all()[:40]:
+    for el in scope.locator("label, [role=radio], [role=option], button, select option").filter(visible=True).all()[:40]:
         try:
             t = " ".join((el.inner_text(timeout=1000) or "").split())
             if t:
@@ -96,33 +96,38 @@ def _labels(page) -> list[str]:
     return out
 
 
-def download_csv(page, out: Path) -> Path | None:
+def download_activity(page, out: Path) -> Path | None:
+    """Statements & Activity -> Download opens a pop-up (modal): everything after that happens inside it -
+    choose Excel, tick the details, press the pop-up's own Download."""
     page.goto(ACTIVITY)
     page.wait_for_timeout(5000)
-    for text in ("Explore On My Own",):                    # a one-time tour that can cover the page
-        try:
-            page.get_by_text(text, exact=True).first.click(timeout=3000)
-        except Exception:
-            pass
+    try:                                                    # a one-time tour can cover the page
+        page.get_by_text("Explore On My Own", exact=True).first.click(timeout=3000)
+    except Exception:
+        pass
     page.get_by_text("Download", exact=True).filter(visible=True).first.click()
-    page.wait_for_timeout(2000)
-    csv = page.locator("#myca-activity-download-body-selection-options-csv")
-    csv.check(force=True)
-    for box in page.locator("input[type=checkbox]").filter(visible=True).all():   # "include all additional details"
+    excel = page.locator("#myca-activity-download-body-selection-options-excel")
+    excel.wait_for(state="attached", timeout=15_000)
+    modal = page.locator("[role=dialog], [aria-modal=true]").filter(visible=True)
+    modal = modal.last if modal.count() else \
+        excel.locator("xpath=ancestor::*[.//*[normalize-space(text())='Download']][1]")   # the box with its Download
+    modal.locator("#myca-activity-download-body-selection-options-excel").check(force=True)
+    for box in modal.locator("input[type=checkbox]").all():          # "include all additional details"
         try:
             label = (box.evaluate("e => (e.closest('label') || e.parentElement).innerText") or "").lower()
             if "additional" in label or "detail" in label:
-                box.check()
+                box.check(force=True)
         except Exception:
             pass
-    print("Download dialog shows: " + str(_labels(page)), flush=True)
+    print("Download pop-up shows: " + str(_labels(modal)), flush=True)
     before = len(DOWNLOADS)
-    page.get_by_text("Download", exact=True).filter(visible=True).last.click()
+    button = modal.get_by_role("button", name=re.compile(r"^\s*download\s*$", re.I))
+    (button if button.count() else modal.get_by_text("Download", exact=True)).last.click()
     deadline = time.time() + 30
     while time.time() < deadline and len(DOWNLOADS) == before:
         page.wait_for_timeout(500)
     if len(DOWNLOADS) == before:
-        raise TimeoutError("no download came")
+        raise TimeoutError("no download came after the pop-up's Download")
     dl = DOWNLOADS[before]
     path = out / f"{datetime.now():%Y%m%d}-{dl.suggested_filename}"
     dl.save_as(path)
@@ -165,7 +170,7 @@ def main(dry_run: bool = False) -> None:
             if not sign_in(page):
                 notify("Couldn't sign in to Amex within 10 minutes - nothing downloaded.")
                 return
-            path = download_csv(page, out)
+            path = download_activity(page, out)
         except Exception as e:
             notify(f"Amex pull stopped: {e.__class__.__name__}: {str(e)[:150]} - nothing was imported.")
             raise

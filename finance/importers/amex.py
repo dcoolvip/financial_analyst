@@ -1,4 +1,4 @@
-"""American Express CSV downloads (Statements & Activity -> Download -> CSV, with all details).
+"""American Express downloads (Statements & Activity -> Download -> Excel or CSV, with all details).
 
     Date,Description,Card Member,Account #,Amount,Extended Details,Appears On Your Statement As,
     Address,City/State,Zip Code,Country,Reference,Category
@@ -24,7 +24,35 @@ INSTITUTION = "American Express"
 REQUIRED = {"Date", "Description", "Amount", "Card Member", "Account #"}
 
 
+def _excel_to_csv(content: bytes) -> str:
+    """Amex's Excel download (Download -> Excel) has the CSV's columns under a few title rows: find the header row
+    and hand the rest to the CSV reader, so both formats follow the same rules."""
+    try:
+        raw = pd.read_excel(io.BytesIO(content), header=None, dtype=str)
+    except ImportError as e:
+        raise UnrecognizedFile("Excel files need the openpyxl package: ~/.venvs/financial-analyst/bin/pip install "
+                               "openpyxl") from e
+    except Exception as e:
+        raise UnrecognizedFile("Not an Excel file this reader understands") from e
+    return header_table_to_csv(raw)
+
+
+def header_table_to_csv(raw: pd.DataFrame) -> str:
+    for i in range(min(len(raw), 30)):
+        cells = [str(c).strip() for c in raw.iloc[i].tolist()]
+        if REQUIRED <= set(cells):
+            table = raw.iloc[i + 1:].copy()
+            table.columns = cells
+            table = table.loc[:, [c for c in table.columns if c and c != "nan"]].fillna("")
+            if "Date" in table:              # Excel may give dates as 2026-09-24 00:00:00; the CSV rules want 09/24/2026
+                table["Date"] = pd.to_datetime(table["Date"], errors="coerce").dt.strftime("%m/%d/%Y").fillna("")
+            return table.to_csv(index=False)
+    raise UnrecognizedFile("Not an American Express Excel export")
+
+
 def parse(content: bytes | str, filename: str = "") -> ParsedFile:
+    if isinstance(content, bytes) and content[:2] == b"PK":        # .xlsx is a zip file
+        content = _excel_to_csv(content)
     text = content.decode("utf-8-sig", errors="replace") if isinstance(content, bytes) else content
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames or not REQUIRED <= {h.strip() for h in reader.fieldnames}:

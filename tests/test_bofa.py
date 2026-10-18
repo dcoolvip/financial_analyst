@@ -376,3 +376,28 @@ def test_value_between_two_sparse_statements_is_a_path_not_a_jump(conn):
     jul = nw[pd.Timestamp("2026-07-31")]
     assert 790_000 < jul < 800_000                                 # a month of steady growth, not $340K
     assert nw[pd.Timestamp("2023-10-31")] == pytest.approx(460_000 * (800_000 / 460_000) ** 0.5, rel=0.01)
+
+
+
+def test_amex_excel_download_reads_like_the_csv():
+    """Amex's Excel download: title rows, then the CSV's columns (dates may come as real dates)."""
+    import pandas as pd
+    from finance.importers import amex
+    raw = pd.DataFrame([["Transaction Details", None, None, None, None, None],
+                        ["Prepared for", "JANE SAMPLE", None, None, None, None],
+                        [None] * 6,
+                        ["Date", "Description", "Card Member", "Account #", "Amount", "Reference"],
+                        [pd.Timestamp("2026-09-24"), "BLUE BOTTLE COFFEE", "JANE SAMPLE", "-02000", "12.50", "'320269"],
+                        ["09/20/2026", "AUTOPAY PAYMENT - THANK YOU", "JANE SAMPLE", "-02000", "-500.00", "'320255"]])
+    parsed = amex.parse(amex.header_table_to_csv(raw))
+    got = sorted((str(d), a) for d, a in zip(parsed.transactions["date"], parsed.transactions["amount"]))
+    assert got == [("2026-09-20", 500.0), ("2026-09-24", -12.5)]       # Amex signs flipped, as for the CSV
+
+
+def test_amex_excel_without_openpyxl_says_how_to_fix_it(monkeypatch):
+    import pandas as pd
+    import pytest
+    from finance.importers import amex, base
+    monkeypatch.setattr(pd, "read_excel", lambda *a, **k: (_ for _ in ()).throw(ImportError("no openpyxl")))
+    with pytest.raises(base.UnrecognizedFile, match="pip install openpyxl"):
+        amex.parse(b"PK\x03\x04 an xlsx")

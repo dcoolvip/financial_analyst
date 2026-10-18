@@ -1956,7 +1956,8 @@ with tab_add:
             "dates → *Spreadsheet (Excel, CSV)*.\n"
             "- **Mortgage / auto loan**: download the monthly **statement PDF**.\n\n"
             "Overlapping files are fine. Duplicates are skipped automatically.")
-    files = st.file_uploader("Drop CSV or statement PDF files here", type=["csv", "pdf"], accept_multiple_files=True,
+    files = st.file_uploader("Drop CSV, Excel (Amex) or statement PDF files here", type=["csv", "xlsx", "pdf"],
+                             accept_multiple_files=True,
                              key=f"uploader_{st.session_state.get('uploads_done', 0)}")
     pdf_files = [f for f in files or [] if f.name.lower().endswith(".pdf")]
     files = [f for f in files or [] if not f.name.lower().endswith(".pdf")]
