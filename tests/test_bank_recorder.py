@@ -121,7 +121,7 @@ def test_enter_is_pressed_only_on_a_password_chrome_filled_never_while_typing():
     pressed = set()
     assert bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1
     assert not bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1   # once per page
-    for f in ("merrill_fetch.py", "amex_fetch.py"):
+    for f in ("merrill_fetch.py", "amex_fetch.py", "robinhood_fetch.py"):
         src = (Path(__file__).parent.parent / "tools" / f).read_text()
         assert "press_if_chrome_filled" in src and "pwd.input_value()" not in src, f
 

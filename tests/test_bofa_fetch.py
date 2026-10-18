@@ -516,3 +516,25 @@ def test_fidelity_waits_for_month_and_year_to_appear():
         def wait_for_timeout(self, ms): ticks["n"] += 1
     box = ff.appeared(Page("page"), Scope("form"), "Month")
     assert box.count() == 1 and ticks["n"] == 6                                     # waited ~3 s, then found it
+
+
+def test_robinhood_imports_every_account_in_the_statement_by_digits(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("robinhood_fetch", Path(__file__).parent.parent / "tools/robinhood_fetch.py")
+    rf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rf)
+    from tests.test_statements import ROBINHOOD_PAGE
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    a = db.get_or_create_account(conn, "Kid Robinhood", "Robinhood", "brokerage")
+    db.update_account_details(conn, a, last4="4688")
+    text = (ROBINHOOD_PAGE.format(page=1, label="Individual", acct="*****4688", open="1,300.00", close="1,400.00",
+                                  spy_pct=100, extra="", cash="0.00")
+            + ROBINHOOD_PAGE.format(page=5, label="Individual", acct="*****2941", open="2,000.00", close="2,450.00",
+                                    spy_pct=57, cash="50.00", extra=""))
+    pdf = tmp_path / "statement.pdf"
+    pdf.write_bytes(_pdf(text.splitlines()))
+    lines, when = rf.import_statement(conn, pdf)
+    assert when == "2025-08-31"
+    assert lines[0] == "Kid Robinhood: value saved (Aug 31), 1 positions"
+    assert "ending 2941: no dashboard account" in lines[1]                    # never guessed into another account
+    assert conn.execute("SELECT COUNT(*) FROM holdings WHERE account_id = ?", (a,)).fetchone()[0] == 1
