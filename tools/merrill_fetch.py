@@ -84,18 +84,9 @@ def _signed_in(page) -> bool:
 
 
 def _press_if_filled(page, pressed: set[str]) -> bool:
-    """If this page shows a password Chrome has filled in, press Enter - once per page (Merrill passes you through
-    an interim sign-in page first, then the real one with the saved login filled)."""
-    try:
-        pwd = page.locator("input[type=password]").filter(visible=True).first
-        here = page.url.split("?")[0]
-        if here not in pressed and pwd.count() and pwd.input_value():
-            pressed.add(here)
-            pwd.press("Enter")
-            return True
-    except Exception:
-        pass
-    return False
+    """Enter only if Chrome filled the password in (never while you're typing one) - once per page. Merrill passes
+    you through an interim sign-in page first, then the real one with the saved login filled."""
+    return bank_browser.press_if_chrome_filled(page, pressed)
 
 
 def sign_in(page) -> bool:

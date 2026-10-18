@@ -93,3 +93,34 @@ def test_every_bank_window_opens_through_the_shared_launcher():
         src = (Path(__file__).parent.parent / "tools" / f).read_text()
         assert "bank_browser.launch(" in src and "launch_persistent_context" not in src, f
 
+
+
+
+def test_enter_is_pressed_only_on_a_password_chrome_filled_never_while_typing():
+    """Regression: the pull pressed Enter as soon as the box had anything in it, submitting a half-typed password
+    while signing in by hand ("Sorry, we can't complete this action right now")."""
+    from finance import bank_browser
+
+    class Box:
+        def __init__(self, state): self.state, self.pressed = state, 0
+        def filter(self, visible): return self
+        @property
+        def first(self): return self
+        def count(self): return 1
+        def evaluate(self, js): return self.state
+        def press(self, k): self.pressed += 1
+
+    class Page:
+        def __init__(self, state): self.url, self.box = "https://bank.example/login", Box(state)
+        def locator(self, sel): return self.box
+    typing = Page({"filled": True, "auto": False, "typing": True})                # you, half-way through
+    assert not bank_browser.press_if_chrome_filled(typing, set()) and typing.box.pressed == 0
+    typed_done = Page({"filled": True, "auto": False, "typing": False})           # you typed it: you press Log in
+    assert not bank_browser.press_if_chrome_filled(typed_done, set())
+    chrome = Page({"filled": True, "auto": True, "typing": False})                # Chrome filled it in
+    pressed = set()
+    assert bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1
+    assert not bank_browser.press_if_chrome_filled(chrome, pressed) and chrome.box.pressed == 1   # once per page
+    for f in ("fidelity_fetch.py", "merrill_fetch.py", "amex_fetch.py"):
+        src = (Path(__file__).parent.parent / "tools" / f).read_text()
+        assert "press_if_chrome_filled" in src and "pwd.input_value()" not in src, f

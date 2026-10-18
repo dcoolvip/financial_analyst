@@ -66,14 +66,8 @@ def sign_in(page) -> bool:
     page.goto(DASHBOARD)
     page.wait_for_timeout(3000)
     if not _signed_in(page):
-        pwd = page.locator("input[type=password]").filter(visible=True).first
-        try:
-            if pwd.count() and pwd.input_value():          # Chrome filled it in: sign in
-                pwd.press("Enter")
-            else:                                           # never submit an empty password
-                notify("Amex: sign in in the Chrome window (pick your saved login) - the pull does the rest.")
-        except Exception:
-            pass
+        if not bank_browser.press_if_chrome_filled(page, set()):    # only a password Chrome filled in, never typing
+            notify("Amex: sign in in the Chrome window (pick your saved login) - the pull does the rest.")
     deadline = time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
         if _signed_in(page):

@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
-LOGIN = "https://nb.fidelity.com/public/nb/default/home"
+LOGIN = "https://nb.fidelity.com/"     # where the recording started
 STATEMENT = "https://workplaceservices.fidelity.com/mybenefits/savings#/navigation/dc/OnlineStatement"
 WAIT_FOR_SIGN_IN_S = 10 * 60
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
@@ -68,17 +68,9 @@ def sign_in(page) -> bool:
     while time.time() < deadline:
         if _signed_in(page):
             return True
-        try:
-            pwd = page.locator("input[type=password]").filter(visible=True).first
-            here = page.url.split("?")[0]
-            if here not in pressed and pwd.count() and pwd.input_value():   # Chrome filled it in: sign in
-                pressed.add(here)
-                pwd.press("Enter")
-            elif not told and time.time() > ask_after:                       # never an empty submit
-                notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
-                told = True
-        except Exception:
-            pass
+        if not bank_browser.press_if_chrome_filled(page, pressed) and not told and time.time() > ask_after:
+            notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
+            told = True                   # Enter only if Chrome filled the password - never while you're typing
         page.wait_for_timeout(1500)
     return False
 

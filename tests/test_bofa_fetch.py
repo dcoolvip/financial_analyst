@@ -332,7 +332,7 @@ def test_merrill_keeps_the_pdf_as_the_window_loads_it_and_presses_enter_when_fil
         @property
         def first(self): return self
         def count(self): return 1
-        def input_value(self): return self.v
+        def evaluate(self, js): return {"filled": bool(self.v), "auto": bool(self.v), "typing": False}
         def press(self, k): self.pressed += 1
 
     class Page:

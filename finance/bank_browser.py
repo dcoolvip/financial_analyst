@@ -46,3 +46,33 @@ def grow_popups(ctx) -> None:
             resize(page, POPUP)
             page.on("load", lambda _p=page: resize(_p, POPUP))      # and again once loaded, in case it set its own
     ctx.on("page", opened)
+
+
+# Whether a password box was filled by Chrome (and you're not typing in it): only then may a pull press Enter. A pull
+# that pressed Enter as soon as the box had anything in it submitted half-typed passwords when you signed in by hand.
+_FILLED_BY_CHROME = """e => {
+  const auto = e.matches(':-webkit-autofill') || (() => { try { return e.matches(':autofill'); } catch (x) { return false; } })();
+  return {filled: !!e.value, auto, typing: document.activeElement === e};
+}"""
+
+
+def chrome_filled(box) -> bool:
+    try:
+        st = box.evaluate(_FILLED_BY_CHROME)
+    except Exception:
+        return False
+    return bool(st["filled"] and st["auto"] and not st["typing"])
+
+
+def press_if_chrome_filled(page, pressed: set[str]) -> bool:
+    """On a page whose password box Chrome has filled in (and you aren't typing in), press Enter - once per page."""
+    try:
+        box = page.locator("input[type=password]").filter(visible=True).first
+        here = page.url.split("?")[0]
+        if here not in pressed and box.count() and chrome_filled(box):
+            pressed.add(here)
+            box.press("Enter")
+            return True
+    except Exception:
+        pass
+    return False
