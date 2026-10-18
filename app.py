@@ -1889,6 +1889,36 @@ def plaid_settings(keys: dict) -> None:
                      hide_index=True, width="stretch")
 
 
+def automatic_rows() -> None:
+    """Values the dashboard works out itself (no bank to connect): gold at the month's price, loans on their schedule."""
+    today = date.today()
+    for r in accts[accts["type"] == "precious_metal"].itertuples():
+        if not gold.holding(r.name) or "gold" not in r.name.lower():
+            continue
+        last = conn.execute("SELECT date, source FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1",
+                            (r.id,)).fetchone()
+        price = re.search(r"\$([\d,]+)/oz \(([^)]+)\)", last[1] or "") if last else None
+        when = (f"Updated {date.fromisoformat(last[0]):%b %-d}" + (f" at ${price[1]}/oz ({price[2]})" if price else
+                " (not from a price feed)")) if last else "Not updated yet"
+        nxt = date(today.year + today.month // 12, today.month % 12 + 1, 1)
+        failed = (db.get_setting(conn, "gold_price_tried") == today.isoformat()
+                  and not (last and last[0] >= today.replace(day=1).isoformat()))
+        st.markdown(f"🪙 **Gold price** · {r.name}  \n{when} · next in {nxt:%B}, when you open the dashboard"
+                    + ("  \n⚠️ Couldn't get today's gold price - trying again tomorrow" if failed else ""))
+    for r in accts[accts["type"].isin(loan_schedule.LOAN_TYPES)].itertuples():
+        day = loan_schedule.due_day(r.notes)
+        if not day or not r.payment or r.rate is None or pd.isna(r.rate):
+            continue
+        last = conn.execute("SELECT date, balance FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1",
+                            (r.id,)).fetchone()
+        if not last:
+            continue
+        nxt = next(loan_schedule.due_dates(date.fromisoformat(last[0]), day, date(2100, 1, 1)))
+        status = ("Paid off" if last[1] <= 0 else
+                  f"Balance as of {date.fromisoformat(last[0]):%b %-d}, assuming on-time payments · next {nxt:%b %-d}")
+        st.markdown(f"📅 **Payment schedule** · {r.name}  \n{status}")
+
+
 def render_connected() -> None:
     """Every bank that updates on its own, in one list - whatever connects it (Plaid or a browser pull)."""
     keys = plaid.load_keys()
@@ -1918,6 +1948,7 @@ def render_connected() -> None:
             bofa_status()
         for it in items:
             plaid_row(it, keys)
+        automatic_rows()
         for_unknown = [u for u in plaid.unmatched(conn) if not u.get("item_id")]
         if keys and for_unknown:
             plaid_matching(keys, None)

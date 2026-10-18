@@ -3,7 +3,7 @@ everywhere (other tabs, selectors, totals) in the same session - no manual refre
 
 Runs against a throwaway data folder; never touches real data and never calls the AI.
 """
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -988,3 +988,21 @@ def test_redfin_home_values_row(env, monkeypatch):
     assert any("**Redfin home values** · not connected yet" in m.value for m in at.markdown)
     click(at, "🧪 Test run for Redfin home values")
     assert started == [("redfin", True)]
+
+
+def test_gold_and_loan_schedule_say_when_they_last_updated(env):
+    conn, _ = env
+    today = date.today()
+    g = db.add_account(conn, "Gold (324 g, 22k)", "Physical", "precious_metal")
+    db.upsert_balance(conn, g, today, 39_895, "Gold price $4,181/oz (Yahoo Finance) x 324 g x 0.916 purity")
+    loan = db.add_account(conn, "Car loan", "Hyundai Motor Finance", "auto_loan")
+    db.update_account_terms(conn, loan, 0.0099, 1_323.78)
+    conn.execute("UPDATE accounts SET notes = 'payments due the 25th' WHERE id = ?", (loan,))
+    conn.commit()
+    db.upsert_balance(conn, loan, today, 15_000, "manual")
+    at = app()
+    text = [m.value for m in at.markdown]
+    assert any(f"🪙 **Gold price** · Gold (324 g, 22k)  \nUpdated {today:%b %-d} at \\$4,181/oz (Yahoo Finance)" in t
+               for t in text)
+    assert any(t.startswith("📅 **Payment schedule** · Car loan  \nBalance as of") and "on-time payments" in t
+               for t in text)
