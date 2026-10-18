@@ -464,5 +464,28 @@ def test_fidelity_dropdowns_are_the_visible_selects_by_name():
             asked.append(sel)
             return type("L", (), {"filter": lambda s, visible: type("F", (), {"first": "the one"})()})()
     assert ff.dropdown(Page(), "Month") == "the one" and asked == ["select[aria-label='Month']"]
+    src = inspect.getsource(ff.show_statement) if False else ""
     import inspect
     assert "get_by_label(" not in inspect.getsource(ff.show_statement) + inspect.getsource(ff.open_statements)
+
+
+
+def test_fidelity_fills_one_form_and_checks_monthly_stuck_before_submitting():
+    """Regression: Month and Year were set but Time period still read 'Select a time period' (two copies of the form),
+    so Fidelity refused. Now all three are set inside the form holding Get statement, and Monthly is checked first."""
+    import inspect
+    spec = importlib.util.spec_from_file_location("fidelity_fetch5", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    src = inspect.getsource(ff.show_statement)
+    assert "statement_form(page)" in src and 'dropdown(form, "Time period")' in src and 'dropdown(page, ' not in src
+    assert 'chosen.strip() == "Monthly"' in src
+    did = []
+
+    class Box:
+        def click(self): did.append("click")
+        def select_option(self, label): did.append(f"select {label}")
+        def dispatch_event(self, e): did.append(e)
+        def press(self, k): did.append(k)
+    ff.choose(Box(), "Monthly")
+    assert did == ["click", "select Monthly", "change", "Tab"]
