@@ -3,7 +3,7 @@
     ~/.venvs/financial-analyst/bin/python tools/fidelity_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/fidelity_fetch.py --dry-run  # read + check, import into a copy
 
-The route (recorded): View your statements -> Time period "Monthly" -> Month -> Year -> Get statement -> the statement
+The route (recorded): the NetBenefits home page -> View your statements -> Time period "Monthly" -> Month -> Year -> Get statement -> the statement
 shows as a page (#/sod/soddetail); "Download or Print" only prints that page, so there's no file. The pull reads the
 statement's text straight off the page (kept privately in the data folder) and imports it with the Fidelity 401(k)
 reader. It fills the dashboard account chosen for this login (Connected accounts -> Fidelity -> ⚙️ -> Fills).
@@ -29,7 +29,8 @@ from finance import bank_browser, checkpoints, db, paths  # noqa: E402
 from finance.importers import apply_statement, statements  # noqa: E402
 
 LOGIN = "https://nb.fidelity.com/"     # where the recording started
-STATEMENT = "https://workplaceservices.fidelity.com/mybenefits/savings#/navigation/dc/OnlineStatement"
+# where "View your statements" leads (recorded); it forwards to the statement page itself
+STATEMENT_ENTRY = "https://workplaceservices.fidelity.com/mybenefits/definedcontributions/navigation/dc/OnlineStatement"
 WAIT_FOR_SIGN_IN_S = 10 * 60
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -75,10 +76,35 @@ def sign_in(page) -> bool:
     return False
 
 
+UNAVAILABLE = re.compile(r"temporarily unavailable|not all the features are currently available", re.I)
+
+
+def open_statements(page) -> None:
+    """The way you went in the recording: the NetBenefits home page first, then "View your statements". Jumping
+    straight to the statements address right after sign-in gave "The site is temporarily unavailable" - that part of
+    NetBenefits needs the home page to have set up the session first."""
+    try:
+        page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:
+        pass
+    try:
+        page.get_by_text("View your statements", exact=False).first.click(timeout=30_000)
+    except Exception:
+        page.goto(STATEMENT_ENTRY)                      # the address that link leads to, if the link has moved
+    for attempt in range(2):
+        try:
+            page.get_by_label("Time period").wait_for(state="visible", timeout=45_000)
+            return
+        except Exception:
+            if attempt == 0 and page.get_by_text(UNAVAILABLE).count():
+                page.reload()                            # Fidelity's "try again later": once
+                continue
+            raise
+
+
 def show_statement(page, year: int, month: int) -> str:
     """Monthly -> month -> year -> Get statement; returns the statement's text as shown on the page."""
-    page.goto(STATEMENT)
-    page.wait_for_timeout(5000)
+    open_statements(page)
     page.get_by_label("Time period").select_option(label="Monthly")
     page.wait_for_timeout(1000)
     page.get_by_label("Month").select_option(label=MONTHS[month - 1])

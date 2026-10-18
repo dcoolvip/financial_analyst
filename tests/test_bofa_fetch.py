@@ -416,3 +416,36 @@ def test_each_fidelity_login_is_its_own_connection_and_never_fills_the_wrong_acc
     assert "different person" in ff.same_holder(conn, "fidelity", "Account Statement\nSAM SAMPLE")       # wrong window
     assert "not imported" in ff.import_text(conn, "fidelity", "SAM SAMPLE statement", "x.txt")
     assert db.get_setting(conn, "browser_pull_holders") == {"fidelity": "Jane", "fidelity_2": "Sam"}
+
+
+
+def test_fidelity_goes_in_through_view_your_statements_like_the_recording():
+    """Regression: jumping straight to the statements address after sign-in gave 'The site is temporarily
+    unavailable'. Now: home page, click 'View your statements', wait for the form (one reload if Fidelity balks)."""
+    spec = importlib.util.spec_from_file_location("fidelity_fetch3", Path(__file__).parent.parent / "tools/fidelity_fetch.py")
+    ff = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ff)
+    log = []
+
+    class Loc:
+        def __init__(self, what): self.what = what
+        @property
+        def first(self): return self
+        def click(self, timeout=None): log.append(("click", self.what))
+        def count(self): return 1 if self.what == "unavailable" and page.balky else 0
+        def wait_for(self, state=None, timeout=None):
+            if page.balky:
+                raise TimeoutError("form not there")
+            log.append(("form", self.what))
+
+    class Page:
+        balky = True
+        def wait_for_load_state(self, *a, **k): log.append(("settle",))
+        def get_by_text(self, t, exact=False): return Loc("view" if isinstance(t, str) else "unavailable")
+        def get_by_label(self, label): return Loc(label)
+        def reload(self): log.append(("reload",)); Page.balky = False
+        def goto(self, url): log.append(("goto", url))
+    page = Page()
+    ff.open_statements(page)
+    assert log == [("settle",), ("click", "view"), ("reload",), ("form", "Time period")]
+    assert not [e for e in log if e[0] == "goto"]                                 # no jumping straight to the address
