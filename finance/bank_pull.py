@@ -13,7 +13,8 @@ from pathlib import Path
 from . import paths
 
 LABEL = "com.financialanalyst.bofa-monthly"     # (kept: it's the job macOS already knows; it now runs every bank)
-BANKS = {"bofa": "Bank of America", "chase": "Chase", "amex": "American Express"}   # tools/<key>_fetch.py
+BANKS = {"bofa": "Bank of America", "chase": "Chase", "amex": "American Express",
+         "merrill": "Merrill"}   # tools/<key>_fetch.py each, run in this order
 SCHEDULE_DAY, SCHEDULE_HOUR = 28, 9
 
 

@@ -924,12 +924,12 @@ def test_a_refresh_comes_back_to_the_same_place(env):
 
 
 
-def test_merrill_can_be_recorded_from_the_dashboard(env, monkeypatch):
+def test_merrill_connects_with_a_test_run(env, monkeypatch):
     from finance import bank_pull
-    recorded = []
-    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    started = []
+    monkeypatch.setattr(bank_pull, "start", lambda dry_run=False, bank="bofa": started.append((bank, dry_run)))
     at = app()
     [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
-    assert any("**Merrill** · not set up yet" in m.value for m in at.markdown)
-    click(at, "⏺ Record Merrill")
-    assert recorded == ["merrill"]
+    assert any("**Merrill** · not connected yet" in m.value for m in at.markdown)
+    click(at, "🧪 Test run for Merrill")
+    assert started == [("merrill", True)]

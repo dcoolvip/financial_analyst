@@ -276,3 +276,25 @@ def test_amex_csv_imports_without_doubles_and_flags_a_gap(tmp_path, monkeypatch)
     assert "⚠️ gap" in af.import_csv(conn, csv)
     db.get_or_create_account(conn, "Amex Gold", "American Express", "credit_card")
     assert "2 Amex cards" in af.import_csv(conn, csv)                           # two cards: never guess
+
+
+def test_merrill_picks_account_statements_and_imports_by_digits(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("merrill_fetch", Path(__file__).parent.parent / "tools/merrill_fetch.py")
+    mf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mf)
+    today = date(2026, 10, 28)
+    cma = mf.row_info("09/30/2026   CMA Edge", "CMA Edge")
+    assert cma == {"date": date(2026, 9, 30), "name": "CMA Edge"} and mf.wanted(cma, set(), today)
+    assert mf.row_info("09/30/2026  Equity Cost Basis Statement", "Equity Cost Basis Statement") is None
+    assert not mf.wanted(cma, {mf.key(cma)}, today)                              # already fetched
+    assert not mf.wanted(mf.row_info("06/30/2026 CMA Edge", "CMA Edge"), set(), today)   # too old
+    from tests.test_statements import MERRILL_CMA
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    a = db.get_or_create_account(conn, "Merrill Brokerage", "Merrill", "brokerage")
+    db.update_account_details(conn, a, last4="5678")
+    pdf = tmp_path / "ML_09302026_CMAEdge.pdf"
+    pdf.write_bytes(_pdf(MERRILL_CMA.strip().splitlines()))
+    line = mf.import_statement(conn, pdf)
+    assert line.startswith("Merrill Brokerage: value saved (Jul 31)") and "positions" in line
+    assert conn.execute("SELECT COUNT(*) FROM holdings WHERE account_id = ?", (a,)).fetchone()[0] >= 2
