@@ -25,7 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from finance import checkpoints, db, paths  # noqa: E402
-from finance.importers import apply, parse_file  # noqa: E402
+from finance.importers import amex, apply  # noqa: E402
 
 DASHBOARD = "https://global.americanexpress.com/dashboard"
 ACTIVITY = "https://global.americanexpress.com/activity"
@@ -135,7 +135,7 @@ def download_activity(page, out: Path) -> Path | None:
 
 
 def import_csv(conn, path: Path) -> str:
-    parsed = parse_file(path.read_bytes(), filename=path.name)
+    parsed = amex.parse(path.read_bytes(), filename=path.name)      # it's an Amex file: no guessing
     accts = db.accounts(conn)
     cards = accts[(accts["institution"] == INSTITUTION) & (accts["type"] == "credit_card")]
     if len(cards) != 1:
