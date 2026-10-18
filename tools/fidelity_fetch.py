@@ -61,19 +61,29 @@ def _signed_in(page) -> bool:
     return "workplaceservices.fidelity.com" in page.url        # inside NetBenefits (only the address is looked at)
 
 
-def sign_in(page) -> bool:
+def open_tabs(ctx) -> list:
+    return [p for p in ctx.pages if not p.is_closed()]
+
+
+def sign_in(page):
     """Open NetBenefits and leave the sign-in page completely alone - you sign in (and the text code if asked).
     Fidelity refused sign-ins in this window while the pull was reading the password box (even with the password
     typed correctly and Log In clicked by you); the recorder, which didn't touch it, signed in fine. So until you're
-    in, the pull only watches the page address, which runs nothing on the page."""
+    in, the pull only watches page addresses - of every tab: Fidelity may open NetBenefits in a new tab and close
+    the first. Returns the tab you're signed in on (None if not within the time)."""
+    ctx = page.context
     page.goto(LOGIN)
     notify("Fidelity: sign in in the Chrome window (and the text code if asked) - the pull does the rest.")
     deadline = time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
-        if _signed_in(page):
-            return True
-        page.wait_for_timeout(2000)
-    return False
+        tabs = open_tabs(ctx)
+        for tab in reversed(tabs):
+            if _signed_in(tab):
+                return tab
+        if not tabs:
+            return None                                  # the window was closed
+        tabs[-1].wait_for_timeout(2000)
+    return None
 
 
 def dropdown(scope, label: str):
@@ -118,7 +128,7 @@ def shows(box) -> str:
 UNAVAILABLE = re.compile(r"temporarily unavailable|not all the features are currently available", re.I)
 
 
-def open_statements(page) -> None:
+def open_statements(page):
     """The way you went in the recording: the NetBenefits home page first, then "View your statements". Jumping
     straight to the statements address right after sign-in gave "The site is temporarily unavailable" - that part of
     NetBenefits needs the home page to have set up the session first."""
@@ -126,14 +136,20 @@ def open_statements(page) -> None:
         page.wait_for_load_state("networkidle", timeout=30_000)
     except Exception:
         pass
+    before = len(open_tabs(page.context))
     try:
         page.get_by_text("View your statements", exact=False).first.click(timeout=30_000)
     except Exception:
+        page = open_tabs(page.context)[-1]              # the tab may have changed under us
         page.goto(STATEMENT_ENTRY)                      # the address that link leads to, if the link has moved
+    page.wait_for_timeout(2000)
+    tabs = open_tabs(page.context)
+    if len(tabs) > before or page.is_closed():          # the link opened (or moved to) another tab: follow it
+        page = tabs[-1]
     for attempt in range(2):
         try:
             dropdown(page, "Time period").wait_for(state="visible", timeout=45_000)
-            return
+            return page
         except Exception:
             if attempt == 0 and page.get_by_text(UNAVAILABLE).count():
                 page.reload()                            # Fidelity's "try again later": once
@@ -143,7 +159,7 @@ def open_statements(page) -> None:
 
 def show_statement(page, year: int, month: int) -> str:
     """Monthly -> month -> year -> Get statement; returns the statement's text as shown on the page."""
-    open_statements(page)
+    page = open_statements(page)
     form, button = statement_form(page)
     period = dropdown(form, "Time period")
     for _ in range(3):                                   # Monthly has to take before Month and Year appear
@@ -220,7 +236,8 @@ def main(login: str = "fidelity", dry_run: bool = False) -> None:
         ctx = bank_browser.launch(pw, profile, plain=True)
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         try:
-            if not sign_in(page):
+            page = sign_in(page)
+            if page is None:
                 notify("Couldn't sign in to Fidelity within 10 minutes - nothing read.")
                 return
             text = show_statement(page, year, month)

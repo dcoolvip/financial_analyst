@@ -139,9 +139,18 @@ def test_fidelity_sign_in_never_touches_the_page_until_you_are_in():
     assert "locator(" not in code and "evaluate(" not in code and "press(" not in code
     visits = []
 
+    class Ctx:
+        pages = []
+
     class Page:
-        url = "https://nb.fidelity.com/login"
+        def __init__(self, url): self.url, self.context, self.closed = url, Ctx, False
         def goto(self, url): visits.append(url)
-        def wait_for_timeout(self, ms): Page.url = "https://workplaceservices.fidelity.com/mybenefits/navstation"
+        def is_closed(self): return self.closed
+        def wait_for_timeout(self, ms):                 # Fidelity opens NetBenefits in a new tab and closes the first
+            first.closed = True
+            Ctx.pages.append(Page("https://workplaceservices.fidelity.com/mybenefits/navstation"))
+    first = Page("https://nb.fidelity.com/login")
+    Ctx.pages = [first]
     ff.notify = lambda t: None
-    assert ff.sign_in(Page()) is True and visits == [ff.LOGIN]
+    tab = ff.sign_in(first)
+    assert tab is not first and "workplaceservices" in tab.url and visits == [ff.LOGIN]

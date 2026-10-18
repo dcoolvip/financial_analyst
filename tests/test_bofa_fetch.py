@@ -440,13 +440,17 @@ def test_fidelity_goes_in_through_view_your_statements_like_the_recording():
 
     class Page:
         balky = True
+        context = type("C", (), {"pages": []})()
+        def is_closed(self): return False
+        def wait_for_timeout(self, ms): pass
         def wait_for_load_state(self, *a, **k): log.append(("settle",))
         def get_by_text(self, t, exact=False): return Loc("view" if isinstance(t, str) else "unavailable")
         def locator(self, sel): return type("V", (), {"filter": lambda s, visible: Loc(sel)})()
         def reload(self): log.append(("reload",)); Page.balky = False
         def goto(self, url): log.append(("goto", url))
     page = Page()
-    ff.open_statements(page)
+    Page.context.pages = [page]
+    assert ff.open_statements(page) is page
     assert log == [("settle",), ("click", "view"), ("reload",), ("form", "select[aria-label='Time period']")]
     assert not [e for e in log if e[0] == "goto"]                                 # no jumping straight to the address
 
