@@ -32,7 +32,8 @@ ACTIVITY = "https://global.americanexpress.com/activity"
 SIGNED_IN = re.compile(r"\blog ?out\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 INSTITUTION = "American Express"
-PLAIN = {"ignore_default_args": ["--enable-automation"], "args": ["--disable-blink-features=AutomationControlled"]}
+PLAIN = {"ignore_default_args": ["--enable-automation"],
+         "args": ["--disable-blink-features=AutomationControlled", "--window-size=1680,1050", "--window-position=0,0"]}
 
 
 def notify(text: str) -> None:

@@ -273,7 +273,8 @@ def main(dry_run: bool = False) -> None:
     seen = already_fetched()
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None)
+                                                    accept_downloads=True, viewport=None,
+                                                    args=["--window-size=1680,1050", "--window-position=0,0"])   # full size: pop-ups have room
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         watch_downloads(ctx)
         try:

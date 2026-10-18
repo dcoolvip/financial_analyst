@@ -33,3 +33,12 @@ def test_amex_opens_chrome_without_the_automation_flag():
     import inspect
     src = inspect.getsource(rec.main)
     assert '"--enable-automation"' in src and "AutomationControlled" in src
+
+
+
+def test_chrome_opens_full_size_so_pop_ups_keep_their_buttons():
+    """Merrill's statement pop-up scales to the window; in Chrome's small default its download buttons were cut off."""
+    import inspect
+    assert "--window-size=1680,1050" in rec.WINDOW
+    for f in ("bofa_fetch.py", "chase_fetch.py", "amex_fetch.py"):
+        assert "--window-size=1680,1050" in (Path(__file__).parent.parent / "tools" / f).read_text(), f

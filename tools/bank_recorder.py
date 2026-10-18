@@ -28,7 +28,8 @@ from finance import paths  # noqa: E402
 
 BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/",
          "amex": "https://www.americanexpress.com/", "merrill": "https://www.merrilledge.com/"}
-PLAIN_CHROME = {"amex", "merrill"}      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
+PLAIN_CHROME = {"amex", "merrill"}
+WINDOW = ["--window-size=1680,1050", "--window-position=0,0"]      # Chrome otherwise opens small, and pop-ups lose their buttons      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60
@@ -91,11 +92,13 @@ def main(bank: str, label: str = "statements") -> None:
             steps.append({"t": round(time.time(), 1), **_clean(step)})
 
     with sync_playwright() as pw:
-        plain = {"ignore_default_args": ["--enable-automation"],          # some banks (Amex) stall the sign-in of a
-                 "args": ["--disable-blink-features=AutomationControlled"]}  # browser that says it's script-driven
+        args = list(WINDOW)                                   # a full-size window: pop-ups (Merrill) scale to it
+        extra = {}
+        if bank in PLAIN_CHROME:                              # some banks (Amex) stall the sign-in of a browser that
+            extra["ignore_default_args"] = ["--enable-automation"]          # says it's script-driven
+            args.append("--disable-blink-features=AutomationControlled")
         ctx = pw.chromium.launch_persistent_context(str(profile), channel="chrome", headless=False,
-                                                    accept_downloads=True, viewport=None,
-                                                    **(plain if bank in PLAIN_CHROME else {}))
+                                                    accept_downloads=True, viewport=None, args=args, **extra)
         ctx.expose_binding("__record", record)
         ctx.add_init_script(RECORDER_JS)
 
