@@ -64,6 +64,15 @@ def chrome_filled(box) -> bool:
     return bool(st["filled"] and st["auto"] and not st["typing"])
 
 
+def chrome_autofilled(box) -> bool:
+    """Chrome filled this box in itself (its own autofill mark, which goes as soon as anyone types in it). For a box
+    the pull clicked - so it has the focus - where chrome_filled's "you're typing" guard can't tell."""
+    try:
+        return bool(box.evaluate(_FILLED_BY_CHROME)["auto"])
+    except Exception:
+        return False
+
+
 def press_if_chrome_filled(page, pressed: set[str]) -> bool:
     """On a page whose password box Chrome has filled in (and you aren't typing in), press Enter - once per page."""
     try:

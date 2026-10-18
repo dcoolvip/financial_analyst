@@ -54,8 +54,10 @@ class FakeBox:
     def __init__(self): self.clicked, self.pressed = False, []
     @property
     def first(self): return self
-    def click(self): self.clicked = True
-    def press(self, key): self.pressed.append(key)
+    def count(self): return 1
+    def click(self, **kw): self.clicked = True
+    def press(self, key, **kw): self.pressed.append(key)
+    def evaluate(self, js): return {"filled": True, "auto": self.clicked, "typing": True}   # Chrome fills on click
 
 
 class FakeBofA:
@@ -81,7 +83,8 @@ class FakeBofA:
         if self.pwd.pressed: self.signed_in = True
 
 
-def test_sign_in_is_log_in_then_enter_on_chromes_saved_password():
+def test_sign_in_is_log_in_then_enter_on_chromes_saved_password(monkeypatch):
+    monkeypatch.setattr(bf, "WAIT_FOR_SIGN_IN_S", 5)          # a broken fake fails in seconds, not 10 minutes
     page = FakeBofA()
     assert bf.sign_in(page) is True
     assert page.url == bf.HOME and page.login.clicked and page.pwd.clicked and page.pwd.pressed == ["Enter"]
@@ -596,3 +599,63 @@ def test_apple_card_sign_in_presses_sign_in_on_the_home_page_first(monkeypatch):
     page = Page()
     assert af.sign_in(page)
     assert len(page.clicks) == 1 and "Sign In" in page.clicks[0]
+
+
+def test_bofa_sign_in_follows_bofa_to_its_own_sign_in_page(monkeypatch):
+    """What happened on Oct 18: right after the password box was clicked, BofA moved to its own sign-in page
+    (signIn.go); pressing Enter on the old page's box timed out and stopped the whole pull. Now the pull clicks
+    the new page's box too, and presses Enter there once Chrome has filled it in."""
+    HOME_URL, SIGNIN_URL = "https://www.bankofamerica.com/", "https://secure.bankofamerica.com/signIn.go"
+
+    class Box:
+        def __init__(self, page, url):
+            self.page, self.url = page, url
+        @property
+        def first(self):
+            return self
+        def count(self):
+            return int(not self.page.signed_in)
+        def click(self, **kw):
+            if self.url != self.page.url:
+                raise TimeoutError("that page is gone")
+            self.page.clicked.append(self.url)
+            if self.url == HOME_URL:
+                self.page.url = SIGNIN_URL               # BofA moves on right after the click
+        def evaluate(self, js):
+            filled = self.url == self.page.url == SIGNIN_URL and SIGNIN_URL in self.page.clicked
+            return {"filled": filled, "auto": filled, "typing": True}
+        def press(self, key, **kw):
+            if self.url != self.page.url:
+                raise TimeoutError("Locator.press: Timeout 30000ms exceeded")
+            self.page.entered.append(self.url)
+            self.page.signed_in = True
+
+    class Page:
+        def __init__(self):
+            self.url, self.clicked, self.entered, self.signed_in = HOME_URL, [], [], False
+        def goto(self, url):
+            self.url = url
+        def get_by_role(self, *a, **k):
+            class LogIn:
+                def or_(s, other):
+                    return s
+                first = property(lambda s: s)
+                def click(s, **kw):
+                    pass                                 # the home page's sign-in box opens
+            return LogIn()
+        def get_by_text(self, *a, **k):
+            page = self
+            class Text:
+                first = property(lambda s: s)
+                def is_visible(s):
+                    return page.signed_in
+            return Text()
+        def locator(self, sel):
+            return Box(self, self.url)                   # the box on the page shown right now
+        def wait_for_timeout(self, ms):
+            pass
+
+    monkeypatch.setattr(bf, "WAIT_FOR_SIGN_IN_S", 5)
+    page = Page()
+    assert bf.sign_in(page)
+    assert page.clicked == [HOME_URL, SIGNIN_URL] and page.entered == [SIGNIN_URL]

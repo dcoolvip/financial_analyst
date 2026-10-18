@@ -110,19 +110,32 @@ def import_statement(conn, pdf: Path) -> str:
 # --- the browser part -------------------------------------------------------------------------------------------
 
 def sign_in(page) -> bool:
-    """BofA home -> Log In -> click the password box Chrome has filled in -> Enter. Then wait until you're signed
-    in (type the text code in the window if BofA asks for one)."""
+    """BofA home -> Log In -> click the password box (Chrome fills it in) -> Enter. BofA may move you to its own
+    sign-in page (signIn.go) part-way, so this follows whichever page you're on: click its password box once, press
+    Enter once Chrome has filled it in, and otherwise just wait until you're signed in (or type the text code)."""
     page.goto(HOME)
-    page.get_by_role("link", name=re.compile(r"^\s*log ?in\s*$", re.I)).or_(
-        page.get_by_role("button", name=re.compile(r"^\s*log ?in\s*$", re.I))).first.click()
-    pwd = page.locator("input[type=password] >> visible=true").first
-    pwd.click()
-    page.wait_for_timeout(1000)
-    pwd.press("Enter")
+    try:
+        page.get_by_role("link", name=re.compile(r"^\s*log ?in\s*$", re.I)).or_(
+            page.get_by_role("button", name=re.compile(r"^\s*log ?in\s*$", re.I))).first.click(timeout=15_000)
+    except Exception:
+        pass                                     # already on a sign-in page, or signed in
+    clicked, pressed = set(), set()
     deadline = time.time() + WAIT_FOR_SIGN_IN_S
     while time.time() < deadline:
-        if page.get_by_text(SIGNED_IN).first.is_visible():
-            return True
+        try:
+            if page.get_by_text(SIGNED_IN).first.is_visible():
+                return True
+            here = page.url.split("?")[0]
+            pwd = page.locator("input[type=password] >> visible=true").first
+            if here not in clicked and pwd.count():
+                clicked.add(here)
+                pwd.click(timeout=5000)          # Chrome fills the saved password in when the box is clicked
+                page.wait_for_timeout(1000)
+            if here not in pressed and pwd.count() and bank_browser.chrome_autofilled(pwd):
+                pressed.add(here)                # Chrome's own "autofilled" mark: gone as soon as anyone types
+                pwd.press("Enter", timeout=5000)
+        except Exception:
+            pass                                 # the page moved on mid-step: look again
         page.wait_for_timeout(2000)
     return False
 
