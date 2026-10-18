@@ -478,7 +478,7 @@ def test_fidelity_fills_one_form_and_checks_monthly_stuck_before_submitting():
     spec.loader.exec_module(ff)
     src = inspect.getsource(ff.show_statement)
     assert "statement_form(page)" in src and 'dropdown(form, "Time period")' in src and 'dropdown(page, ' not in src
-    assert 'chosen.strip() == "Monthly"' in src
+    assert 'shows(period) == "Monthly"' in src
     did = []
 
     class Box:
@@ -487,7 +487,7 @@ def test_fidelity_fills_one_form_and_checks_monthly_stuck_before_submitting():
         def dispatch_event(self, e): did.append(e)
         def press(self, k): did.append(k)
     ff.choose(Box(), "Monthly")
-    assert did == ["click", "select Monthly", "change", "Tab"]
+    assert did == ["select Monthly", "change", "Tab"]                         # no click: no native pop-up menu
 
 
 

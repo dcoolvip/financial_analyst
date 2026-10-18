@@ -103,11 +103,16 @@ def appeared(page, form, label: str, timeout_s: float = 20):
 
 
 def choose(box, label: str) -> None:
-    """Pick an option the way you did: click into the box, choose, move on (so the page registers the choice)."""
-    box.click()
+    """Set an option without clicking the box: on a Mac a click opens Chrome's native pop-up menu, and closing it
+    can put the old choice back ("Select a time period" stayed, so Month and Year never appeared). select_option
+    sends the page the usual input/change events; Tab moves on like a person would."""
     box.select_option(label=label)
     box.dispatch_event("change")
     box.press("Tab")
+
+
+def shows(box) -> str:
+    return box.evaluate("e => e.options[e.selectedIndex] ? e.options[e.selectedIndex].text.trim() : ''")
 
 
 UNAVAILABLE = re.compile(r"temporarily unavailable|not all the features are currently available", re.I)
@@ -140,16 +145,19 @@ def show_statement(page, year: int, month: int) -> str:
     """Monthly -> month -> year -> Get statement; returns the statement's text as shown on the page."""
     open_statements(page)
     form, button = statement_form(page)
-    for attempt in range(2):
-        choose(dropdown(form, "Time period"), "Monthly")
-        month_box, year_box = appeared(page, form, "Month"), appeared(page, form, "Year")   # added once Monthly is in
-        choose(month_box, MONTHS[month - 1])
-        choose(year_box, str(year))
-        chosen = dropdown(form, "Time period").evaluate("e => e.options[e.selectedIndex].text")
-        if chosen.strip() == "Monthly":
+    period = dropdown(form, "Time period")
+    for _ in range(3):                                   # Monthly has to take before Month and Year appear
+        choose(period, "Monthly")
+        page.wait_for_timeout(800)
+        if shows(period) == "Monthly":
             break
     else:
-        raise ValueError("the statement form didn't keep 'Monthly' as the time period")
+        raise ValueError("the statement form didn't take 'Monthly' as the time period")
+    month_box, year_box = appeared(page, form, "Month"), appeared(page, form, "Year")
+    choose(month_box, MONTHS[month - 1])
+    choose(year_box, str(year))
+    if (shows(period), shows(month_box), shows(year_box)) != ("Monthly", MONTHS[month - 1], str(year)):
+        raise ValueError("the statement form didn't keep the choices")
     button.click()
     page.wait_for_url(re.compile(r"soddetail"), timeout=30_000)
     page.wait_for_timeout(4000)
