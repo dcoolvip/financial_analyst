@@ -3,12 +3,12 @@
     ~/.venvs/financial-analyst/bin/python tools/applecard_fetch.py            # the real thing
     ~/.venvs/financial-analyst/bin/python tools/applecard_fetch.py --dry-run  # download + check, import into a copy
 
-The route (recorded): card.apple.com -> Sign In (opens a pop-up) -> Continue with Password -> Sign In -> a verification code on your
-iPhone) -> Statements -> "Download statement of <month> (PDF)" (the newest is first) -> the PDF. Then Savings
+The route (recorded): card.apple.com -> Sign In (opens a pop-up) -> Continue with Password -> Sign In -> a code
+from your iPhone -> Statements -> "Download statement of <month> (PDF)" (the newest is first) -> the PDF. Then Savings
 (card.apple.com/savings) for the balance, saved as today's value of the Apple Cash Savings account (created the first
 time). Statement transactions merge with what's here (date + amount), so nothing is doubled.
-Plain Chrome. Sign-in: "Sign In" on the home page and "Continue with Password" are pressed for you and Enter once Chrome has filled the password in;
-the verification code is yours (a notification asks).
+Plain Chrome. Sign-in: Sign In on the home page and Continue with Password are pressed for you, and Enter once Chrome
+has filled the password in; the code from your iPhone is yours (a notification asks).
 """
 from __future__ import annotations
 
