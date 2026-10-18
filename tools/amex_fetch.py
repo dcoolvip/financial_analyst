@@ -4,9 +4,8 @@
     ~/.venvs/financial-analyst/bin/python tools/amex_fetch.py --dry-run  # download + check, import into a copy
 
 Amex stalls the sign-in of a browser that announces it's script-driven, so Chrome opens without the automation
-flag. Sign-in: Enter if Chrome has filled the password in, else a notification asks you to sign in. Then
-First the balance is read off the dashboard you land on. Then
-Statements & Activity -> Download -> (a pop-up) Excel -> its Download (the route recorded in tools/bank_recorder.py),
+flag. Sign-in: Enter if Chrome has filled the password in, else a notification asks you to sign in. The balance is
+read off the dashboard you land on ("Total Balance"). Then Statements & Activity -> Download -> (a pop-up) Excel -> its Download (the route recorded in tools/bank_recorder.py),
 imported with the Amex reader: Amex's own reference number per transaction means nothing is doubled. If the file starts
 after the newest Amex transaction already here, it says so - a gap can't go unnoticed.
 """
