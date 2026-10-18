@@ -343,3 +343,15 @@ def test_merrill_keeps_the_pdf_as_the_window_loads_it_and_presses_enter_when_fil
     assert not mf._press_if_filled(interim, pressed) and interim.box.pressed == 0   # empty: never submitted
     assert mf._press_if_filled(real, pressed) and real.box.pressed == 1
     assert not mf._press_if_filled(real, pressed) and real.box.pressed == 1        # once per page
+
+
+
+def test_merrill_sign_in_starts_where_chrome_has_the_login_saved():
+    """Regression: starting at the statements page landed on an olui2 sign-in page with nothing filled in."""
+    import inspect
+    spec = importlib.util.spec_from_file_location("merrill_fetch3", Path(__file__).parent.parent / "tools/merrill_fetch.py")
+    mf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mf)
+    src = inspect.getsource(mf.sign_in)
+    assert "page.goto(HOME)" in src and "page.goto(DOCUMENTS)" not in src
+    assert mf.HOME == "https://www.merrilledge.com/"

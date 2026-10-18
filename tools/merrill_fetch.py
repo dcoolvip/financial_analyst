@@ -78,9 +78,9 @@ def key(info: dict) -> str:
 
 
 def _signed_in(page) -> bool:
-    if "olui2.fs.ml.com" in page.url and not page.locator("input[type=password]").filter(visible=True).count():
-        return True
-    return page.get_by_text(SIGNED_IN).first.is_visible()
+    if page.locator("input[type=password]").filter(visible=True).count():
+        return False                                     # a sign-in form is still on screen
+    return "olui2.fs.ml.com" in page.url or page.get_by_text(SIGNED_IN).first.is_visible()
 
 
 def _press_if_filled(page, pressed: set[str]) -> bool:
@@ -99,7 +99,9 @@ def _press_if_filled(page, pressed: set[str]) -> bool:
 
 
 def sign_in(page) -> bool:
-    page.goto(DOCUMENTS)                                 # signed out: Merrill sends you to its sign-in
+    # Start at merrilledge.com: that's where Chrome has the Merrill login saved (the olui2 sign-in page that the
+    # statements page redirects to has none). Statements & Documents comes after, in download_new.
+    page.goto(HOME)
     pressed, told = set(), False
     deadline, ask_after = time.time() + WAIT_FOR_SIGN_IN_S, time.time() + 15
     while time.time() < deadline:
