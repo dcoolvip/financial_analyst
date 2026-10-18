@@ -20,7 +20,7 @@ import finance.importers.barclays
 import finance.importers.chase
 import finance.importers.wealthfront
 import finance.importers.statements
-from finance import assets, bank_pull, categorize, charts, checkpoints, db, demo, editing, history, pokemon, forecast, importers, insights, loan_schedule, paths, plaid, portfolio, retirement
+from finance import assets, bank_pull, categorize, charts, checkpoints, db, demo, editing, gold, history, pokemon, forecast, importers, insights, loan_schedule, paths, plaid, portfolio, retirement
 
 
 @st.cache_resource
@@ -268,6 +268,8 @@ if due := plaid_due():
 
 if source == "My data":
     loan_schedule.roll_forward(conn)               # loans without statements follow their payment schedule
+    if gold_news := gold.monthly_update(conn):     # once a month: gold at today's price
+        st.session_state["flash"] = " ".join(filter(None, [st.session_state.get("flash"), *gold_news]))
 accts = db.accounts(conn)
 txns = db.transactions(conn)
 categorize.match_loan_payments(conn, txns)          # payments at your loans' exact amount = that loan
@@ -1735,7 +1737,10 @@ BROWSER_BANKS = {"bofa": ("Bank of America", "Bank of America"), "chase": ("Chas
                  "merrill": ("Merrill", "Merrill"),
                  "fidelity": ("Fidelity", "Fidelity"),
                  "fidelity_2": ("Fidelity · second login", "Fidelity"),
-                 "robinhood": ("Robinhood", "Robinhood")}   # key: (shown, institution); in this order
+                 "robinhood": ("Robinhood", "Robinhood"),
+                 "redfin": ("Redfin home values", "Redfin estimate")}   # key: (shown, institution); in this order
+NO_SIGN_IN = {"redfin": "Opens each home's public Redfin page in a Chrome window on this Mac (no sign-in) and saves "
+                        "its Redfin Estimate as today's value."}
 PICK_ACCOUNT = {"fidelity", "fidelity_2"}      # one login fills one of several accounts there: you choose it under ⚙️ (Fills)
 RECORD_FIRST: dict[str, str] = {}     # banks whose route is being recorded (no pull written yet)
 STATEMENT_TYPES = ["checking", "savings", "credit_card", "mortgage", "heloc", "brokerage", "retirement"]
@@ -1753,7 +1758,8 @@ def connection_row(icon: str, bank: str, mine: list[str], status: str, key: str)
 def browser_row(bank: str) -> None:
     """A bank updated by a browser pull (Chrome signs in with its saved password and downloads statements)."""
     shown, institution = BROWSER_BANKS[bank]
-    mine = list(accts.loc[(accts["institution"] == institution) & accts["type"].isin(STATEMENT_TYPES), "name"])
+    mine = list(accts.loc[(accts["institution"] == institution) & accts["type"].isin(STATEMENT_TYPES + ["property"]),
+                          "name"])
     chosen = (db.get_setting(conn, "browser_pull_accounts", {}) or {}).get(bank)
     if bank in PICK_ACCOUNT:
         mine = [n for i, n in zip(accts["id"], accts["name"]) if i == chosen]
@@ -1767,12 +1773,13 @@ def browser_row(bank: str) -> None:
            if bank_pull.scheduled() else "no monthly update scheduled")      # one bank at a time, in this order
     problems = [l for l in (last[1] if last else []) if any(w in l for w in PROBLEM)]
     status = f"{when} · {nxt}" + (f"  \n⚠️ {problems[0]}" if problems else "")
-    update, gear = connection_row("🏦", shown, mine, status, bank)
+    update, gear = connection_row("🏠" if bank in NO_SIGN_IN else "🏦", shown, mine, status, bank)
     if update:
         bank_pull.start(bank=bank)
         st.rerun()
     with gear:
-        st.caption(f"Signs in to {shown} in a Chrome window on this Mac with the password Chrome saved, downloads "
+        st.caption(NO_SIGN_IN.get(bank) or
+                   f"Signs in to {shown} in a Chrome window on this Mac with the password Chrome saved, downloads "
                    "statements it hasn't seen, checks each one adds up and imports it: balance plus any transactions "
                    "not already here.")
         if st.button("🧪 Test run (imports into a copy)", key=f"test_{bank}", disabled=bank_pull.running(),
