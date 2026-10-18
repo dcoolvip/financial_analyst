@@ -41,7 +41,7 @@ def test_bank_windows_keep_the_sandbox_open_full_size_and_plain_only_when_asked(
     class Chromium:
         def launch_persistent_context(self, profile, **kw):
             calls.append(kw)
-            return type("Ctx", (), {"on": lambda self, e, f: None})()
+            return type("Ctx", (), {"on": lambda self, e, f: None, "add_init_script": lambda self, js: None})()
     pw = type("PW", (), {"chromium": Chromium()})()
     bank_browser.launch(pw, "/tmp/p")
     bank_browser.launch(pw, "/tmp/p", plain=True)
@@ -65,9 +65,27 @@ def test_a_window_the_bank_opens_is_resized_to_full_size(monkeypatch):
     class Page:
         def __init__(self, name, opener): self.name, self._opener = name, opener
         def opener(self): return self._opener
+    loads = []
+
+    class Page2(Page):
+        def on(self, event, f): loads.append((event, f))
+    Page = Page2
     handlers["page"](Page("first tab", None))
     handlers["page"](Page("statement window", object()))
     assert resized == [("statement window", bank_browser.POPUP)]
+    assert [e for e, _ in loads] == ["load"]
+    loads[0][1]()                                                          # once loaded: resized again
+    assert resized[-1] == ("statement window", bank_browser.POPUP) and len(resized) == 2
+
+
+def test_bank_pages_cant_shrink_their_own_windows():
+    from finance import bank_browser
+    assert "window.resizeTo = function () {}" in bank_browser.KEEP_SIZE and "resizeBy" in bank_browser.KEEP_SIZE
+    inits = []
+    ctx = type("Ctx", (), {"on": lambda self, e, f: None, "add_init_script": lambda self, js: inits.append(js)})()
+    pw = type("PW", (), {"chromium": type("C", (), {"launch_persistent_context": lambda self, p, **k: ctx})()})()
+    bank_browser.launch(pw, "/tmp/p")
+    assert inits == [bank_browser.KEEP_SIZE]
 
 
 def test_every_bank_window_opens_through_the_shared_launcher():
