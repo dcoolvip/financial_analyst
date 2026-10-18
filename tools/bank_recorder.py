@@ -27,8 +27,8 @@ sys.path.insert(0, str(ROOT))
 from finance import paths  # noqa: E402
 
 BANKS = {"bofa": "https://www.bankofamerica.com/", "chase": "https://www.chase.com/",
-         "amex": "https://www.americanexpress.com/"}
-PLAIN_CHROME = {"amex"}      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
+         "amex": "https://www.americanexpress.com/", "merrill": "https://www.merrilledge.com/"}
+PLAIN_CHROME = {"amex", "merrill"}      # open Chrome as you'd use it (no automation flag) - Amex won't finish sign-in otherwise
 SIGNED_IN = re.compile(r"\b(log ?out|sign ?out)\b", re.I)
 WAIT_FOR_SIGN_IN_S = 10 * 60
 WAIT_FOR_DONE_S = 20 * 60

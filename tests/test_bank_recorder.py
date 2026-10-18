@@ -29,7 +29,7 @@ def test_typed_text_is_never_captured():
 
 def test_amex_opens_chrome_without_the_automation_flag():
     """Amex stayed on its sign-in page in the recorder's Chrome (but not in everyday Chrome/Safari)."""
-    assert "amex" in rec.PLAIN_CHROME and "bofa" not in rec.PLAIN_CHROME and "chase" not in rec.PLAIN_CHROME
+    assert {"amex", "merrill"} <= rec.PLAIN_CHROME and "bofa" not in rec.PLAIN_CHROME and "chase" not in rec.PLAIN_CHROME
     import inspect
     src = inspect.getsource(rec.main)
     assert '"--enable-automation"' in src and "AutomationControlled" in src

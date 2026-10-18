@@ -921,3 +921,15 @@ def test_a_refresh_comes_back_to_the_same_place(env):
             if (found := tab_container(c)) is not None:
                 return found
     assert tab_container(fresh.main).proto.tab_container.default_tab_index == 4      # opens on "Add data"
+
+
+
+def test_merrill_can_be_recorded_from_the_dashboard(env, monkeypatch):
+    from finance import bank_pull
+    recorded = []
+    monkeypatch.setattr(bank_pull, "start_recording", lambda bank, label="statements": recorded.append(bank))
+    at = app()
+    [r for r in at.radio if r.label == "How"][0].set_value("Browser pull").run()
+    assert any("**Merrill** · not set up yet" in m.value for m in at.markdown)
+    click(at, "⏺ Record Merrill")
+    assert recorded == ["merrill"]
