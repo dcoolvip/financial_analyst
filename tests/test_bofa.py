@@ -411,3 +411,22 @@ def test_an_excel_file_goes_to_the_excel_reader_not_the_csv_ones(monkeypatch):
     monkeypatch.setattr(amex, "parse", lambda content, filename="": seen.append(filename) or "parsed")
     assert importers.parse_file(b"PK\x03\x04rest-of-a-zip", filename="activity.xlsx") == "parsed"
     assert seen == ["activity.xlsx"]
+
+
+def test_amex_row_with_and_without_its_reference_is_never_doubled(tmp_path, monkeypatch):
+    """72 Amex transactions were saved twice: once by date + description (exported without a reference number) and
+    again by reference when a later file had it."""
+    from finance.importers import amex, apply
+    monkeypatch.setenv("FINANCE_DATA_DIR", str(tmp_path))
+    conn = db.connect(tmp_path / "finance.db")
+    card = db.get_or_create_account(conn, "Amex", "American Express", "credit_card")
+    head = "Date,Description,Card Member,Account #,Amount,Extended Details,Appears On Your Statement As,Address,City/State,Zip Code,Country,Reference,Category\n"
+    row = "09/03/2026,PAYPAL *NETFLIX.COM,PAT SAMPLE,-11005,15.49,,,,,,,{ref},Entertainment\n"
+    without = amex.parse((head + row.format(ref="")).encode(), "activity.csv")
+    with_ref = amex.parse((head + row.format(ref="'320260930123456789'")).encode(), "activity.csv")
+    apply(conn, without, card, "old.csv")
+    conn.execute("UPDATE transactions SET category = 'Streaming' WHERE account_id = ?", (card,))   # your edit
+    apply(conn, with_ref, card, "new.csv")                                   # later file: same row, with reference
+    apply(conn, without, card, "old-again.csv")                              # and the old file once more
+    rows = conn.execute("SELECT amount, category, fingerprint FROM transactions WHERE account_id = ?", (card,)).fetchall()
+    assert len(rows) == 1 and rows[0][1] == "Streaming" and rows[0][2].endswith("320260930123456789")

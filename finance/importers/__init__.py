@@ -24,9 +24,34 @@ def parse_file(content: bytes | str, filename: str = "") -> ParsedFile:
     raise UnrecognizedFile("No importer recognized this file")
 
 
+def _same_row_other_name(conn, account_id: int, txns):
+    """Amex rows have a reference number, but a row exported without one is known by date + description + amount
+    instead (also_known_as). A row arriving with its reference renames the copy saved without one (keeping its
+    category), and a row without one is skipped if the account already has it - so neither way doubles it."""
+    if "also_known_as" not in txns or not len(txns):
+        return txns
+    keep = []
+    for r in txns.itertuples():
+        old = f"{account_id}|{r.also_known_as}"
+        if r.fingerprint != r.also_known_as:                    # has a reference: take over a copy saved without
+            hit = conn.execute("SELECT id FROM transactions WHERE account_id = ? AND (fingerprint = ? OR fingerprint "
+                               "LIKE ?) LIMIT 1", (account_id, old, old + "|%")).fetchone()
+            if hit and not conn.execute("SELECT 1 FROM transactions WHERE fingerprint = ?",
+                                        (f"{account_id}|{r.fingerprint}",)).fetchone():
+                conn.execute("UPDATE transactions SET fingerprint = ? WHERE id = ?", (f"{account_id}|{r.fingerprint}", hit[0]))
+            keep.append(True)
+        else:                                                   # no reference: skip if the account has it already
+            when = r.date.isoformat() if hasattr(r.date, "isoformat") else str(r.date)[:10]
+            keep.append(not conn.execute("SELECT 1 FROM transactions WHERE account_id = ? AND date = ? AND amount = ? "
+                                         "AND description = ?", (account_id, when, float(r.amount), r.description)).fetchone())
+    conn.commit()
+    return txns[keep]
+
+
 def apply(conn, parsed: ParsedFile, account_id: int, filename: str) -> dict:
     """Write parsed rows to an account. Safe to run repeatedly on the same file."""
-    added = db.insert_transactions(conn, account_id, parsed.transactions, filename) if len(parsed.transactions) else 0
+    txns = _same_row_other_name(conn, account_id, parsed.transactions)
+    added = db.insert_transactions(conn, account_id, txns, filename) if len(txns) else 0
     for r in parsed.balances.itertuples():
         db.upsert_balance(conn, account_id, r.date, r.balance, filename)
     if len(parsed.holdings):

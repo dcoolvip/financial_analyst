@@ -70,8 +70,10 @@ def parse(content: bytes | str, filename: str = "") -> ParsedFile:
         legacy = f"{desc} ({who})" if who else desc          # fingerprints of earlier imports used this
         out.append({"date": datetime.strptime(r["Date"].strip(), "%m/%d/%Y").date(), "description": desc,
                     "amount": -amount, "purchaser": who, "bank_category": (r.get("Category") or "").strip() or None,
-                    "fingerprint": ref or f"{r['Date']}|{legacy}|{amount:.2f}"})
-    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "bank_category", "fingerprint"])
+                    "fingerprint": ref or f"{r['Date']}|{legacy}|{amount:.2f}",
+                    "also_known_as": f"{r['Date']}|{legacy}|{amount:.2f}"})   # the same row without its reference
+    df = pd.DataFrame(out, columns=["date", "description", "amount", "purchaser", "bank_category", "fingerprint",
+                                    "also_known_as"])
     if len(df) and not df["fingerprint"].is_unique:                      # only possible without references
         df["fingerprint"] = df["fingerprint"] + "|" + df.groupby("fingerprint").cumcount().astype(str)
     # The account's own card: the one payments are made on (else the most used)
