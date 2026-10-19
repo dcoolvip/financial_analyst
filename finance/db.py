@@ -388,6 +388,16 @@ def net_worth_change(conn, months: int):
 
 
 
+def change_baseline(conn, months: int):
+    """The date net_worth_change(conn, months) compares against: the newest month-end value at least `months` back
+    (values are kept at month-ends, so "a month ago" on Oct 18 is Aug 31). None if there's no history that far."""
+    wide, *_ = _net_worth_wide(conn)
+    if wide is None or len(wide) < 2:
+        return None
+    earlier = wide.index[wide.index <= wide.index[-1] - pd.DateOffset(months=months)]
+    return earlier[-1].date() if len(earlier) else None
+
+
 def account_changes(conn, months: int) -> pd.DataFrame:
     """Per account: value `months` ago and now, and the change in net-worth terms (a loan paid down is a
     gain). Only accounts that had a value both then and now - same like-for-like rule as net_worth_change."""

@@ -120,6 +120,7 @@ class Forecast:
     valuables: pd.DataFrame = field(default_factory=pd.DataFrame)   # per asset: name, type, value, rate, source, end
     valuable_paths: pd.DataFrame = field(default_factory=pd.DataFrame)  # date x asset name, expected path
     cash_flow: pd.DataFrame = field(default_factory=pd.DataFrame)       # per year: income, living, loans, saved
+    typical: pd.DataFrame = field(default_factory=pd.DataFrame)  # the most likely outcome (p50) split into parts
 
 
 def payment_for(balance: float, apr: float, years: float) -> float:
@@ -496,7 +497,7 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     dates = pd.date_range(pd.Timestamp.today().normalize(), periods=a.years * 12 + 1, freq="MS")
     deflator = episode_years(a, -(-a.years * 12 // 12))["price"][:len(dates)]   # real price path (episodes too)
 
-    nw, _, loans, _, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
+    nw, mix, loans, _, _, _, _ = _simulate(accts, a, a.simulations, a.investment_volatility, history, trend_overrides)
     p10, p25, p50, p75, p90 = np.percentile(nw, [10, 25, 50, 75, 90], axis=0)
     bands = pd.DataFrame({"date": dates, "p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90})
     for c in ("p10", "p25", "p50", "p75", "p90"):
@@ -508,6 +509,17 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
     expected["net_worth"] = expected[["cash", "investments", "property"]].sum(axis=1) - expected["debt"]
     for c in ("cash", "investments", "property", "debt", "net_worth"):
         expected[f"{c}_real"] = expected[c] / deflator
+
+    # The most likely outcome (the p50 headline) split into cash / investments / property / debt: the simulations'
+    # average mix, scaled so the parts add up to p50 - the boxes under the headline then always match it.
+    mix = pd.DataFrame(mix, columns=["cash", "investments", "property", "debt", "pretax"])
+    assets_ = mix[["cash", "investments", "property"]].sum(axis=1).replace(0, np.nan)
+    scale = ((p50 + mix["debt"]) / assets_).fillna(1.0).to_numpy()
+    typical = pd.DataFrame({"date": dates, "cash": mix["cash"] * scale, "investments": mix["investments"] * scale,
+                            "property": mix["property"] * scale, "debt": mix["debt"]})
+    typical["net_worth"] = p50
+    for c in ("cash", "investments", "property", "debt", "net_worth"):
+        typical[f"{c}_real"] = typical[c] / deflator
 
     milestones = [(dates[m], f"{name} paid off") for name, m in payoff.items()]
     if loans and len(payoff) == len(loans):
@@ -544,4 +556,4 @@ def run(accts: pd.DataFrame, a: Assumptions, history: pd.DataFrame | None = None
                   "college", "roth_conv", "income_tax", "kid_support", "saved"):
             cash_flow[f"{c}_real"] = cash_flow[c] / cash_flow["deflator"]
         cash_flow = cash_flow.reset_index()
-    return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow)
+    return Forecast(bands, expected, loans, milestones, start, vt, valuable_paths, cash_flow, typical)

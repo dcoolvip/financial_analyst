@@ -359,11 +359,17 @@ with tab_overview:
         own = sum(totals[g] for g in insights.ASSET_GROUPS)
         owe = sum(totals[g] for g in insights.DEBT_GROUPS)
         st.caption("NET WORTH")
+        moves = []                              # each change says what date it's measured from
+        for months in (1, 12):
+            when, delta = db.change_baseline(conn, months), change_since(months)
+            if when is not None and delta is not None:
+                moves.append(f"{signed(delta)} since {when:%b %-d}" + (f", {when:%Y}" if when.year != date.today().year else ""))
         st.markdown(f'<p class="hero">{money(net, short=False)}</p>'
-                    f'<p class="hero-sub">You own {money(own)} and owe {money(owe)}</p>', unsafe_allow_html=True)
+                    f'<p class="hero-sub">You own {money(own)} and owe {money(owe)}'
+                    + (f' · {" · ".join(moves)}' if moves else "") + '</p>', unsafe_allow_html=True)
 
-        kpi_row([("Change, past month", signed(change_since(1))), ("Change, past year", signed(change_since(12))),
-                 ("Cash", money(totals["Cash"])), ("Investments", money(totals["Investments"]))])
+        kpi_row([("Cash", money(totals["Cash"])), ("Investments", money(totals["Investments"])),   # these add up to
+                 ("Property & valuables", money(totals["Property & valuables"])), ("Debt", money(owe))])  # net worth
 
         # plain-language takeaways, worked out from everything imported so far (ⓘ: how each is calculated)
         with st.container(border=True):
@@ -980,10 +986,11 @@ with tab_future:
                                    f"transactions show {money(baseline['loans_seen'])} a month. Check each loan's "
                                    "**Monthly payment** in Accounts.")
 
-            exp = fc.expected.iloc[-1]
-            kpi_row([("Investments", money(exp[f"investments{sfx}"])),
-                     ("Cash + property", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
-                     ("Debt left", money(exp[f"debt{sfx}"]))])
+            exp = fc.typical.iloc[-1]                  # the headline (most likely outcome), split: adds up to it
+            yr = f"{exp['date']:%Y}"
+            kpi_row([(f"Investments, {yr}", money(exp[f"investments{sfx}"])),
+                     (f"Cash + property, {yr}", money(exp[f"cash{sfx}"] + exp[f"property{sfx}"])),
+                     (f"Debt left, {yr}", money(exp[f"debt{sfx}"]))])
 
             if len(fc.valuables):
                 st.markdown("#### Property & valuables",
@@ -1082,10 +1089,16 @@ with tab_flow:
         income, spend = recent["money_in"].mean(), recent["money_out"].mean()
         kpi_row([("Avg. money in", money(income)), ("Avg. money out", money(spend)),
                  ("Avg. left over", money(income - spend)),
-                 ("Savings rate", f"{(income - spend) / income:.0%}" if income else "-")])
+                 ("Left over, % of money in", f"{(income - spend) / income:.0%}" if income else "-")])
+        divs = sum(dividends_by_account().values())
         st.caption(f"Monthly averages over the last {len(recent)} complete months, so once-a-year bills count once. "
                    "Refunds reduce spending. Transfers between your own accounts "
-                   "and card payments are left out so nothing is counted twice.")
+                   "and card payments are left out so nothing is counted twice. **Money in** is what reaches your "
+                   "bank and card accounts: it doesn't include stock that vests or 401(k) money taken from pay (both "
+                   "go straight into investments)"
+                   + (f", or about {money(divs / 12)} a month of dividends that stay in your brokerages" if divs else "")
+                   + " - so a negative left-over means spending was paid partly from investments, not that you saved "
+                   "nothing.")
 
         st.markdown("#### Each month", help="Money in and out per month. Transfers between your own accounts "
                     "and card bill payments aren't counted.")

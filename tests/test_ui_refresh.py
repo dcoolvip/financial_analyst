@@ -1055,3 +1055,38 @@ def test_force_update_button_on_a_bank_row(env, monkeypatch, tmp_path):
     [b for b in at.button if b.key == "force_chase"][0].click().run()
     assert started == [("chase", False, True)]
     assert not [b for b in at.button if b.key == "force_redfin"]               # nothing to force there
+
+
+def test_boxes_add_up_to_their_headlines_and_changes_name_their_dates(env):
+    """The Overview's boxes are what net worth is made of, the Future tab's boxes split its headline, and each change
+    says what date it's measured from (values are kept at month-ends, so "a month ago" isn't exactly a month)."""
+    import re
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    brk = db.add_account(conn, "Brokerage", "Merrill", "brokerage")
+    home = db.add_account(conn, "Home", "Redfin estimate", "property")
+    loan = db.add_account(conn, "Mortgage", "Bank", "mortgage")
+    db.update_account_terms(conn, loan, 0.05, 2_000.0)
+    today = pd.Timestamp.today().normalize()
+    for m in range(14, -1, -1):
+        d = (today - pd.DateOffset(months=m)).date()
+        db.upsert_balance(conn, chk, d, 20_000 + 500 * (14 - m))
+        db.upsert_balance(conn, brk, d, 300_000 + 5_000 * (14 - m))
+        db.upsert_balance(conn, home, d, 900_000)
+        db.upsert_balance(conn, loan, d, 400_000 - 1_000 * (14 - m))
+    at = app()
+    def num(v: str) -> float:                                               # "$1.2M", "-$4.4K", "$489"
+        scale = 1e6 if "M" in v else 1e3 if "K" in v else 1
+        return float(re.sub(r"[^\d.]", "", v)) * scale * (-1 if v.lstrip().startswith("-") else 1)
+    boxes = {m.label: num(m.value) for m in at.metric}
+    heroes = [re.sub("<[^>]+>", "|", m.value) for m in at.markdown if 'class="hero"' in m.value]
+    net = float(re.sub(r"[^\d.]", "", heroes[0].split("|")[1]))
+    total = boxes["Cash"] + boxes["Investments"] + boxes["Property & valuables"] - boxes["Debt"]
+    assert abs(total - net) <= 0.01 * net                                     # rounding of $K/$M only
+    assert re.search(r"since [A-Z][a-z]{2} \d{1,2}", heroes[0])              # "+$6K since Aug 31"
+    future = {k: v for k, v in boxes.items() if re.search(r", \d{4}$", k)}
+    assert len(future) == 3
+    headline = heroes[1].split("|")[1]
+    split = future[next(k for k in future if k.startswith("Investments"))] + \
+        future[next(k for k in future if k.startswith("Cash + property"))] - future[next(k for k in future if k.startswith("Debt"))]
+    assert abs(split - num(headline)) <= 0.02 * num(headline)
