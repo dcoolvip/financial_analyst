@@ -793,3 +793,11 @@ def test_apple_card_statement_that_does_not_add_up_imports_no_transactions():
     s = parse_pdf_all(_pdf(broken.splitlines()))[0]
     assert s.balance == 120.0 and not s.transactions and not s.totals_ok
     assert "charges: read $120.00 but the statement's total is $80.00" in s.notes[0]
+
+
+def test_a_credit_printed_minus_dollar_keeps_its_minus():
+    """BofA prints a card credit as "-$4.21" (minus before the $): it was read as $4.21 owed."""
+    from finance.importers.statements import parse_text
+    s = parse_text(BOFA_CARD_STMT.replace("New Balance Total $40.00", "New Balance Total -$4.21"))
+    assert s.kind == "credit_card" and s.balance == -4.21
+    assert parse_text(BOFA_CARD_STMT).balance == 40.0                     # an amount owed stays positive

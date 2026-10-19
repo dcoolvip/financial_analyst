@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-MONEY = r"\$?\s*(-?[\d,]+\.\d{2})"
+MONEY = r"(-?\$?\s*-?[\d,]+\.\d{2})"      # "-$5.00" (a credit, as BofA prints it) keeps its minus
 _DATE_NUM = r"(\d{1,2}/\d{1,2}/\d{2,4})"
 _DATE_LONG = r"((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2},?\s+\d{4})"
 WINDOW = 160   # how far after a label to look for its value
@@ -86,7 +86,7 @@ def extract_text(pdf: bytes) -> str:
 # --- small parsing helpers -----------------------------------------------------------
 
 def _money(s: str) -> float:
-    return float(s.replace(",", "").replace("$", "").strip())
+    return float(s.replace(",", "").replace("$", "").replace(" ", "").strip())
 
 
 def _parse_date(s: str) -> date | None:
