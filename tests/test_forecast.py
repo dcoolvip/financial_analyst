@@ -177,7 +177,7 @@ def test_overview_insights_are_worked_out_from_the_data():
     short = {i["icon"]: i for i in insights.overview(e2, accts, totals, moves, (None, None, []), today=today)}
     assert "more than came in" in short["💸"]["text"]                 # spending more than pay: said plainly
     assert "Travel" in out["🔎"]["text"] and "August" in out["🔎"]["text"]
-    assert "mostly Checking (+$20K)" in out["📈"]["text"] and "1 newer account not included" in out["📈"]["text"]
+    assert "mostly Checking (+$20K)" in out["📈"]["text"] and "1 account with less than a year of history" in out["📈"]["text"]
     assert "Gold" in out["📈"]["help"]                                # which ones: on the ⓘ, not in the sentence
     assert "Car loan" in out["🏦"]["text"] and "Sep 2027" in out["🏦"]["text"]    # 12 payments of $1,000
     assert "Checking (Aug 1)" in out["⏰"]["text"] and "Gold" not in out["⏰"]["text"]  # gold: fine for months

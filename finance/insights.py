@@ -358,13 +358,21 @@ def overview(enriched: pd.DataFrame, accts: pd.DataFrame, totals: dict, moves: p
         drivers = moves.sort_values("change", ascending=yr < 0).head(2) if len(moves) else moves
         why = (", mostly " + " and ".join(f"{r.name} ({'+' if r.change >= 0 else ''}{_m(r.change)})"
                                           for r in drivers.itertuples()) if len(drivers) else "")
+        from .db import LIABILITY_TYPES          # here, not at the top: db is the lower layer
+        newer = accts[accts["name"].isin(left_out)] if left_out and "balance" in accts else accts.iloc[0:0]
+        newer_value = float((newer["balance"].fillna(0)
+                             * newer["type"].isin(LIABILITY_TYPES).map({True: -1, False: 1})).sum())
+        n = len(left_out)
         out.append({"icon": "📈" if yr >= 0 else "📉",
-                    "help": "Like-for-like: only accounts that had a value a year ago and today, so adding an account "
-                            "never looks like a gain."
-                            + (f" Not included yet (no value a year ago): {', '.join(left_out)}." if left_out else ""),
+                    "help": "Like-for-like: only accounts with a value both a year ago and today, so adding an account "
+                            "(or having only recent history for one) never looks like a gain or a loss."
+                            + (f" Not in this comparison - less than a year of history here: {', '.join(left_out)}"
+                               f" ({_m(newer_value)} together today; they're in your net worth)." if left_out else ""),
                     "text": f"Net worth is {'up' if yr >= 0 else 'down'} **{_m(abs(yr))}** over the past year "
                             f"({yr / abs(base):+.0%}){why}."
-                            + (f" {len(left_out)} newer account{'s' if len(left_out) > 1 else ''} not included." if left_out else "")})
+                            + (f" {n} account{'s' if n > 1 else ''} with less than a year of history "
+                               f"({_m(newer_value)} together) {'aren' if n > 1 else 'isn'}'t in this comparison."
+                               if left_out else "")})
 
     if spend > 0 and totals.get("Cash"):
         out.append({"icon": "🛟", "help": "Cash (checking + savings) divided by your average monthly spending. "
