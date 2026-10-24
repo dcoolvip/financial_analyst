@@ -142,3 +142,22 @@ def test_spending_nobody_can_cover_shows_as_borrowing_not_nothing():
     of money looked fine. The unpaid remainder must show up (as borrowing)."""
     broke = _run(years=40, other_income=0, monthly_living=40_000)          # spends far more than it has
     assert broke.expected["investments"].iloc[-1] < 0                        # the shortfall is visible
+
+
+def test_a_serious_illness_adds_its_costs_and_can_end_work():
+    """B (56 now) falls ill at 58: $60K a year of extra costs for 3 years (ages 58-60), and stops working then."""
+    normal = _run().cash_flow.set_index("period")
+    sick = _run(illness_person="B", illness_age=58, illness_yearly=60_000, illness_years=3).cash_flow.set_index("period")
+    assert sick.loc[0, "health"] == normal.loc[0, "health"] == 0             # before the illness: nothing changes
+    assert sick.loc[1, "pay"] == normal.loc[1, "pay"]
+    for yr in (2, 3, 4):                                                       # ages 58, 59, 60
+        assert sick.loc[yr, "health"] == pytest.approx(normal.loc[yr, "health"] + 60_000)
+    assert sick.loc[5, "health"] == pytest.approx(normal.loc[5, "health"] + 15_000)  # treatment over, but B (61)
+    # stopped working and A has retired: B is on private insurance until 65 instead of an employer plan
+    assert sick.loc[2, "pay"] == pytest.approx(12 * 10_000)                    # only A's pay left
+    assert normal.loc[2, "pay"] == pytest.approx(12 * 15_000)
+    keeps_working = _run(illness_person="B", illness_age=58, illness_years=3,
+                         illness_stops_work=False).cash_flow.set_index("period")
+    assert keeps_working.loc[2, "pay"] == pytest.approx(12 * 15_000)          # costs only
+    assert _run(illness_person="B", illness_age=58).bands.iloc[-1]["p50"] < _run().bands.iloc[-1]["p50"]
+    assert _run(illness_person="").cash_flow["health"].sum() == normal["health"].sum()   # off: no change

@@ -3,6 +3,7 @@ everywhere (other tabs, selectors, totals) in the same session - no manual refre
 
 Runs against a throwaway data folder; never touches real data and never calls the AI.
 """
+import re
 import time
 from datetime import date, datetime
 from pathlib import Path
@@ -1090,3 +1091,32 @@ def test_boxes_add_up_to_their_headlines_and_changes_name_their_dates(env):
     split = future[next(k for k in future if k.startswith("Investments"))] + \
         future[next(k for k in future if k.startswith("Cash + property"))] - future[next(k for k in future if k.startswith("Debt"))]
     assert abs(split - num(headline)) <= 0.02 * num(headline)
+
+
+def test_serious_illness_what_if_draws_its_line_and_says_what_it_costs(env):
+    conn, _ = env
+    chk = db.add_account(conn, "Checking", "Bank of America", "checking")
+    today = pd.Timestamp.today().normalize()
+    rows = []
+    for m in range(13, 0, -1):
+        d = (today.to_period("M").to_timestamp() - pd.DateOffset(months=m) + pd.Timedelta(days=3)).date()
+        db.upsert_balance(conn, chk, d, 500_000)
+        rows += [(d, "ACME DES:PAYROLL ID:111 INDN:A", 9_000.0, f"a{m}"), (d, "SAFEWAY", -5_000.0, f"s{m}")]
+    db.insert_transactions(conn, chk, pd.DataFrame(rows, columns=["date", "description", "amount", "fingerprint"]), "x")
+    db.set_setting(conn, "household_people", [
+        {"name": "Alex", "born": f"{today.year - 50}-01", "retire_age": 65, "pay": [{"pattern": r"ACME.*ID:111"}],
+         "ss_monthly": 3_000, "ss_claim_age": 67}])
+    at = app()
+    assert not [c for c in at.caption if "With Alex's illness" in c.value]
+    at.toggle(key="illness_on").set_value(True).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.selectbox(key="illness_who").value == "Alex" and at.number_input(key="illness_age").value == 60
+    note = next(c.value for c in at.caption if "With Alex's illness at 60" in c.value)
+    assert "60K a year of extra costs for 3 years" in note and "Alex stops working then" in note
+    assert re.search(r"typically \\?\$[\d.]+[KM] vs \\?\$[\d.]+[KM] normally \(-\d+%\)", note)  # lower than normal
+    specs = [c.proto.spec for c in at.get("plotly_chart")]
+    assert any("illness at 60" in sp and '"dash":"dash"' in sp for sp in specs)            # its dashed line
+    at.number_input(key="illness_yearly").set_value(0).run()                 # no costs and keeps working: the
+    at.checkbox(key="illness_stops").set_value(False).run()                  # same plan, so exactly the same end
+    note = next(c.value for c in at.caption if "With Alex's illness at 60" in c.value)
+    assert "normally (+0%)" in note, note                                    # like for like (same simulations)

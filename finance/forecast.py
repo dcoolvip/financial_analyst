@@ -56,6 +56,13 @@ class Assumptions:
     episode: str = "none"
     episode_start: str = "retire"
     episode_job_loss: bool = False            # pay, 401(k) and new stock stop for the episode's first 2 years
+    # A serious illness (e.g. cancer) for one person: extra costs beyond what insurance pays (today's $ a year) for
+    # some years from an age; optionally they stop working then - pay, 401(k), new stock and the employer plan end.
+    illness_person: str = ""                  # a person's name; "" = no illness
+    illness_age: float = 60.0
+    illness_yearly: float = 60_000.0
+    illness_years: int = 3
+    illness_stops_work: bool = True
     single_stock_beta: float = 1.25           # the one company moves this much more than the market (vs cash)
     single_stock_share: float = 0.0       # share of investments held in one company (Apple), kept as is
     single_stock_scenario: str = "mix"      # its path: history.SINGLE_STOCK_PATHS
@@ -385,7 +392,10 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             y_idx = (m - 1) // 12
             laid_off = a.episode_job_loss and ep["start"] is not None and ep["start"] <= y_idx < ep["start"] + 2
             ages = [a0 + years for a0 in ages0]
-            working = [age < p.get("retire_age", 65) for age, p in zip(ages, people)]
+            ill = [bool(a.illness_person) and p.get("name") == a.illness_person and age >= a.illness_age
+                   for p, age in zip(people, ages)]              # from the diagnosis on
+            working = [age < p.get("retire_age", 65) and not (sick and a.illness_stops_work)
+                       for age, p, sick in zip(ages, people, ill)]
             employed = [w and not laid_off for w in working]      # a job loss stops pay, 401(k), new stock
             bracket = a.use_tax_brackets and not any(working)
             raise_ = (1 + a.income_growth) ** ((m - 1) // 12)
@@ -397,6 +407,8 @@ def _simulate(accts: pd.DataFrame, a: Assumptions, sims: int, sigma: float, hist
             health = sum(ret.health_cost(age, w, any(w2 for j, w2 in enumerate(working) if j != i),
                                          a.private_health_yearly, a.medicare_yearly)
                          for i, (age, w) in enumerate(zip(ages, working))) / 12 * hprice
+            health += sum(a.illness_yearly for age, sick in zip(ages, ill)          # treatment years: extra costs
+                          if sick and age < a.illness_age + a.illness_years) / 12 * hprice
             kid_ages = [k0 + years for k0 in kid_ages0]
             gone = sum(1 for k in kid_ages if k >= a.college_start_age)     # their day-to-day costs end at college
             living = (a.monthly_living - (a.kid_costs_monthly * gone / len(kids) if kids else 0.0)

@@ -821,7 +821,7 @@ with tab_future:
                                             "(only matters if it starts while you're working).")
                 import dataclasses
                 crash_fc = forecast.run(accts, dataclasses.replace(a, episode=ep_key, episode_start=ep_start,
-                                                                   episode_job_loss=job_loss, simulations=400),
+                                                                   episode_job_loss=job_loss),   # same runs as the headline
                                         history=db.balance_history(conn), trend_overrides=trend_overrides())
                 crash_labels = {k: f"the {history.EPISODES[k][0]} replayed" for k in history.EPISODES}
                 crash = ep_key
@@ -846,6 +846,30 @@ with tab_future:
                         + (". Pay, 401(k) and new stock stop for its first 2 years" if job_loss else "")
                         + ". Afterwards, normal assumptions resume - no built-in catch-up.\n"
                         f"- **On the chart:** the dashed line is your net worth with this period replayed.")
+            ill_fc, ill = None, None
+            if a.people and st.toggle("🩺 Add a serious illness", key="illness_on",
+                                      help="A major illness such as cancer for one of you: extra costs beyond what "
+                                           "insurance pays, for a few years - and often the end of working. Drawn as "
+                                           "a dashed line next to the normal plan."):
+                import dataclasses
+                names_ = [q.get("name", "") for q in a.people]
+                ages_now = {q.get("name"): (now_ts - pd.Timestamp(q["born"] + "-01")).days / 365.25 for q in a.people}
+                i1, i2, i3, i4 = st.columns(4) if not PHONE else (st, st, st, st)
+                who = i1.selectbox("Who", names_, key="illness_who")
+                age = i2.number_input("From age", min_value=int(ages_now[who]) + 1, max_value=95, step=1,
+                                      value=max(60, int(ages_now[who]) + 1), key="illness_age")
+                yearly = i3.number_input("Extra costs a year ($)", min_value=0, step=5_000, value=60_000,
+                                         key="illness_yearly", help="Beyond what insurance pays, in today's dollars: "
+                                         "costs over the plan's limits, treatment not covered, travel, care at home.")
+                years_ = i4.number_input("For years", min_value=1, max_value=15, step=1, value=3, key="illness_years")
+                stops = st.checkbox(f"{who} stops working then", value=True, key="illness_stops",
+                                    help="Pay, 401(k) and new stock end from that age, and with them the employer "
+                                         "health plan (unless the other person still works).")
+                ill = dict(illness_person=who, illness_age=float(age), illness_yearly=float(yearly),
+                           illness_years=int(years_), illness_stops_work=stops)
+                ill_fc = forecast.run(accts, dataclasses.replace(a, **ill),       # same runs as the headline
+                                      history=db.balance_history(conn), trend_overrides=trend_overrides())
+            ill_label = f"With {ill['illness_person']}'s illness at {ill['illness_age']:.0f}" if ill else ""
             if future_view == "Own & owe":
                 plot(charts.forecast_own_owe(nw.tail(24), fc.expected, real, mode, compact=PHONE))
                 e0, e1 = fc.expected.iloc[0], fc.expected.iloc[-1]
@@ -862,6 +886,8 @@ with tab_future:
                 fig = charts.forecast_scenarios(nw.tail(24), runs, fc.bands, real, mode, compact=PHONE)
                 if crash_fc is not None:
                     charts.add_comparison_line(fig, crash_fc.bands, real, mode, f"With {crash_labels[crash].lower()}")
+                if ill_fc is not None:
+                    charts.add_comparison_line(fig, ill_fc.bands, real, mode, ill_label)
                 plot(fig)
                 ends = {k: b.iloc[-1][f"p50{sfx}"] for k, b in runs.items()}
                 st.caption(f"By {end['date']:%Y}, typically: " + " · ".join(
@@ -873,6 +899,8 @@ with tab_future:
                 fig = charts.forecast_fan(nw.tail(24), fc.bands, real, mode, compact=PHONE)
                 if crash_fc is not None:
                     charts.add_comparison_line(fig, crash_fc.bands, real, mode, f"With {crash_labels[crash].lower()}")
+                if ill_fc is not None:
+                    charts.add_comparison_line(fig, ill_fc.bands, real, mode, ill_label)
                 plot(fig)
             if crash_fc is not None:
                 e_no, e_cr = fc.bands.iloc[-1][f"p50{sfx}"], crash_fc.bands.iloc[-1][f"p50{sfx}"]
@@ -889,6 +917,21 @@ with tab_future:
                 st.caption(f"**{name}, replayed from {now_ts.year + (starts_in or 0)}:** {what}. By {end['date']:%Y} "
                            f"typically {money(e_cr)} vs {money(e_no)} normally ({(e_cr - e_no) / e_no:+.0%}); {low}"
                            + (" (today's dollars)." if real else ".") + f" Data: {history.EPISODE_SOURCE}.")
+
+            if ill_fc is not None:
+                e_no, e_ill = fc.bands.iloc[-1][f"p50{sfx}"], ill_fc.bands.iloc[-1][f"p50{sfx}"]
+                ix = ill_fc.expected
+                liquid = ix[f"cash{sfx}"] + ix[f"investments{sfx}"]
+                gone = liquid[liquid <= 0]
+                st.caption(f"**{ill_label}:** {money(ill['illness_yearly'])} a year of extra costs for "
+                           f"{ill['illness_years']} year{'s' if ill['illness_years'] > 1 else ''} (today's dollars, "
+                           "growing like healthcare)"
+                           + (f", and {ill['illness_person']} stops working then" if ill["illness_stops_work"] else "")
+                           + f". By {end['date']:%Y} typically {money(e_ill)} vs {money(e_no)} normally "
+                             f"({(e_ill - e_no) / e_no:+.0%}); "
+                           + (f"cash + investments **run out in {ix['date'].iloc[gone.index[0]]:%Y}**" if len(gone)
+                              else f"cash + investments never drop below {money(liquid.min())}")
+                           + (" (today's dollars)." if real else "."))
 
         with detail_col:
             # right under the net worth chart: how money moves in and out explains the line above
